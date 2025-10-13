@@ -1,35 +1,46 @@
 import requests
 import json
+from src.database import get_db_connection
 
 # Binance API base URL
 BINANCE_API_URL = "https://api.binance.com/api/v3"
 
+def save_price_data(price_data: dict):
+    """Saves price data to the database."""
+    if not price_data or 'symbol' not in price_data or 'price' not in price_data:
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        INSERT INTO market_prices (symbol, price)
+        VALUES (?, ?)
+    ''', (price_data['symbol'], price_data['price']))
+    
+    conn.commit()
+    conn.close()
+    print(f"Saved price for {price_data['symbol']} to the database.")
+
 def get_current_price(symbol: str):
     """
-    Fetches the latest price for a specific symbol from the Binance API.
-
-    Args:
-        symbol (str): The trading symbol to fetch the price for (e.g., "BTCUSDT", "ETHUSDT").
-
-    Returns:
-        dict: A dictionary containing the symbol and its price if the request is successful,
-              otherwise None.
+    Fetches the latest price for a specific symbol from the Binance API and saves it.
     """
     endpoint = f"{BINANCE_API_URL}/ticker/price"
     params = {'symbol': symbol}
 
     try:
         response = requests.get(endpoint, params=params)
-        response.raise_for_status()  # Raise an exception for bad status codes
+        response.raise_for_status()
 
         price_data = response.json()
         print(f"Successfully fetched price for {symbol}: {price_data.get('price')}")
+        save_price_data(price_data) # Save the data
         return price_data
 
     except requests.exceptions.HTTPError as http_err:
-        # Handle cases where the symbol might not exist
         if response.status_code == 400:
-            print(f"Error: Invalid symbol '{symbol}'. The trading pair may not exist on Binance.")
+            print(f"Error: Invalid symbol '{symbol}'.")
         else:
             print(f"HTTP error occurred: {http_err}")
         return None
@@ -41,25 +52,10 @@ def get_current_price(symbol: str):
         return None
 
 if __name__ == '__main__':
-    # This block allows you to run the script directly for testing purposes.
-    print("--- Testing Binance Data Collector ---")
+    print("--- Testing Binance Data Collector (with DB saving) ---")
 
-    # Test case 1: Get the price for BTCUSDT
-    print("\nFetching price for BTCUSDT...")
-    btc_price = get_current_price("BTCUSDT")
-    if btc_price:
-        print(f"Current BTC Price: ${float(btc_price['price']):,.2f}")
-
-    # Test case 2: Get the price for ETHUSDT
-    print("\nFetching price for ETHUSDT...")
-    eth_price = get_current_price("ETHUSDT")
-    if eth_price:
-        print(f"Current ETH Price: ${float(eth_price['price']):,.2f}")
-        
-    # Test case 3: Get the price for a non-existent symbol
-    print("\nFetching price for a non-existent symbol (XYZABC)...")
-    invalid_price = get_current_price("XYZABC")
-    if not invalid_price:
-        print("Correctly handled non-existent symbol.")
+    # Test fetching and saving prices for two symbols.
+    get_current_price("BTCUSDT")
+    get_current_price("ETHUSDT")
 
     print("\n--- Test Complete ---")

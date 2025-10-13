@@ -1,32 +1,43 @@
 import requests
 import json
+from src.database import get_db_connection
 
-# The API endpoint for the Fear & Greed Index. It returns the last 100 days of data.
+# The API endpoint for the Fear & Greed Index.
 FEAR_AND_GREED_API_URL = "https://api.alternative.me/fng/?limit=100"
+
+def save_fear_and_greed_data(data: list):
+    """Saves Fear & Greed data to the database."""
+    if not data:
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    for entry in data:
+        # Use INSERT OR IGNORE to avoid errors if the timestamp already exists.
+        cursor.execute('''
+            INSERT OR IGNORE INTO fear_and_greed (timestamp, value, value_classification)
+            VALUES (?, ?, ?)
+        ''', (entry['timestamp'], entry['value'], entry['value_classification']))
+    
+    conn.commit()
+    conn.close()
+    print(f"Saved {len(data)} entries to the fear_and_greed table.")
 
 def get_fear_and_greed_index(limit: int = 1):
     """
-    Fetches the Fear & Greed Index from the alternative.me API.
-
-    Args:
-        limit (int): The number of results to return. Defaults to 1 (latest value).
-                     Set to a higher number to get historical data.
-
-    Returns:
-        dict: A dictionary containing the Fear & Greed data if the request is successful,
-              otherwise None. The dictionary includes 'value', 'value_classification',
-              and 'timestamp'.
+    Fetches the Fear & Greed Index from the alternative.me API and saves it to the database.
     """
     try:
         response = requests.get(f"{FEAR_AND_GREED_API_URL}&limit={limit}")
-        # Raise an exception for bad status codes (4xx or 5xx)
         response.raise_for_status()
         
-        data = response.json()
+        data = response.json().get('data')
         
-        if 'data' in data and len(data['data']) > 0:
-            print(f"Successfully fetched {len(data['data'])} Fear & Greed Index values.")
-            return data['data']
+        if data:
+            print(f"Successfully fetched {len(data)} Fear & Greed Index values.")
+            save_fear_and_greed_data(data) # Save the data
+            return data
         else:
             print("Warning: No data found in the API response.")
             return None
@@ -39,20 +50,9 @@ def get_fear_and_greed_index(limit: int = 1):
         return None
 
 if __name__ == '__main__':
-    # This block allows you to run the script directly for testing purposes.
-    print("--- Testing Fear & Greed Index Collector ---")
+    print("--- Testing Fear & Greed Index Collector (with DB saving) ---")
     
-    # Test case 1: Get the latest value
-    print("\nFetching the latest value...")
-    latest_value = get_fear_and_greed_index(limit=1)
-    if latest_value:
-        print(f"Latest Fear & Greed Value: {latest_value[0]['value']} ({latest_value[0]['value_classification']})")
-
-    # Test case 2: Get the last 5 values
-    print("\nFetching the last 5 values...")
-    last_5_values = get_fear_and_greed_index(limit=5)
-    if last_5_values:
-        for entry in last_5_values:
-            print(f"- Date: {entry['timestamp']}, Value: {entry['value']}, Classification: {entry['value_classification']}")
+    # Fetch and save the last 10 values to test the database logic.
+    get_fear_and_greed_index(limit=10)
             
     print("\n--- Test Complete ---")

@@ -15,3 +15,4 @@ env/
 .DS_Store
 *.log
 config/settings.yaml
+data/crypto_data.db

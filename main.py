@@ -7,11 +7,12 @@ from src.collectors.binance_data import get_current_price
 from src.collectors.whale_alert import get_whale_transactions
 from src.analysis.signal_engine import generate_comprehensive_signal
 from src.notify.telegram_bot import send_telegram_alert, load_config
+from src.database import initialize_database
 
 def run_bot_cycle():
     """
     Executes one full cycle of the bot's logic:
-    1. Fetches data.
+    1. Fetches data and saves it to the database.
     2. Analyzes it for a signal.
     3. Sends a notification if the signal is not "HOLD".
     """
@@ -20,7 +21,7 @@ def run_bot_cycle():
     watch_list = config.get('settings', {}).get('watch_list', ['BTCUSDT'])
     min_whale_value = config.get('settings', {}).get('min_whale_transaction_usd', 1000000)
 
-    # 1. Collect data
+    # 1. Collect data (which now also saves to DB)
     print("Fetching data from all sources...")
     fear_and_greed_data = get_fear_and_greed_index(limit=1)
     whale_transactions = get_whale_transactions(min_value_usd=min_whale_value)
@@ -56,6 +57,9 @@ def run_bot_cycle():
 
 
 if __name__ == "__main__":
+    # Initialize the database first
+    initialize_database()
+
     # Load configuration to get the run interval
     config = load_config()
     run_interval_minutes = 15 # Default value
@@ -66,7 +70,6 @@ if __name__ == "__main__":
         print(f"Using default run interval of {run_interval_minutes} minutes.")
 
     # --- Main Application Loop ---
-    # The bot will run indefinitely and execute a cycle at the specified interval.
     while True:
         run_bot_cycle()
         sleep_duration_seconds = run_interval_minutes * 60
