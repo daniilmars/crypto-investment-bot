@@ -1,6 +1,7 @@
 import requests
 import json
 from src.database import get_db_connection
+from src.logger import log
 
 # The API endpoint for the Fear & Greed Index.
 FEAR_AND_GREED_API_URL = "https://api.alternative.me/fng/?limit=100"
@@ -22,7 +23,7 @@ def save_fear_and_greed_data(data: list):
     
     conn.commit()
     conn.close()
-    print(f"Saved {len(data)} entries to the fear_and_greed table.")
+    log.info(f"Saved {len(data)} entries to the fear_and_greed table.")
 
 def get_fear_and_greed_index(limit: int = 1):
     """
@@ -35,24 +36,21 @@ def get_fear_and_greed_index(limit: int = 1):
         data = response.json().get('data')
         
         if data:
-            print(f"Successfully fetched {len(data)} Fear & Greed Index values.")
+            log.info(f"Successfully fetched {len(data)} Fear & Greed Index values.")
             save_fear_and_greed_data(data) # Save the data
             return data
         else:
-            print("Warning: No data found in the API response.")
+            log.warning("No data found in the F&G API response.")
             return None
 
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching Fear & Greed Index: {e}")
+        log.error(f"Error fetching Fear & Greed Index: {e}")
         return None
     except json.JSONDecodeError:
-        print("Error: Could not decode JSON response from the API.")
+        log.error("Could not decode JSON response from the F&G API.")
         return None
 
 if __name__ == '__main__':
-    print("--- Testing Fear & Greed Index Collector (with DB saving) ---")
-    
-    # Fetch and save the last 10 values to test the database logic.
+    log.info("--- Testing Fear & Greed Index Collector (with DB saving) ---")
     get_fear_and_greed_index(limit=10)
-            
-    print("\n--- Test Complete ---")
+    log.info("--- Test Complete ---")

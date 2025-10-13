@@ -1,232 +1,134 @@
-# Crypto Bot
-Perfekt ✅ — hier ist eine **strukturierte `README.md`** für dein Projekt
-**„Crypto Investment Alert Bot“**,
-die du direkt in dein GitHub-Repository einfügen kannst.
-Sie enthält alle wichtigen Abschnitte: Überblick, Architektur, Setup, Nutzung, Datenquellen und Erweiterungen.
-
----
-
-````markdown
 # 🚀 Crypto Investment Alert Bot
 
-Ein intelligenter Bot, der On-Chain-, Markt- und Stimmungsdaten kombiniert, um automatisierte **Investment-Signale** für Kryptowährungen zu erkennen und dir **Push-Benachrichtigungen** (z. B. per Telegram oder Pushover) zu senden.
+A sophisticated, multi-source bot that analyzes market sentiment, on-chain activity, and price action to generate automated investment signals for cryptocurrencies.
 
 ---
 
-## 📘 Übersicht
+## 📘 Overview
 
-Der Bot sammelt in Echtzeit Daten von verschiedenen APIs (z. B. Whale Alert, Binance, LunarCrush, Glassnode), analysiert Muster in Whale-Aktivitäten, Marktpreisen und Social Sentiment, und bewertet diese über regelbasierte oder ML-Modelle.
+This bot is designed to identify potential crypto investment opportunities by systematically collecting and analyzing data from multiple key sources. It runs in a continuous cycle, fetching the latest data, evaluating it against a configurable strategy, and sending real-time alerts via Telegram for significant signals.
 
-Ziel: **Rechtzeitig Krypto-Investments identifizieren**, bevor sich starke Marktbewegungen abzeichnen.
-
----
-
-## 🧠 Hauptfunktionen
-
-- 🔍 **On-Chain-Analyse:** Whale-Transfers, Exchange-In/Outflows, Wallet-Cluster
-- 📈 **Marktdaten:** Echtzeitpreise, Volatilität, Trendanalyse
-- 💬 **Stimmungsdaten:** Fear & Greed Index, Social-Media-Sentiment
-- 🧮 **Signal Engine:** Regelbasiert oder Machine-Learning-gestützt
-- 📲 **Benachrichtigungssystem:** Telegram- oder Push-Alerts bei Kauf-/Verkaufssignalen
-- 📊 **Backtesting:** Simulation mit historischen Daten zur Bewertung der Strategie
+All collected data is stored in a local **SQLite database**, enabling historical analysis and strategy evaluation with a built-in **backtesting framework**.
 
 ---
 
-## 🏗 Architekturübersicht
+## 🧠 Core Features
+
+-   📊 **Multi-Source Data Collection:**
+    -   **Market Sentiment:** Fear & Greed Index.
+    -   **On-Chain Activity:** Whale Alert API for large transaction tracking.
+    -   **Market Data:** Real-time prices from Binance.
+-   💾 **Data Persistence:** All collected data is automatically saved to a local SQLite database for historical analysis.
+-   🧮 **Comprehensive Signal Engine:** A multi-layered, rule-based engine that combines sentiment, on-chain flow, and price action (vs. moving average) to generate confirmed BUY/SELL signals.
+-   🧪 **Backtesting Framework:** A powerful simulation tool (`backtest.py`) that runs your strategy against historical data to objectively measure its performance (Profit/Loss, number of trades).
+-   📲 **Telegram Notifications:** Instant alerts for BUY or SELL signals sent directly to your Telegram.
+-   📝 **Structured Logging:** Professional logging for clear, timestamped monitoring of the bot's activity.
+
+---
+
+## 🏗 Architecture
 
 ```text
-+-------------------------+
-|   Data Collector (APIs) |
-|-------------------------|
-| - Whale_Alert.py        |
-| - Binance_Price.py      |
-| - LunarCrush_Sent.py    |
-| - Glassnode_Metrics.py  |
-+-----------+-------------+
-            |
-            v
-+-----------------------------+
-|   Data Lake (SQLite / SQL)  |
-+-----------+-----------------+
-            |
-            v
-+-----------------------------+
-|   Analysis & Signal Engine  |
-| - Feature Engineering       |
-| - Regeln / ML-Modelle       |
-| - Backtesting               |
-+-----------+-----------------+
-            |
-            v
-+-----------------------------+
-| Notification Service        |
-| - Telegram / Pushover API   |
-+-----------------------------+
-````
++--------------------------------+
+|   Data Collectors (APIs)       |
+| - fear_and_greed.py            |
+| - binance_data.py              |
+| - whale_alert.py               |
++----------------+---------------+
+                 |
+                 v
++--------------------------------+
+|   SQLite Database              |
+| - crypto_data.db               |
+| - (database.py)                |
++----------------+---------------+
+                 |
+                 v
++--------------------------------+
+|   Analysis & Signal Engine     |
+| - signal_engine.py             |
++----------------+---------------+
+                 |
++----------------+--------------------------------+
+|                |                                |
+v                v                                v
++----------------+--+      +----------------+--+      +----------------+--+
+| Notification      |      | Backtesting       |      | Live Execution    |
+| - telegram_bot.py |      | - backtest.py     |      | - main.py         |
++-------------------+      +-------------------+      +-------------------+
+```
 
 ---
 
 ## ⚙️ Setup
 
-### Voraussetzungen
+### Prerequisites
 
-* Python ≥ 3.10
-* Git + VS Code oder Jupyter Notebook
-* API-Keys für:
-
-  * Whale Alert
-  * Binance
-  * LunarCrush
-  * (optional) Glassnode, NewsAPI
+-   Python ≥ 3.9
+-   Git
+-   API Keys for:
+    -   Whale Alert
+    -   Telegram (create a bot via @BotFather)
 
 ### Installation
 
-```bash
-git clone https://github.com/<your-user>/crypto-alert-bot.git
-cd crypto-alert-bot
-pip install -r requirements.txt
-```
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/<your-user>/crypto-alert-bot.git
+    cd crypto-alert-bot
+    ```
 
-### Beispielhafte Verzeichnisstruktur
+2.  **Install dependencies:**
+    ```bash
+    python3 -m pip install -r requirements.txt
+    ```
 
-```text
-crypto-alert-bot/
-│
-├── data/                     # gespeicherte CSV-/SQL-Daten
-├── src/
-│   ├── collectors/
-│   │   ├── whale_alert.py
-│   │   ├── binance_data.py
-│   │   └── sentiment_data.py
-│   ├── analysis/
-│   │   ├── features.py
-│   │   ├── signal_engine.py
-│   │   └── backtest.py
-│   └── notify/
-│       ├── telegram_bot.py
-│       └── pushover.py
-│
-├── config/
-│   └── settings.yaml
-│
-├── README.md
-└── requirements.txt
-```
+3.  **Configure the bot:**
+    -   Rename `config/settings.yaml.example` to `config/settings.yaml`.
+    -   Open `config/settings.yaml` and add your API keys and Telegram details.
 
 ---
 
-## 🔌 Beispiel: Datenabruf & Signal
+## 🚀 Usage
 
-```python
-from collectors.whale_alert import get_whale_transfers
-from analysis.signal_engine import evaluate_signal
-from notify.telegram_bot import send_alert
+### Running the Live Bot
 
-transfers = get_whale_transfers(min_value=5000000)
-signal = evaluate_signal(transfers)
-
-if signal:
-    send_alert(signal)
-```
-
----
-
-## 🧪 Backtesting
-
-Zum Testen der Strategie mit historischen Daten:
+To start the bot in live mode, run `main.py`. It will execute a cycle every 15 minutes (configurable in `settings.yaml`).
 
 ```bash
-python src/analysis/backtest.py --symbol BTCUSDT --start 2022-01-01 --end 2024-12-31
+python3 main.py
 ```
 
-Ergebnisse:
+### Running the Backtester
 
-* 📊 Sharpe Ratio
-* 📉 Max Drawdown
-* ✅ Trefferquote (True Signal Ratio)
+To evaluate your strategy's performance on the data you've collected, run the backtesting script.
+
+```bash
+python3 src/analysis/backtest.py
+```
+
+The backtester will output the simulated Profit/Loss based on the logic in `signal_engine.py`.
 
 ---
 
-## 🧮 Datenquellen
+## 🧮 Implemented Data Sources
 
-| Kategorie           | Quelle         | API                                                                                                      |
-| ------------------- | -------------- | -------------------------------------------------------------------------------------------------------- |
-| On-Chain            | Whale Alert    | [https://docs.whale-alert.io](https://docs.whale-alert.io)                                               |
-| On-Chain / Metriken | Glassnode      | [https://api.glassnode.com](https://api.glassnode.com)                                                   |
-| Marktpreise         | Binance        | [https://binance-docs.github.io/apidocs/spot/en](https://binance-docs.github.io/apidocs/spot/en)         |
-| Sentiment           | LunarCrush     | [https://lunarcrush.com/developers](https://lunarcrush.com/developers)                                   |
-| Fear & Greed        | Alternative.me | [https://alternative.me/crypto/fear-and-greed-index](https://alternative.me/crypto/fear-and-greed-index) |
-| Nachrichten         | NewsAPI        | [https://newsapi.org](https://newsapi.org)                                                               |
+| Category      | Source         | API                                                                |
+| ------------- | -------------- | ------------------------------------------------------------------ |
+| On-Chain      | Whale Alert    | [https://whale-alert.io](https://whale-alert.io)                   |
+| Marktpreise   | Binance        | [https://binance-docs.github.io](https://binance-docs.github.io)   |
+| Sentiment     | Alternative.me | [https://alternative.me/crypto/fear-and-greed-index](https://alternative.me/crypto/fear-and-greed-index) |
 
 ---
 
-## 📲 Benachrichtigung
+## 🧱 Next Steps & Extensions
 
-### Telegram
-
-1. Erstelle einen Bot mit **@BotFather**
-2. Notiere:
-
-   * `BOT_TOKEN`
-   * `CHAT_ID`
-3. Füge diese in `config/settings.yaml` ein.
-
-```yaml
-telegram:
-  token: "YOUR_TELEGRAM_TOKEN"
-  chat_id: "YOUR_CHAT_ID"
-```
-
-Beispiel-Nachricht:
-
-```
-🚨 BUY SIGNAL BTC/USDT
-Whale Outflow: +7,200 BTC
-Sentiment: Fear (Index 25)
-Price: $58,400 (-3.1%)
-```
-
----
-
-## ☁️ Deployment
-
-Optionen:
-
-* **GitHub Actions / CRON:** automatischer Abruf alle 15 min
-* **Docker Container:** für Cloud-Hosting
-* **Streamlit / Grafana Dashboard:** visuelle Auswertung der Signale
-
----
-
-## 🧱 Erweiterungen
-
-* 🤖 ML-basierte Signal-Erkennung (z. B. RandomForest, LSTM)
-* 🧩 Auto-Portfolio Management über Binance API
-* 🕸 Web-Frontend mit Streamlit oder React
-* 💬 GPT-gestützte News-Analyse („Warum steigt BTC gerade?“)
+-   🤖 Enhance the signal engine with more technical indicators (RSI, MACD).
+-   🕸 Build a web dashboard with Streamlit or Flask to visualize data and backtest results.
+-   🧩 Implement auto-portfolio management via the Binance API.
 
 ---
 
 ## ⚠️ Disclaimer
 
-Dieses Projekt dient **ausschließlich zu Bildungs- und Forschungszwecken**.
-Es stellt **keine Finanzberatung** oder Kaufempfehlung dar.
-Investitionen in Kryptowährungen sind mit hohen Risiken verbunden.
-
----
-
-## 🧑‍💻 Autor
-
-**Crypto Investment Alert Bot**
-Erstellt von Daniil Mars mit Unterstützung von GPT-5.
-Lizenz: MIT
-
-```
-
----
-
-Möchtest du, dass ich dir zusätzlich  
-→ eine passende **`requirements.txt`** und  
-→ eine minimale **Projekt-Ordnerstruktur mit Python-Stubs** generiere,  
-damit du das Repository direkt initialisieren kannst (z. B. für GitHub)?
-```
+This project is for educational and research purposes only. It is not financial advice. Trading cryptocurrencies involves significant risk.
