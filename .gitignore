@@ -14,3 +14,4 @@ env/
 # General
 .DS_Store
 *.log
+config/settings.yaml

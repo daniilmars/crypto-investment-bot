@@ -1,0 +1,51 @@
+# ----------------------------------------------------
+# API Keys and Configuration for the Crypto Bot
+# ----------------------------------------------------
+#
+# INSTRUCTIONS:
+# 1. Rename this file from 'settings.yaml.example' to 'settings.yaml'.
+# 2. Fill in your actual API keys and settings below.
+# 3. IMPORTANT: The 'settings.yaml' file is listed in .gitignore and will NOT be committed.
+#
+# ----------------------------------------------------
+
+# -- Notification Settings --
+# Choose your preferred notification service.
+# You can enable multiple services.
+
+notification_services:
+  telegram:
+    enabled: true
+    token: "YOUR_TELEGRAM_BOT_TOKEN"  # Get from @BotFather on Telegram
+    chat_id: "YOUR_TELEGRAM_CHAT_ID"      # Your personal chat ID or a group/channel ID
+
+  pushover:
+    enabled: false
+    user_key: "YOUR_PUSHOVER_USER_KEY"
+    api_token: "YOUR_PUSHOVER_API_TOKEN"
+
+# -- API Keys for Data Sources --
+# Add the API keys for the data sources you want to use.
+
+api_keys:
+  whale_alert: "YOUR_WHALE_ALERT_API_KEY"
+  binance:
+    api_key: "YOUR_BINANCE_API_KEY"
+    api_secret: "YOUR_BINANCE_API_SECRET"
+  lunarcrush: "YOUR_LUNARCRUSH_API_KEY"
+  glassnode: "YOUR_GLASSNODE_API_KEY"
+  newsapi: "YOUR_NEWSAPI_ORG_KEY"
+
+# -- General Bot Settings --
+settings:
+  # Minimum value in USD for a whale transaction to be considered significant.
+  min_whale_transaction_usd: 5000000
+
+  # List of cryptocurrencies to monitor. Use symbols.
+  # Example: ["BTC", "ETH", "SOL"]
+  watch_list:
+    - "BTC"
+    - "ETH"
+
+  # How often the bot should run its analysis cycle, in minutes.
+  run_interval_minutes: 15
