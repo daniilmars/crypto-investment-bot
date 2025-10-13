@@ -5,8 +5,7 @@ import time
 from src.collectors.fear_and_greed import get_fear_and_greed_index
 from src.collectors.binance_data import get_current_price
 from src.collectors.whale_alert import get_whale_transactions
-from src.analysis.signal_engine import generate_comprehensive_signal
-from src.collectors.whale_alert import get_whale_transactions
+from src.collectors.news_data import get_recent_crypto_news
 from src.analysis.signal_engine import generate_comprehensive_signal
 from src.notify.telegram_bot import send_telegram_alert, load_config
 from src.database import initialize_database
@@ -27,9 +26,8 @@ def run_bot_cycle():
     whale_transactions = get_whale_transactions(min_value_usd=min_whale_value)
     
     market_prices = {}
-    # TODO: In the future, we should fetch historical prices for a proper moving average
-    # For now, the live price is used for alerting, and the backtester handles SMA.
     for symbol in watch_list:
+        get_recent_crypto_news(symbol) # Fetch and save news
         price_data = get_current_price(symbol)
         if price_data:
             market_prices[symbol] = price_data.get('price')

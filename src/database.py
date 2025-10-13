@@ -63,6 +63,21 @@ def initialize_database():
         )
     ''')
 
+    # --- Create news_articles table ---
+    # Stores news articles and their sentiment.
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS news_articles (
+            url TEXT PRIMARY KEY,
+            symbol TEXT NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT,
+            source TEXT,
+            published_at TEXT NOT NULL,
+            sentiment TEXT,
+            recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
     conn.commit()
     conn.close()
     print("Database initialized successfully.")
