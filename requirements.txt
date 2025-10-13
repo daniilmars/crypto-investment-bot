@@ -1,5 +1,5 @@
 # For making HTTP requests to APIs
 requests
 
-# For handling YAML configuration files
-PyYAML
+# For data analysis and backtesting
+pandas
