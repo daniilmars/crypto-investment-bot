@@ -47,7 +47,11 @@ def load_historical_data():
     data['value_classification'] = data['value_classification'].ffill()
     data = data.fillna(0) # Fill any remaining NaNs
 
-    data = data.sort_values(by='date').reset_index(drop=True)
+    # Calculate a simple moving average (SMA) for the price
+    data['price_sma_5'] = data['price'].rolling(window=5).mean()
+    # Drop initial rows where SMA is not available
+    data = data.dropna().reset_index(drop=True)
+
     print(f"Loaded and merged {len(data)} data points for backtesting.")
     return data
 
@@ -63,17 +67,12 @@ def run_backtest(data):
         return
 
     for i, row in data.iterrows():
-        # We need at least one previous row to avoid looking ahead
-        if i == 0:
-            continue
-
         # Simulate the data available at that point in time
-        # For simplicity, we'll use the current day's data to make a decision
         fng_data = [{'value': row['value'], 'value_classification': row['value_classification']}]
-        # This is a simplification; a real scenario would query whale data up to this point
         whale_data = [{'amount_usd': row['total_usd']}] if row['num_transactions'] > 0 else []
+        market_data = {'current_price': row['price'], 'sma_5': row['price_sma_5']}
         
-        signal_data = generate_comprehensive_signal(fng_data, whale_data, {{}})
+        signal_data = generate_comprehensive_signal(fng_data, whale_data, market_data)
         signal = signal_data.get('signal')
         
         current_price = row['price']
