@@ -35,4 +35,5 @@ jobs:
           heroku_api_key: ${{ secrets.HEROKU_API_KEY }}
           heroku_app_name: "crypto-investment-bot"
           heroku_email: "leistungen_schute.8g@icloud.com"
+          docker_heroku_process_type: "worker"
           usedocker: true
