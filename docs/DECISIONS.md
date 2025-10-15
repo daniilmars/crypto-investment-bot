@@ -156,3 +156,48 @@ Containerization is a best practice for modern application deployment. It solves
 
 **Reasoning:**
 While SQLite was excellent for initial development, it is not suitable for a production, cloud-hosted application due to its file-based nature and concurrency limitations. Migrating to a robust, client-server database like PostgreSQL is essential for data persistence, scalability, and reliability. This change makes the bot a true cloud-native application, ready for serious, long-term deployment.
+
+---
+
+### ADR-011: Implementation of a CI/CD Pipeline with GitHub Actions
+
+**Date:** 2025-10-15
+
+**Decision:**
+- **Implemented a full CI/CD pipeline using GitHub Actions.** A workflow was created at `.github/workflows/deploy.yml` that automates the testing and deployment of the application.
+- **The workflow is triggered on every push to the `master` branch.** It performs the following steps:
+    1.  Installs all project dependencies.
+    2.  Runs the complete `pytest` suite.
+    3.  **Only if tests pass,** it proceeds to deploy to Heroku.
+
+**Reasoning:**
+Automating the deployment process is a critical step in professionalizing the project. A CI/CD pipeline eliminates manual deployment errors, ensures that no code is deployed without passing all quality checks (tests), and creates a repeatable, reliable path to production. This significantly improves the stability and maintainability of the application.
+
+---
+
+### ADR-012: Comprehensive Test Suite Refactoring
+
+**Date:** 2025-10-15
+
+**Decision:**
+- **Refactored the entire test suite** to align with the application's mature architecture, specifically the centralized configuration and dual-database system.
+- **Replaced file-based test setups with mocking.** All tests that previously created temporary database files (`tests/test_database.py`) were rewritten to use `unittest.mock.patch` to inject mock database connections.
+- **Corrected mock targets.** Tests that were failing due to incorrect patch targets (e.g., patching `app_config` where it was defined instead of where it was used) were fixed.
+
+**Reasoning:**
+The initial test suite was written before major architectural refactors, rendering it completely broken. The repeated CI/CD failures made it clear that a comprehensive overhaul was needed. This refactoring effort was critical to re-establishing a reliable quality gate for the project, enabling the CI/CD pipeline to function correctly, and ensuring that future development can proceed safely.
+
+---
+
+### ADR-013: Configuration of Heroku for Docker Deployment
+
+**Date:** 2025-10-15
+
+**Decision:**
+- **Configured the Heroku application for a Docker-based deployment.** This involved two key changes:
+    1.  **Setting the Heroku Stack:** The application's stack was manually set to `container` using the Heroku CLI. This was a one-time setup step to prepare the Heroku environment to accept Docker images instead of source code.
+    2.  **Correcting `heroku.yml`:** The `heroku.yml` file was simplified and corrected to properly define a `worker` process built from the `Dockerfile`.
+- **Automated Secret Management:** The GitHub Actions workflow was enhanced to automatically set the required Heroku Config Vars (environment variables) from GitHub Secrets during each deployment.
+
+**Reasoning:**
+The deployment was consistently failing due to a mismatch between the deployment method (Docker container) and the Heroku application's configuration (default source code stack). These changes aligned the Heroku environment with the project's containerized architecture. Automating the secret management ensures that the production environment is always correctly and securely configured without manual intervention.

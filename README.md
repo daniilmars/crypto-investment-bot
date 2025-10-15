@@ -112,51 +112,71 @@ The backtester will output the simulated Profit/Loss based on the logic in `sign
 
 ---
 
-## 🚀 Deployment with Heroku
+## 🚀 Deployment with Heroku & GitHub Actions
 
-The recommended way to run this bot in production is by using Heroku, which can automate the deployment and run the bot on a 24/7 server.
+This project is configured for automated, professional deployment to Heroku via a GitHub Actions CI/CD pipeline. The workflow automatically tests and deploys the application whenever new code is pushed to the `master` branch.
 
 ### 1. Prerequisites
 
--   A free Heroku account.
--   The Heroku CLI installed on your local machine.
+-   A free Heroku account (verified with a payment method).
 -   The project pushed to a GitHub repository.
+-   The GitHub CLI (`gh`) installed on your local machine.
 
-### 2. Setup and Deployment Steps
+### 2. One-Time Setup
 
-1.  **Create a New Heroku App:**
-    From your terminal, logged into the Heroku CLI, create a new application:
+1.  **Create the Heroku App:**
+    From your terminal, create the Heroku application. This also sets the stack to `container`, which is required for Docker-based deployments.
     ```bash
-    heroku create your-bot-name
+    heroku create your-app-name --stack=container
     ```
 
 2.  **Provision the Postgres Database:**
-    Add the Heroku Postgres add-on to your app. The free `hobby-dev` tier is sufficient to get started. This will automatically create the database and set the required `DATABASE_URL` environment variable for your application.
+    Add the free Heroku Postgres add-on. This automatically sets the `DATABASE_URL` config var on your Heroku app.
     ```bash
-    heroku addons:create heroku-postgresql:hobby-dev -a your-bot-name
+    heroku addons:create heroku-postgresql:hobby-dev -a your-app-name
     ```
 
-3.  **Configure Environment Variables:**
-    Set the required API keys as environment variables in Heroku. This is the secure way to manage your secrets.
+3.  **Configure GitHub Secrets:**
+    The CI/CD workflow requires secrets to be set in your GitHub repository. These are used to deploy the app and to configure the app's environment variables on Heroku.
     ```bash
-    heroku config:set WHALE_ALERT_API_KEY="YOUR_WHALE_ALERT_KEY" -a your-bot-name
-    heroku config:set TELEGRAM_BOT_TOKEN="YOUR_TELEGRAM_TOKEN" -a your-bot-name
-    heroku config:set TELEGRAM_CHAT_ID="YOUR_TELEGRAM_CHAT_ID" -a your-bot-name
+    # The API key for your Heroku account
+    gh secret set HEROKU_API_KEY
+
+    # The API key for the Whale Alert service
+    gh secret set WHALE_ALERT_API_KEY
+
+    # Your Telegram Bot's token
+    gh secret set TELEGRAM_BOT_TOKEN
+
+    # The Chat ID for your Telegram channel or user
+    gh secret set TELEGRAM_CHAT_ID
     ```
 
-4.  **Connect to GitHub and Deploy:**
-    -   In the Heroku Dashboard for your app, go to the "Deploy" tab.
-    -   Connect your GitHub account and select the repository for this project.
-    -   Choose to "Enable Automatic Deploys" from your `main` branch.
-    -   Manually trigger the first deploy by clicking "Deploy Branch".
+### 3. Automated Deployment
 
-    Heroku will now automatically build the `Dockerfile`, provision the `worker` process as defined in `heroku.yml`, and start the bot.
+Once the setup is complete, the process is fully automated:
 
-### 3. Managing the Bot
+1.  **Push to GitHub:** Commit and push your changes to the `master` branch.
+    ```bash
+    git push origin master
+    ```
+2.  **CI/CD Pipeline:** The push automatically triggers the GitHub Actions workflow defined in `.github/workflows/deploy.yml`.
+    -   The workflow installs all dependencies.
+    -   It runs the full `pytest` suite to ensure code quality.
+    -   If tests pass, it securely sets the API keys as config vars on your Heroku app.
+    -   It builds the Docker image and deploys it to Heroku.
+    -   Finally, it scales up the `worker` dyno to 1, starting the bot.
 
--   **To view logs:** `heroku logs --tail -a your-bot-name`
--   **To check if the worker is running:** `heroku ps -a your-bot-name`
--   The bot will automatically restart if it crashes.
+### 4. Managing the Bot
+
+-   **To view logs:**
+    ```bash
+    heroku logs --tail -a your-app-name
+    ```
+-   **To check if the worker is running:**
+    ```bash
+    heroku ps -a your-app-name
+    ```
 
 ---
 
