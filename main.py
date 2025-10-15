@@ -93,6 +93,10 @@ def run_bot_cycle():
 
 
 if __name__ == "__main__":
+    # --- Debugging: Print command-line arguments ---
+    import sys
+    print(f"Received arguments: {sys.argv}")
+
     # --- Argument Parser for Special Modes ---
     import argparse
     parser = argparse.ArgumentParser(description="Crypto Investment Alert Bot")
