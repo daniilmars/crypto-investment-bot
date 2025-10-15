@@ -31,5 +31,5 @@ jobs:
         with:
           heroku_api_key: ${{ secrets.HEROKU_API_KEY }}
           heroku_app_name: "crypto-investment-bot"
-          heroku_email: "daniilmarszallek@yahoo.de"
+          heroku_email: "leistungen_schute.8g@icloud.com"
           usedocker: true
