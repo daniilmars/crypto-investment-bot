@@ -2,7 +2,7 @@ build:
   docker:
     worker: Dockerfile
 run:
-  worker: main.py
+  worker: python3 main.py
   test:
     command:
       - python main.py --test-notify
