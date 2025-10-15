@@ -16,5 +16,5 @@ COPY config/ ./config/
 COPY src/ ./src/
 COPY main.py .
 
-# Command to run the application
-CMD ["python3", "main.py"]
+# Entrypoint for the application
+ENTRYPOINT ["python3"]
