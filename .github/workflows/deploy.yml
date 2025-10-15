@@ -28,6 +28,14 @@ jobs:
       - name: Install Heroku CLI
         run: npm install -g heroku
 
+      - name: Set Heroku Config Vars
+        env:
+          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+        run: |
+          heroku config:set WHALE_ALERT_API_KEY=${{ secrets.WHALE_ALERT_API_KEY }} --app crypto-investment-bot
+          heroku config:set TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }} --app crypto-investment-bot
+          heroku config:set TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }} --app crypto-investment-bot
+
       - name: Deploy to Heroku
         if: success()
         uses: akhileshns/heroku-deploy@v3.12.12
