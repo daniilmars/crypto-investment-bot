@@ -1,0 +1,26 @@
+# Ignore Git files
+.git
+.gitignore
+
+# Ignore Docker files
+Dockerfile
+.dockerignore
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore test files and cache
+tests/
+.pytest_cache/
+
+# Ignore documentation and local data
+README.md
+docs/
+data/
+*.db
+
+# Ignore local configuration - this should be passed via env vars in production
+config/settings.yaml

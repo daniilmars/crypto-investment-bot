@@ -1,23 +1,10 @@
 import requests
-import yaml
 import os
 import time
-from src.database import get_db_connection
-from src.logger import log
+from src.database import get_db_connection, IS_POSTGRES
 
 # Whale Alert API base URL
 WHALE_ALERT_API_URL = "https://api.whale-alert.io/v1"
-
-# --- Configuration Loading ---
-def load_config():
-    """Loads the configuration from the settings.yaml file."""
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(script_dir, '..', '..', 'config', 'settings.yaml')
-    try:
-        with open(config_path, 'r') as f: return yaml.safe_load(f)
-    except (FileNotFoundError, yaml.YAMLError) as e:
-        log.error(f"Error loading config: {e}")
-        return None
 
 def save_whale_transactions(transactions: list):
     """Saves whale transactions to the database."""
@@ -27,17 +14,25 @@ def save_whale_transactions(transactions: list):
     conn = get_db_connection()
     cursor = conn.cursor()
     
+    query = '''
+        INSERT INTO whale_transactions (id, symbol, timestamp, amount_usd, from_owner, from_owner_type, to_owner, to_owner_type)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (id) DO NOTHING
+    ''' if IS_POSTGRES else '''
+        INSERT OR IGNORE INTO whale_transactions (id, symbol, timestamp, amount_usd, from_owner, from_owner_type, to_owner, to_owner_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    '''
+    
     for tx in transactions:
-        cursor.execute('''
-            INSERT OR IGNORE INTO whale_transactions (id, symbol, timestamp, amount_usd, from_owner, from_owner_type, to_owner, to_owner_type)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
+        params = (
             tx['id'], tx['symbol'], tx['timestamp'], tx['amount_usd'],
             tx['from'].get('owner'), tx['from'].get('owner_type'),
             tx['to'].get('owner'), tx['to'].get('owner_type')
-        ))
+        )
+        cursor.execute(query, params)
     
     conn.commit()
+    cursor.close()
     conn.close()
     log.info(f"Processed {len(transactions)} whale transactions for the database.")
 
@@ -45,10 +40,7 @@ def get_whale_transactions(min_value_usd: int = 1000000):
     """
     Fetches the latest transactions from the Whale Alert API and saves them.
     """
-    config = load_config()
-    if not config: return None
-
-    api_key = config.get('api_keys', {}).get('whale_alert')
+    api_key = app_config.get('api_keys', {}).get('whale_alert')
     if not api_key or api_key == "YOUR_WHALE_ALERT_API_KEY":
         log.error("Whale Alert API key is not configured.")
         return None
@@ -74,7 +66,36 @@ def get_whale_transactions(min_value_usd: int = 1000000):
         log.error(f"Error fetching from Whale Alert API: {e}")
         return None
 
+def get_stablecoin_flows(transactions: list, stablecoins: list):
+    """
+    Analyzes a list of transactions to calculate the net inflow of stablecoins to exchanges.
+    
+    Args:
+        transactions (list): A list of whale transaction dictionaries.
+        stablecoins (list): A list of stablecoin symbols to monitor (e.g., ['usdt', 'usdc']).
+        
+    Returns:
+        dict: A dictionary containing the total USD value of stablecoins moved to exchanges.
+    """
+    inflow_usd = 0
+    if not transactions or not stablecoins:
+        return {'stablecoin_inflow_usd': inflow_usd}
+
+    for tx in transactions:
+        is_stablecoin = tx.get('symbol', '').lower() in stablecoins
+        is_to_exchange = tx.get('to', {}).get('owner_type', '') == 'exchange'
+        
+        if is_stablecoin and is_to_exchange:
+            inflow_usd += tx.get('amount_usd', 0)
+            
+    log.info(f"Calculated total stablecoin inflow to exchanges: ${inflow_usd:,.2f}")
+    return {'stablecoin_inflow_usd': inflow_usd}
+
+
 if __name__ == '__main__':
     log.info("--- Testing Whale Alert Data Collector (with DB saving) ---")
-    get_whale_transactions()
+    all_transactions = get_whale_transactions()
+    if all_transactions:
+        # Example of how to use the new function
+        get_stablecoin_flows(all_transactions, stablecoins=['usdt', 'usdc'])
     log.info("--- Test Complete ---")

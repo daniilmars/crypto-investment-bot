@@ -3,3 +3,10 @@ requests
 
 # For data analysis and backtesting
 pandas
+
+# For connecting to PostgreSQL
+psycopg2-binary
+
+# For testing
+pytest
+pytest-mock

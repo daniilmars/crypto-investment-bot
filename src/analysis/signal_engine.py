@@ -1,101 +1,71 @@
-# This module will contain the logic for analyzing data and generating trading signals.
-
-def generate_signal_from_fear_and_greed(fear_and_greed_data: list):
+def generate_signal(whale_transactions, market_data, high_interest_wallets=None, stablecoin_data=None, stablecoin_threshold=100000000, velocity_data=None, velocity_threshold_multiplier=5.0):
     """
-    Analyzes the Fear & Greed Index data to generate a simple trading signal.
-    (This is the original, simple signal generator).
+    Generates a trading signal based on on-chain data and technical indicators.
+    Prioritizes anomalies and high-priority events.
     """
-    if not fear_and_greed_data or not isinstance(fear_and_greed_data, list) or len(fear_and_greed_data) == 0:
-        return None
+    if high_interest_wallets is None: high_interest_wallets = []
+    if stablecoin_data is None: stablecoin_data = {}
+    if velocity_data is None: velocity_data = {}
 
-    latest_entry = fear_and_greed_data[0]
-    value = int(latest_entry.get('value', 50))
-    classification = latest_entry.get('value_classification', 'Neutral')
+    # --- 1. Check for Transaction Velocity Anomaly ---
+    if velocity_data.get('is_anomaly'):
+        current = velocity_data.get('current_count')
+        baseline = velocity_data.get('baseline_avg')
+        if current > (baseline * velocity_threshold_multiplier):
+            reason = f"Transaction velocity anomaly detected: {current} txns in last hour vs. baseline of {baseline:.1f}."
+            return {"signal": "VOLATILITY_WARNING", "reason": reason}
 
-    signal = {"signal": "HOLD", "reason": f"F&G Index is {value} ({classification})."}
-    if classification == "Extreme Fear":
-        signal["signal"] = "BUY"
-        signal["reason"] = f"F&G Index is at {value} (Extreme Fear)."
-    elif classification == "Extreme Greed":
-        signal["signal"] = "SELL"
-        signal["reason"] = f"F&G Index is at {value} (Extreme Greed)."
-    return signal
+    # --- 2. Check for High-Priority Stablecoin Inflow ---
+    inflow = stablecoin_data.get('stablecoin_inflow_usd', 0)
+    if inflow > stablecoin_threshold:
+        reason = f"Massive stablecoin inflow of ${inflow:,.2f} detected to exchanges."
+        return {"signal": "BUY", "reason": "High-priority signal: " + reason}
 
-def generate_comprehensive_signal(fear_and_greed, whale_transactions, market_prices):
-    """
-    Generates a more advanced signal by combining sentiment, on-chain, and market data.
-    """
-    # 1. Get base signal from Fear & Greed
-    base_signal = generate_signal_from_fear_and_greed(fear_and_greed)
-    if not base_signal:
-        return {"signal": "HOLD", "reason": "Could not determine F&G signal."}
+    # --- 3. Check for High-Priority Signals from Watched Wallets ---
+    if whale_transactions:
+        for tx in whale_transactions:
+            from_owner = tx.get('from', {}).get('owner', 'unknown')
+            to_owner = tx.get('to', {}).get('owner', 'unknown')
+            to_owner_type = tx.get('to', {}).get('owner_type', 'unknown')
+            from_owner_type = tx.get('from', {}).get('owner_type', 'unknown')
+            amount_usd = tx.get('amount_usd', 0)
 
-    final_signal = base_signal
-    final_signal['source'] = "Fear & Greed Index"
-    final_signal['details'] = fear_and_greed[0]
+            if from_owner in high_interest_wallets and to_owner_type == 'exchange':
+                reason = f"High-interest wallet '{from_owner}' sent ${amount_usd:,.2f} to {to_owner}."
+                return {"signal": "SELL", "reason": "High-priority signal: " + reason}
 
-    # 2. Analyze whale transactions for on-chain confirmation
-    if whale_transactions is not None and len(whale_transactions) > 0:
-        # (Whale logic remains the same as before)
+            if to_owner in high_interest_wallets and from_owner_type == 'exchange':
+                reason = f"High-interest wallet '{to_owner}' received ${amount_usd:,.2f} from {from_owner}."
+                return {"signal": "BUY", "reason": "High-priority signal: " + reason}
+
+    # --- 4. Standard Technical and On-Chain Analysis ---
+    current_price = market_data.get('current_price')
+    sma = market_data.get('sma')
+    rsi = market_data.get('rsi')
+
+    if current_price is None or sma is None or rsi is None:
+        return {"signal": "HOLD", "reason": "Missing market data (price, SMA, or RSI)."}
+
+    is_uptrend = current_price > sma
+    is_downtrend = current_price < sma
+    is_oversold = rsi < 30
+    is_overbought = rsi > 70
+
+    net_flow = 0
+    if whale_transactions:
         exchange_inflow = sum(tx['amount_usd'] for tx in whale_transactions if "exchange" in tx.get('to', {}).get('owner_type', ''))
         exchange_outflow = sum(tx['amount_usd'] for tx in whale_transactions if "exchange" in tx.get('from', {}).get('owner_type', ''))
         net_flow = exchange_inflow - exchange_outflow
-        final_signal['reason'] += f" | Whale net flow: ${net_flow:,.2f}."
-
-        if base_signal['signal'] == 'BUY' and net_flow > 0: # Inflow contradicts BUY
-            final_signal['signal'] = 'HOLD'
-            final_signal['reason'] += " (Contradiction: Whale inflow)."
-        elif base_signal['signal'] == 'SELL' and net_flow < 0: # Outflow contradicts SELL
-            final_signal['signal'] = 'HOLD'
-            final_signal['reason'] += " (Contradiction: Whale outflow)."
-
-    # 3. Analyze price action for market confirmation
-    if final_signal['signal'] != 'HOLD' and market_prices.get('current_price') and market_prices.get('sma_5'):
-        current_price = market_prices['current_price']
-        sma = market_prices['sma_5']
-        final_signal['reason'] += f" | Price: ${current_price:,.2f}, SMA(5): ${sma:,.2f}."
-
-        if final_signal['signal'] == 'BUY' and current_price > sma:
-            final_signal['signal'] = 'HOLD'
-            final_signal['reason'] += " (Contradiction: Price is above SMA)."
-        elif final_signal['signal'] == 'SELL' and current_price < sma:
-            final_signal['signal'] = 'HOLD'
-            final_signal['reason'] += " (Contradiction: Price is below SMA)."
-
-    return final_signal
-
-
-if __name__ == '__main__':
-    # --- Testing Comprehensive Signal Engine ---
-    print("--- Testing Comprehensive Signal Engine ---")
-
-    # Mock Data
-    fng_buy = [{'value': '15', 'value_classification': 'Extreme Fear'}]
-    fng_sell = [{'value': '85', 'value_classification': 'Extreme Greed'}]
-    fng_hold = [{'value': '50', 'value_classification': 'Neutral'}]
     
-    whales_bullish = [{'from': {'owner_type': 'exchange'}, 'to': {'owner_type': 'wallet'}, 'amount_usd': 5000000}]
-    whales_bearish = [{'from': {'owner_type': 'wallet'}, 'to': {'owner_type': 'exchange'}, 'amount_usd': 5000000}]
-    whales_neutral = []
+    whale_confirms_buy = net_flow < 0
+    whale_confirms_sell = net_flow > 0
 
-    # Test Case 1: F&G Buy + Bullish Whales -> Strong BUY
-    print("\nTesting F&G BUY + Bullish Whales...")
-    signal1 = generate_comprehensive_signal(fng_buy, whales_bullish, {})
-    print(f"Signal: {signal1['signal']}, Reason: {signal1['reason']}")
+    reason = f"Price: ${current_price:,.2f}, SMA: ${sma:,.2f}, RSI: {rsi:.2f}, Whale Net Flow: ${net_flow:,.2f}."
 
-    # Test Case 2: F&G Sell + Bearish Whales -> Strong SELL
-    print("\nTesting F&G SELL + Bearish Whales...")
-    signal2 = generate_comprehensive_signal(fng_sell, whales_bearish, {})
-    print(f"Signal: {signal2['signal']}, Reason: {signal2['reason']}")
-
-    # Test Case 3: F&G Buy + Bearish Whales -> Downgrade to HOLD
-    print("\nTesting F&G BUY + Bearish Whales (Contradiction)...")
-    signal3 = generate_comprehensive_signal(fng_buy, whales_bearish, {})
-    print(f"Signal: {signal3['signal']}, Reason: {signal3['reason']}")
+    if is_uptrend and is_oversold and whale_confirms_buy:
+        return {"signal": "BUY", "reason": "Uptrend, oversold, and whale activity confirms BUY. " + reason}
     
-    # Test Case 4: F&G Neutral + Any Whales -> HOLD
-    print("\nTesting F&G Neutral...")
-    signal4 = generate_comprehensive_signal(fng_hold, whales_bearish, {})
-    print(f"Signal: {signal4['signal']}, Reason: {signal4['reason']}")
+    if is_downtrend and is_overbought and whale_confirms_sell:
+        return {"signal": "SELL", "reason": "Downtrend, overbought, and whale activity confirms SELL. " + reason}
 
-    print("\n--- Test Complete ---")
+    return {"signal": "HOLD", "reason": "No strong signal detected. " + reason}

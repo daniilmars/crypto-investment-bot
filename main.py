@@ -2,59 +2,92 @@
 # This script orchestrates the entire bot's workflow.
 
 import time
-from src.collectors.fear_and_greed import get_fear_and_greed_index
+import pandas as pd
 from src.collectors.binance_data import get_current_price
-from src.collectors.whale_alert import get_whale_transactions
-from src.collectors.news_data import get_recent_crypto_news
-from src.analysis.signal_engine import generate_comprehensive_signal
-from src.notify.telegram_bot import send_telegram_alert, load_config
-from src.database import initialize_database
+from src.collectors.whale_alert import get_whale_transactions, get_stablecoin_flows
+from src.analysis.signal_engine import generate_signal
+from src.analysis.technical_indicators import calculate_rsi, calculate_transaction_velocity
+from src.notify.telegram_bot import send_telegram_alert
+from src.database import initialize_database, get_historical_prices, get_transaction_timestamps_since
 from src.logger import log
+from src.config import app_config
 
 def run_bot_cycle():
     """
     Executes one full cycle of the bot's logic.
     """
     log.info("--- Starting new bot cycle ---")
-    config = load_config()
-    watch_list = config.get('settings', {}).get('watch_list', ['BTCUSDT'])
-    min_whale_value = config.get('settings', {}).get('min_whale_transaction_usd', 1000000)
+    settings = app_config.get('settings', {})
+    
+    # Load all settings
+    watch_list = settings.get('watch_list', ['BTCUSDT'])
+    min_whale_value = settings.get('min_whale_transaction_usd', 1000000)
+    high_interest_wallets = settings.get('high_interest_wallets', [])
+    stablecoins_to_monitor = settings.get('stablecoins_to_monitor', [])
+    baseline_hours = settings.get('transaction_velocity_baseline_hours', 24)
+    sma_period = 20
+    rsi_period = 14
 
     # 1. Collect data
     log.info("Fetching data from all sources...")
-    fear_and_greed_data = get_fear_and_greed_index(limit=1)
     whale_transactions = get_whale_transactions(min_value_usd=min_whale_value)
+    stablecoin_data = get_stablecoin_flows(whale_transactions, stablecoins_to_monitor)
     
-    market_prices = {}
+    # Process each symbol in the watch list
     for symbol in watch_list:
-        get_recent_crypto_news(symbol) # Fetch and save news
+        log.info(f"--- Processing symbol: {symbol} ---")
         price_data = get_current_price(symbol)
-        if price_data:
-            market_prices[symbol] = price_data.get('price')
-
-    if not fear_and_greed_data:
-        log.warning("Could not fetch F&G data. Skipping this cycle.")
-        return
-
-    # 2. Analyze data for a signal
-    log.info("Analyzing data for a signal...")
-    # Note: The live run doesn't have historical data for a moving average.
-    # We'll pass an empty dict for market_prices to the signal engine for now.
-    # The backtester is where the SMA logic is fully utilized.
-    signal = generate_comprehensive_signal(fear_and_greed_data, whale_transactions, {})
-
-    if not signal:
-        log.warning("Signal engine did not produce a valid signal. Skipping this cycle.")
-        return
         
-    log.info(f"Signal generated: {signal['signal']} - Reason: {signal['reason']}")
+        if not price_data or not price_data.get('price'):
+            log.warning(f"Could not fetch current price for {symbol}. Skipping analysis.")
+            continue
 
-    # 3. Send notification if the signal is significant
-    if signal['signal'] in ["BUY", "SELL"]:
-        log.info("Significant signal detected. Sending notification...")
-        send_telegram_alert(signal)
-    else:
-        log.info("Signal is 'HOLD'. No notification will be sent.")
+        current_price = float(price_data.get('price'))
+        
+        # 2. Analyze data for a signal
+        log.info(f"Analyzing data for {symbol}...")
+        
+        # Fetch historical data for technical analysis
+        historical_prices = get_historical_prices(symbol, limit=rsi_period + 1)
+        historical_timestamps = get_transaction_timestamps_since(symbol.lower(), hours_ago=baseline_hours)
+        
+        # Calculate technical indicators and velocity
+        market_price_data = {
+            'current_price': current_price,
+            'sma': None,
+            'rsi': None
+        }
+        if len(historical_prices) >= sma_period:
+            price_series = pd.Series(historical_prices)
+            market_price_data['sma'] = price_series.rolling(window=sma_period).mean().iloc[-1]
+        market_price_data['rsi'] = calculate_rsi(historical_prices, period=rsi_period)
+        
+        velocity_data = calculate_transaction_velocity(symbol.lower(), whale_transactions, historical_timestamps, baseline_hours)
+
+        signal = generate_signal(
+            whale_transactions,
+            market_price_data,
+            high_interest_wallets,
+            stablecoin_data,
+            settings.get('stablecoin_inflow_threshold_usd', 100000000),
+            velocity_data,
+            settings.get('transaction_velocity_threshold_multiplier', 5.0)
+        )
+
+        if not signal:
+            log.warning(f"Signal engine did not produce a valid signal for {symbol}.")
+            continue
+            
+        log.info(f"Signal for {symbol}: {signal['signal']} - Reason: {signal['reason']}")
+
+        # 3. Send notification if the signal is significant
+        if signal['signal'] in ["BUY", "SELL", "VOLATILITY_WARNING"]:
+            log.info(f"Significant signal detected for {symbol}. Sending notification...")
+            signal['symbol'] = symbol
+            signal['current_price'] = current_price
+            send_telegram_alert(signal)
+        else:
+            log.info(f"Signal for {symbol} is 'HOLD'. No notification will be sent.")
     
     log.info("--- Bot cycle finished ---")
 
@@ -64,13 +97,9 @@ if __name__ == "__main__":
     initialize_database()
 
     # Load configuration to get the run interval
-    config = load_config()
-    run_interval_minutes = 15 # Default value
-    if config and 'settings' in config and 'run_interval_minutes' in config['settings']:
-        run_interval_minutes = config['settings']['run_interval_minutes']
-        log.info(f"Bot will run every {run_interval_minutes} minutes based on config.")
-    else:
-        log.info(f"Using default run interval of {run_interval_minutes} minutes.")
+    settings = app_config.get('settings', {})
+    run_interval_minutes = settings.get('run_interval_minutes', 15)
+    log.info(f"Bot will run every {run_interval_minutes} minutes.")
 
     # --- Main Application Loop ---
     while True:

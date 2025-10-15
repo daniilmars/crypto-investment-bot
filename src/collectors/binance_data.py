@@ -1,6 +1,6 @@
 import requests
 import json
-from src.database import get_db_connection
+from src.database import get_db_connection, IS_POSTGRES
 from src.logger import log
 
 # Binance API base URL
@@ -14,12 +14,13 @@ def save_price_data(price_data: dict):
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    cursor.execute('''
-        INSERT INTO market_prices (symbol, price)
-        VALUES (?, ?)
-    ''', (price_data['symbol'], price_data['price']))
+    query = 'INSERT INTO market_prices (symbol, price) VALUES (%s, %s)' if IS_POSTGRES else \
+            'INSERT INTO market_prices (symbol, price) VALUES (?, ?)'
+    
+    cursor.execute(query, (price_data['symbol'], price_data['price']))
     
     conn.commit()
+    cursor.close()
     conn.close()
     log.info(f"Saved price for {price_data['symbol']} to the database.")
 

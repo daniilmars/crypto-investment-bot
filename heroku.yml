@@ -1,0 +1,15 @@
+# Heroku deployment configuration
+setup:
+  # Use the Dockerfile to build the image
+  docker:
+    web: Dockerfile
+
+# Define the processes to run
+build:
+  docker:
+    web: Dockerfile
+    worker: Dockerfile
+
+run:
+  # Run the main application as a background worker, not a web server
+  worker: python3 main.py

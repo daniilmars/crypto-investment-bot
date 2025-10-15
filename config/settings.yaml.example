@@ -49,3 +49,29 @@ settings:
 
   # How often the bot should run its analysis cycle, in minutes.
   run_interval_minutes: 15
+
+  # -- Advanced Signal Settings --
+  # List of specific wallet owners to watch for high-priority signals.
+  # The names should match the 'owner' field from the Whale Alert API.
+  # Example: ["Grayscale", "US Government", "Ethereum Foundation"]
+  high_interest_wallets:
+    - "Grayscale"
+    - "US Government"
+
+  # Threshold in USD for stablecoin inflows to an exchange to be considered a strong BUY signal.
+  stablecoin_inflow_threshold_usd: 100000000
+
+  # List of stablecoin symbols (lowercase) to monitor for exchange inflows.
+  stablecoins_to_monitor:
+    - "usdt"
+    - "usdc"
+    - "busd"
+    - "dai"
+
+  # -- Volatility & Anomaly Detection --
+  # The number of hours to look back to establish a baseline for transaction frequency.
+  transaction_velocity_baseline_hours: 24
+
+  # The multiplier to apply to the baseline average. If the current hour's transaction
+  # count exceeds this, it's flagged as a volatility anomaly.
+  transaction_velocity_threshold_multiplier: 5.0

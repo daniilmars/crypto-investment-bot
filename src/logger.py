@@ -1,28 +1,39 @@
 import logging
 import sys
+import os
 
 def setup_logger():
     """
-    Configures and returns a centralized logger for the application.
+    Configures a centralized logger to output to both the console and a log file.
     """
-    # Create a logger
     logger = logging.getLogger("CryptoBotLogger")
     logger.setLevel(logging.INFO)
 
-    # Create a handler to print logs to the console
-    stream_handler = logging.StreamHandler(sys.stdout)
-    
-    # Create a formatter and set it for the handler
+    # Avoid adding handlers multiple times
+    if logger.handlers:
+        return logger
+
+    # --- Formatter ---
     formatter = logging.Formatter(
         '%(asctime)s - %(levelname)s - %(module)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
-    stream_handler.setFormatter(formatter)
 
-    # Add the handler to the logger
-    # Avoid adding handlers multiple times if the function is called again
-    if not logger.handlers:
-        logger.addHandler(stream_handler)
+    # --- Console Handler ---
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(stream_handler)
+
+    # --- File Handler ---
+    # Create data directory if it doesn't exist
+    log_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
+    os.makedirs(log_dir, exist_ok=True)
+    log_file_path = os.path.join(log_dir, 'bot.log')
+
+    # Add a file handler to write logs to a file
+    file_handler = logging.FileHandler(log_file_path)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
 
     return logger
 
