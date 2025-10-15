@@ -13,5 +13,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the entire project context into the container
 COPY . .
 
-# Command to run the application
-CMD ["python3", "main.py"]
+# Sets the entrypoint to "python3"
+ENTRYPOINT ["python3"]
+
+# Default command to run the application
+CMD ["main.py"]
