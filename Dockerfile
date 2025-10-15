@@ -10,12 +10,8 @@ COPY requirements.txt .
 # Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the application code into the container
-# Copy the config directory first to ensure it's there
-COPY config/ ./config/
-COPY src/ ./src/
-COPY main.py .
-COPY test_notification.py .
+# Copy the entire project context into the container
+COPY . .
 
 # Entrypoint for the application
 ENTRYPOINT ["python3"]
