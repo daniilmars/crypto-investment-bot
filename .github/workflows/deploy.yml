@@ -25,6 +25,9 @@ jobs:
       - name: Run tests
         run: pytest
 
+      - name: Install Heroku CLI
+        run: npm install -g heroku
+
       - name: Deploy to Heroku
         if: success()
         uses: akhileshns/heroku-deploy@v3.12.12
