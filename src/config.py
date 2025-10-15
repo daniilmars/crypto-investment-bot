@@ -22,6 +22,12 @@ def load_config():
         log.info("Loaded base configuration from settings.yaml.")
     except FileNotFoundError:
         log.warning("settings.yaml not found. Relying solely on environment variables.")
+        # Initialize the config structure to prevent KeyErrors when overriding with env vars
+        config = {
+            'api_keys': {},
+            'notification_services': {'telegram': {}},
+            'settings': {}
+        }
     except yaml.YAMLError as e:
         log.error(f"Error parsing settings.yaml: {e}")
         # Return a default structure to avoid crashes downstream
