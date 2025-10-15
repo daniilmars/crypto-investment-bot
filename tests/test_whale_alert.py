@@ -9,7 +9,7 @@ import requests
 
 @patch('src.collectors.whale_alert.requests.get')
 @patch('src.collectors.whale_alert.get_db_connection')
-@patch('src.config.app_config')
+@patch('src.collectors.whale_alert.app_config')
 def test_get_whale_transactions_success(mock_app_config, mock_get_db_connection, mock_requests_get):
     """
     Tests the successful fetching and saving of whale transactions.
