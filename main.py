@@ -93,9 +93,10 @@ def run_bot_cycle():
 
 
 if __name__ == "__main__":
-    # --- Debugging: Print command-line arguments ---
+    # --- Debugging: Log command-line arguments ---
     import sys
-    print(f"Received arguments: {sys.argv}")
+    from src.logger import log
+    log.info(f"Received arguments: {sys.argv}")
 
     # --- Argument Parser for Special Modes ---
     import argparse
@@ -105,7 +106,12 @@ if __name__ == "__main__":
         action='store_true',
         help='Send a test notification to the configured Telegram chat and exit.'
     )
-    args = parser.parse_args()
+    
+    try:
+        args = parser.parse_args()
+    except Exception as e:
+        log.error(f"Error parsing arguments: {e}")
+        args = parser.parse_args([]) # Continue with no arguments
 
     if args.test_notify:
         log.info("--- Running Telegram Notification Test ---")
