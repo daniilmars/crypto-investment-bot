@@ -93,51 +93,40 @@ def run_bot_cycle():
 
 
 if __name__ == "__main__":
-    import sys
-    from src.logger import log
+    # --- Argument Parser for Special Modes ---
+    import argparse
+    parser = argparse.ArgumentParser(description="Crypto Investment Alert Bot")
+    parser.add_argument(
+        '--test-notify',
+        action='store_true',
+        help='Send a test notification to the configured Telegram chat and exit.'
+    )
+    args = parser.parse_args()
 
-    log.info("--- DIAGNOSTIC MODE ---")
-    log.info(f"Python executable: {sys.executable}")
-    log.info(f"Received sys.argv: {sys.argv}")
-    log.info("--- End of Diagnostic ---")
-    exit()
+    if args.test_notify:
+        log.info("--- Running Telegram Notification Test ---")
+        test_signal = {
+            'signal': 'TEST',
+            'reason': 'This is a test message to confirm the Heroku deployment is working correctly.',
+            'symbol': 'BOT',
+            'current_price': 'N/A'
+        }
+        send_telegram_alert(test_signal)
+        log.info("Test message sent. Exiting.")
+        exit()
 
-# --- Original code below is now unreachable ---
+    # --- Main Application ---
+    # Initialize the database first
+    initialize_database()
 
-# --- Argument Parser for Special Modes ---
-import argparse
-parser = argparse.ArgumentParser(description="Crypto Investment Alert Bot")
-parser.add_argument(
-    '--test-notify',
-    action='store_true',
-    help='Send a test notification to the configured Telegram chat and exit.'
-)
-args = parser.parse_args()
+    # Load configuration to get the run interval
+    settings = app_config.get('settings', {})
+    run_interval_minutes = settings.get('run_interval_minutes', 15)
+    log.info(f"Bot will run every {run_interval_minutes} minutes.")
 
-if args.test_notify:
-    log.info("--- Running Telegram Notification Test ---")
-    test_signal = {
-        'signal': 'TEST',
-        'reason': 'This is a test message to confirm the Heroku deployment is working correctly.',
-        'symbol': 'BOT',
-        'current_price': 'N/A'
-    }
-    send_telegram_alert(test_signal)
-    log.info("Test message sent. Exiting.")
-    exit()
-
-# --- Main Application ---
-# Initialize the database first
-initialize_database()
-
-# Load configuration to get the run interval
-settings = app_config.get('settings', {})
-run_interval_minutes = settings.get('run_interval_minutes', 15)
-log.info(f"Bot will run every {run_interval_minutes} minutes.")
-
-# --- Main Application Loop ---
-while True:
-    run_bot_cycle()
-    sleep_duration_seconds = run_interval_minutes * 60
-    log.info(f"Sleeping for {run_interval_minutes} minutes...")
-    time.sleep(sleep_duration_seconds)
+    # --- Main Application Loop ---
+    while True:
+        run_bot_cycle()
+        sleep_duration_seconds = run_interval_minutes * 60
+        log.info(f"Sleeping for {run_interval_minutes} minutes...")
+        time.sleep(sleep_duration_seconds)
