@@ -1,4 +1,4 @@
 #!/bin/sh
-# This script acts as the container's entrypoint.
-# It executes any command passed to it.
-exec sh -c "$@"
+# This script ensures that any command passed to the container is executed correctly.
+set -e
+exec "$@"

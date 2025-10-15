@@ -13,5 +13,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the entire project context into the container
 COPY . .
 
-# Command to run the application (shell form)
-CMD python3 main.py
+# Set up the entrypoint script
+COPY entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["entrypoint.sh"]
+
+# Default command for the worker process
+CMD ["python3", "main.py"]
