@@ -2,6 +2,8 @@ import requests
 import os
 import time
 from src.database import get_db_connection, IS_POSTGRES
+from src.config import app_config
+from src.logger import log
 
 # Whale Alert API base URL
 WHALE_ALERT_API_URL = "https://api.whale-alert.io/v1"
