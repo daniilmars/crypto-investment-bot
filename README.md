@@ -29,6 +29,12 @@ All collected data is stored in a local **SQLite database**, enabling historical
 
 ## 🏗 Architecture
 
+The project is divided into two key architectural components: the application logic and the deployment pipeline.
+
+### Application Architecture
+
+The bot's core logic follows a linear data flow, from collection to notification. The database is designed to be PostgreSQL in production for reliability and SQLite for ease of local development.
+
 ```text
 +--------------------------------+
 |   Data Collectors (APIs)       |
@@ -38,9 +44,9 @@ All collected data is stored in a local **SQLite database**, enabling historical
                  |
                  v
 +--------------------------------+
-|   SQLite Database              |
-| - crypto_data.db               |
-| - (database.py)                |
+|   Database (database.py)       |
+|  - PostgreSQL (Production)     |
+|  - SQLite (Local Development)  |
 +----------------+---------------+
                  |
                  v
@@ -55,8 +61,27 @@ All collected data is stored in a local **SQLite database**, enabling historical
 v                v                                v
 +----------------+--+      +----------------+--+      +----------------+--+
 | Notification      |      | Backtesting       |      | Live Execution    |
-| - telegram_bot.py |      | - backtest.py     |      | - main.py         |
+| - telegram_bot.py |      | - backtest.py     |      | - main.py (worker)|
 +-------------------+      +-------------------+      +-------------------+
+```
+
+### Deployment Architecture
+
+The deployment is fully automated via a CI/CD pipeline using GitHub Actions. Every push to the `master` branch triggers a workflow that tests the code and, if successful, deploys the application as a Docker container to Heroku.
+
+```text
++------------------+      +--------------------+      +----------------------+
+| Developer        |----->| GitHub Repository  |----->| GitHub Actions       |
+| (git push)       |      | (master branch)    |      | (CI/CD Workflow)     |
++------------------+      +--------------------+      +----------+-----------+
+                                                                 |
+         +-------------------------------------------------------+
+         |
+         v
++----------+-----------+      +--------------------+      +----------------------+
+| Run Tests          |----->| Build Docker Image |----->| Deploy to Heroku     |
+| (pytest)           |      |                    |      | (Container Stack)    |
++--------------------+      +--------------------+      +----------------------+
 ```
 
 ---
