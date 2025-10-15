@@ -15,6 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY config/ ./config/
 COPY src/ ./src/
 COPY main.py .
+COPY test_notification.py .
 
 # Entrypoint for the application
 ENTRYPOINT ["python3"]
