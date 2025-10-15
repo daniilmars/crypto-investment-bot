@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # --- Main Application File ---
 # This script orchestrates the entire bot's workflow.
 
