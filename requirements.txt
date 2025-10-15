@@ -10,3 +10,6 @@ psycopg2-binary
 # For testing
 pytest
 pytest-mock
+
+# For reading YAML configuration
+PyYAML

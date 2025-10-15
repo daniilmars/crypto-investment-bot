@@ -1,7 +1,8 @@
+from typing import Optional
 import pandas as pd
 from src.logger import log
 
-def calculate_rsi(prices: list, period: int = 14) -> float | None:
+def calculate_rsi(prices: list, period: int = 14) -> Optional[float]:
     """
     Calculates the Relative Strength Index (RSI) for a given list of prices.
     
