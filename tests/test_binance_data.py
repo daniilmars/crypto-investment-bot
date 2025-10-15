@@ -47,10 +47,7 @@ def test_get_current_price_success(mock_requests_get, mock_db_connection):
     mock_db_connection.assert_called_once()
     mock_cursor = mock_db_connection.return_value.cursor.return_value
     mock_cursor.execute.assert_called_once_with(
-        '''
-        INSERT INTO market_prices (symbol, price)
-        VALUES (?, ?)
-    ''', ('BTCUSDT', '50000.00')
+        'INSERT INTO market_prices (symbol, price) VALUES (?, ?)', ('BTCUSDT', '50000.00')
     )
     mock_db_connection.return_value.commit.assert_called_once()
     mock_db_connection.return_value.close.assert_called_once()

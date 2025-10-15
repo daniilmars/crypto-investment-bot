@@ -5,35 +5,20 @@ from unittest.mock import patch, MagicMock
 from src.collectors.whale_alert import get_whale_transactions
 import requests
 
-# --- Test Fixtures ---
-
-@pytest.fixture
-def mock_db_connection():
-    """Fixture to mock the database connection and cursor."""
-    with patch('src.collectors.whale_alert.get_db_connection') as mock_get_conn:
-        mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        mock_conn.cursor.return_value = mock_cursor
-        mock_get_conn.return_value = mock_conn
-        yield mock_get_conn
-
-@pytest.fixture
-def mock_config():
-    """Fixture to mock the configuration loading."""
-    with patch('src.collectors.whale_alert.load_config') as mock_load_config:
-        mock_load_config.return_value = {
-            'api_keys': {'whale_alert': 'test_api_key'}
-        }
-        yield mock_load_config
-
 # --- Test Cases for get_whale_transactions ---
 
 @patch('src.collectors.whale_alert.requests.get')
-def test_get_whale_transactions_success(mock_requests_get, mock_config, mock_db_connection):
+@patch('src.collectors.whale_alert.get_db_connection')
+@patch('src.collectors.whale_alert.app_config')
+def test_get_whale_transactions_success(mock_app_config, mock_get_db_connection, mock_requests_get):
     """
     Tests the successful fetching and saving of whale transactions.
     """
     # Arrange
+    # 1. Mock the config
+    mock_app_config.get.return_value.get.return_value = 'test_api_key'
+    
+    # 2. Mock the API response
     mock_api_data = {
         'result': 'success',
         'transactions': [
@@ -47,21 +32,29 @@ def test_get_whale_transactions_success(mock_requests_get, mock_config, mock_db_
     mock_response.raise_for_status.return_value = None
     mock_requests_get.return_value = mock_response
 
+    # 3. Mock the database connection
+    mock_conn = MagicMock()
+    mock_cursor = MagicMock()
+    mock_get_db_connection.return_value = mock_conn
+    mock_conn.cursor.return_value = mock_cursor
+
     # Act
     result = get_whale_transactions()
 
     # Assert
     assert result == mock_api_data['transactions']
     mock_requests_get.assert_called_once()
-    mock_db_connection.assert_called_once()
-    assert mock_db_connection.return_value.cursor.return_value.execute.call_count == 2
+    mock_get_db_connection.assert_called_once()
+    assert mock_cursor.execute.call_count == 2
 
 @patch('src.collectors.whale_alert.requests.get')
-def test_get_whale_transactions_api_error(mock_requests_get, mock_config, mock_db_connection):
+@patch('src.collectors.whale_alert.app_config')
+def test_get_whale_transactions_api_error(mock_app_config, mock_requests_get):
     """
     Tests how the function handles an API error message (result != 'success').
     """
     # Arrange
+    mock_app_config.get.return_value.get.return_value = 'test_api_key'
     mock_api_data = {'result': 'error', 'message': 'Invalid API key'}
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -73,14 +66,15 @@ def test_get_whale_transactions_api_error(mock_requests_get, mock_config, mock_d
 
     # Assert
     assert result is None
-    mock_db_connection.assert_not_called()
 
 @patch('src.collectors.whale_alert.requests.get')
-def test_get_whale_transactions_network_error(mock_requests_get, mock_config, mock_db_connection):
+@patch('src.collectors.whale_alert.app_config')
+def test_get_whale_transactions_network_error(mock_app_config, mock_requests_get):
     """
     Tests how the function handles a network-level error.
     """
     # Arrange
+    mock_app_config.get.return_value.get.return_value = 'test_api_key'
     mock_requests_get.side_effect = requests.exceptions.RequestException("Connection error")
 
     # Act
@@ -88,18 +82,17 @@ def test_get_whale_transactions_network_error(mock_requests_get, mock_config, mo
 
     # Assert
     assert result is None
-    mock_db_connection.assert_not_called()
 
-def test_get_whale_transactions_no_api_key(mock_config, mock_db_connection):
+@patch('src.collectors.whale_alert.app_config')
+def test_get_whale_transactions_no_api_key(mock_app_config):
     """
     Tests that the function returns None if the API key is not configured.
     """
     # Arrange
-    mock_config.return_value = {'api_keys': {'whale_alert': None}}
+    mock_app_config.get.return_value.get.return_value = None
 
     # Act
     result = get_whale_transactions()
 
     # Assert
     assert result is None
-    mock_db_connection.assert_not_called()

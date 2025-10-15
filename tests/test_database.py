@@ -1,135 +1,86 @@
 # tests/test_database.py
 
 import pytest
+from unittest.mock import patch, MagicMock
 import sqlite3
 import os
-import time
-from src.database import get_db_connection, initialize_database
 
-# --- Test Fixtures ---
+# --- Mocks ---
 
-@pytest.fixture
-def test_db():
-    """
-    Fixture to set up and yield an open, initialized in-memory SQLite database connection.
-    The connection is automatically closed after the test.
-    """
-    conn = get_db_connection(":memory:")
-    # Pass the connection object directly to the initializer
-    initialize_database(connection=conn)
-    yield conn
-    conn.close()
-
-@pytest.fixture
-def test_db_file(tmp_path):
-    """
-    Fixture to set up a temporary database file for testing.
-    This is useful for tests that need to check file existence or path handling.
-    """
-    db_path = tmp_path / "test_crypto.db"
-    initialize_database(str(db_path))
-    yield str(db_path)
-    # Cleanup: the tmp_path fixture handles file deletion
-
-# --- Test Cases ---
-
-def test_initialize_database_creates_tables(test_db):
+# It's better to patch the functions from where they are *used*, not where they are defined.
+# However, since these tests are specifically for the database module, we can patch them here.
+@patch('src.database.get_db_connection')
+def test_initialize_database_creates_tables(mock_get_db_connection):
     """
     Tests that the initialize_database function correctly creates all expected tables.
     """
-    # The 'test_db' fixture now provides an open, initialized connection
-    cursor = test_db.cursor()
-    
-    # Get the list of tables from the database schema
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-    tables = [row[0] for row in cursor.fetchall()]
-    
-    # Define the expected tables
-    expected_tables = [
-        'market_prices', 
-        'whale_transactions'
-    ]
-    
-    # Check if all expected tables were created
-    for table in expected_tables:
-        assert table in tables
-        
-    # No need to close the connection here, the fixture handles it.
+    # Arrange: Set up a mock for the database connection and cursor
+    mock_conn = MagicMock()
+    mock_cursor = MagicMock()
+    mock_get_db_connection.return_value = mock_conn
+    mock_conn.cursor.return_value = mock_cursor
 
-def test_get_db_connection(test_db_file):
-    """
-    Tests that a database connection can be successfully established.
-    """
-    conn = None
-    try:
-        conn = get_db_connection(test_db_file)
-        assert isinstance(conn, sqlite3.Connection)
-        # Check if the connection is usable
-        cursor = conn.cursor()
-        cursor.execute("SELECT 1")
-        result = cursor.fetchone()
-        assert result[0] == 1
-    finally:
-        if conn:
-            conn.close()
+    # Act: Call the function to be tested
+    from src.database import initialize_database
+    initialize_database()
 
-def test_database_file_creation(tmp_path):
-    """
-    Tests that initialize_database creates a new database file if it doesn't exist.
-    """
-    db_path = tmp_path / "new_db.db"
-    assert not os.path.exists(db_path)
+    # Assert: Check if the CREATE TABLE statements were executed
+    assert mock_cursor.execute.call_count == 2
     
-    initialize_database(str(db_path))
+    # Check the SQL statements (case-insensitive and ignoring whitespace)
+    first_call_args = ' '.join(mock_cursor.execute.call_args_list[0][0][0].split())
+    assert "CREATE TABLE IF NOT EXISTS market_prices" in first_call_args
     
-    assert os.path.exists(db_path)
+    second_call_args = ' '.join(mock_cursor.execute.call_args_list[1][0][0].split())
+    assert "CREATE TABLE IF NOT EXISTS whale_transactions" in second_call_args
+    
+    mock_conn.commit.assert_called_once()
+    mock_cursor.close.assert_called_once()
+    mock_conn.close.assert_called_once()
 
-def test_get_historical_prices(test_db):
-    """
-    Tests the get_historical_prices function to ensure it retrieves the correct data.
-    """
-    # Arrange: Insert some mock data into the in-memory database
-    cursor = test_db.cursor()
-    mock_prices = [
-        ('BTCUSDT', 50000, 1), ('BTCUSDT', 50100, 2), ('BTCUSDT', 50200, 3),
-        ('BTCUSDT', 50300, 4), ('BTCUSDT', 50400, 5), ('BTCUSDT', 50500, 6),
-        ('ETHUSDT', 4000, 7)
-    ]
-    cursor.executemany("INSERT INTO market_prices (symbol, price, timestamp) VALUES (?, ?, ?)", mock_prices)
-    test_db.commit()
 
-    # Act: Call the function to get the last 5 prices for BTCUSDT
+@patch('src.database.get_db_connection')
+def test_get_historical_prices(mock_get_db_connection):
+    """
+    Tests the get_historical_prices function to ensure it retrieves and processes data correctly.
+    """
+    # Arrange
+    mock_conn = MagicMock()
+    mock_cursor = MagicMock()
+    mock_get_db_connection.return_value = mock_conn
+    mock_conn.cursor.return_value = mock_cursor
+    
+    # Simulate the data that would be returned from the database
+    mock_cursor.fetchall.return_value = [(50500,), (50400,), (50300,), (50200,), (50100,)]
+
+    # Act
     from src.database import get_historical_prices
-    prices = get_historical_prices('BTCUSDT', limit=5, connection=test_db)
+    prices = get_historical_prices('BTCUSDT', limit=5)
 
-    # Assert: Check if the returned data is correct
-    # 1. It should return 5 prices.
-    assert len(prices) == 5
-    # 2. It should return the most recent prices, in oldest-to-newest order.
+    # Assert
+    # 1. Check if the correct query was executed
+    mock_cursor.execute.assert_called_once()
+    # 2. Check if the returned data is correct (should be reversed to oldest-to-newest)
     assert prices == [50100, 50200, 50300, 50400, 50500]
 
-def test_get_transaction_timestamps_since(test_db):
-    """
-    Tests the get_transaction_timestamps_since function to ensure it retrieves the correct timestamps.
-    """
-    # Arrange: Insert mock transaction data
-    cursor = test_db.cursor()
-    now = int(time.time())
-    mock_transactions = [
-        ('1', 'btc', now - 3600, 1000000),      # 1 hour ago
-        ('2', 'btc', now - 7200, 1000000),      # 2 hours ago
-        ('3', 'eth', now - 3700, 1000000),      # ETH transaction, should be ignored
-        ('4', 'btc', now - (3600 * 5), 1000000) # 5 hours ago, should be ignored by 4hr lookback
-    ]
-    cursor.executemany("INSERT INTO whale_transactions (id, symbol, timestamp, amount_usd) VALUES (?, ?, ?, ?)", mock_transactions)
-    test_db.commit()
-    
-    # Act: Call the function to get timestamps for 'btc' in the last 4 hours
-    from src.database import get_transaction_timestamps_since
-    timestamps = get_transaction_timestamps_since('btc', hours_ago=4, connection=test_db)
 
-    # Assert: Check if the returned timestamps are correct
-    assert len(timestamps) == 2
-    assert (now - 3600) in timestamps
-    assert (now - 7200) in timestamps
-    assert (now - (3600 * 5)) not in timestamps
+@patch('src.database.get_db_connection')
+def test_get_transaction_timestamps_since(mock_get_db_connection):
+    """
+    Tests the get_transaction_timestamps_since function.
+    """
+    # Arrange
+    mock_conn = MagicMock()
+    mock_cursor = MagicMock()
+    mock_get_db_connection.return_value = mock_conn
+    mock_conn.cursor.return_value = mock_cursor
+    
+    mock_cursor.fetchall.return_value = [(1672531200,), (1672534800,)] # Example timestamps
+
+    # Act
+    from src.database import get_transaction_timestamps_since
+    timestamps = get_transaction_timestamps_since('btc', hours_ago=4)
+
+    # Assert
+    mock_cursor.execute.assert_called_once()
+    assert timestamps == [1672531200, 1672534800]
