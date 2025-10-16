@@ -2,4 +2,4 @@
 set -e
 
 # Start the main application
-exec python3 main.py
+exec python3 main.py "$@"
