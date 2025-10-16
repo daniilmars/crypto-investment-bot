@@ -158,7 +158,7 @@ def get_transaction_timestamps_since(symbol: str, hours_ago: int):
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    if IS_POSTG-RES:
+    if IS_POSTGRES:
         query = "SELECT timestamp FROM whale_transactions WHERE symbol = %s AND recorded_at >= NOW() - INTERVAL '%s hours'"
         cursor.execute(query, (symbol, hours_ago))
     else:

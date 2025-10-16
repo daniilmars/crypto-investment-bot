@@ -87,5 +87,5 @@ def start_bot():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("status", status))
 
-    # Run the bot
-    application.run_polling()
+    # Run the bot, disabling signal handlers for thread compatibility
+    application.run_polling(stop_signals=None)

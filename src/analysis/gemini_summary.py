@@ -16,7 +16,8 @@ def generate_market_summary(whale_transactions: list, price_history: list) -> st
 
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-pro')
+        # Use the model confirmed to be available from the list
+        model = genai.GenerativeModel('models/gemini-pro-latest')
 
         # --- Data Preparation ---
         # Convert to DataFrame for easier analysis

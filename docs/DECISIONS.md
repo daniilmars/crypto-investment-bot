@@ -201,3 +201,31 @@ The initial test suite was written before major architectural refactors, renderi
 
 **Reasoning:**
 The deployment was consistently failing due to a mismatch between the deployment method (Docker container) and the Heroku application's configuration (default source code stack). These changes aligned the Heroku environment with the project's containerized architecture. Automating the secret management ensures that the production environment is always correctly and securely configured without manual intervention.
+
+---
+
+### ADR-014: Removal of Heroku Deployment
+
+**Date:** 2025-10-16
+
+**Decision:**
+- **Removed all Heroku-related files and configurations from the project.** This includes the `heroku.yml` file, the Heroku deployment workflow in `.github/workflows/deploy.yml`, and all related documentation in the `README.md`.
+
+**Reasoning:**
+The project has standardized on Google Cloud Run as the sole deployment target. To reduce maintenance overhead, simplify the CI/CD pipeline, and eliminate confusion, all code and documentation related to the deprecated Heroku deployment have been removed. This ensures the project has a single, clear path to production.
+
+---
+
+### ADR-015: Implementation of AI-Powered /status Command
+
+**Date:** 2025-10-16
+
+**Decision:**
+- **Implemented a new `/status` command for the Telegram bot.** This feature provides users with an on-demand, AI-generated summary of the bot's health and recent market activity.
+- **Integrated the `python-telegram-bot` library** to enable the bot to receive and handle commands, replacing the previous one-way notification system.
+- **Developed new database functions** to fetch all whale transactions and price history from the last 24 hours.
+- **Integrated the Google Gemini API** to analyze the collected data and generate a concise, human-readable market summary.
+- **The bot now runs in two concurrent threads:** the main analysis loop and the Telegram command listener.
+
+**Reasoning:**
+This feature significantly enhances the bot's interactivity and utility. Instead of being a passive alert system, the bot now provides a powerful, on-demand analysis tool. Using a large language model (Gemini) to summarize complex market data makes it easy for users to get a quick, insightful overview of market conditions without needing to analyze raw data feeds. This moves the project closer to its goal of being a sophisticated, user-friendly investment tool.

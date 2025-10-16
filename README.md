@@ -24,6 +24,7 @@ All collected data is stored in a local **SQLite database**, enabling historical
 -   🧪 **Backtesting Framework:** A powerful simulation tool (`backtest.py`) that runs your strategy against historical data to objectively measure its performance (Profit/Loss, number of trades).
 -   📲 **Telegram Notifications:** Instant alerts for BUY or SELL signals sent directly to your Telegram.
 -   📝 **Structured Logging:** Professional logging for clear, timestamped monitoring of the bot's activity.
+-   🤖 **AI-Powered Status Reports:** An interactive `/status` command in Telegram that uses the Gemini API to provide AI-generated summaries of market activity and bot health over the last 24 hours.
 
 ---
 
@@ -76,6 +77,7 @@ v                v                                v
 -   API Keys for:
     -   Whale Alert
     -   Telegram (create a bot via @BotFather)
+    -   Gemini (for AI summaries)
 
 ### Installation
 
@@ -116,73 +118,12 @@ python3 src/analysis/backtest.py
 
 The backtester will output the simulated Profit/Loss based on the logic in `signal_engine.py`.
 
----
+### Interacting with the Bot
 
-## 🚀 Deployment with Heroku & GitHub Actions
+Once the bot is running, you can interact with it directly in your configured Telegram chat:
 
-This project is configured for automated, professional deployment to Heroku via a GitHub Actions CI/CD pipeline. The workflow automatically tests and deploys the application whenever new code is pushed to the `master` branch.
-
-### 1. Prerequisites
-
--   A free Heroku account (verified with a payment method).
--   The project pushed to a GitHub repository.
--   The GitHub CLI (`gh`) installed on your local machine.
-
-### 2. One-Time Setup
-
-1.  **Create the Heroku App:**
-    From your terminal, create the Heroku application. This also sets the stack to `container`, which is required for Docker-based deployments.
-    ```bash
-    heroku create your-app-name --stack=container
-    ```
-
-2.  **Provision the Postgres Database:**
-    Add the free Heroku Postgres add-on. This automatically sets the `DATABASE_URL` config var on your Heroku app.
-    ```bash
-    heroku addons:create heroku-postgresql:hobby-dev -a your-app-name
-    ```
-
-3.  **Configure GitHub Secrets:**
-    The CI/CD workflow requires secrets to be set in your GitHub repository. These are used to deploy the app and to configure the app's environment variables on Heroku.
-    ```bash
-    # The API key for your Heroku account
-    gh secret set HEROKU_API_KEY
-
-    # The API key for the Whale Alert service
-    gh secret set WHALE_ALERT_API_KEY
-
-    # Your Telegram Bot's token
-    gh secret set TELEGRAM_BOT_TOKEN
-
-    # The Chat ID for your Telegram channel or user
-    gh secret set TELEGRAM_CHAT_ID
-    ```
-
-### 3. Automated Deployment
-
-Once the setup is complete, the process is fully automated:
-
-1.  **Push to GitHub:** Commit and push your changes to the `master` branch.
-    ```bash
-    git push origin master
-    ```
-2.  **CI/CD Pipeline:** The push automatically triggers the GitHub Actions workflow defined in `.github/workflows/deploy.yml`.
-    -   The workflow installs all dependencies.
-    -   It runs the full `pytest` suite to ensure code quality.
-    -   If tests pass, it securely sets the API keys as config vars on your Heroku app.
-    -   It builds the Docker image and deploys it to Heroku.
-    -   Finally, it scales up the `worker` dyno to 1, starting the bot.
-
-### 4. Managing the Bot
-
--   **To view logs:**
-    ```bash
-    heroku logs --tail -a your-app-name
-    ```
--   **To check if the worker is running:**
-    ```bash
-    heroku ps -a your-app-name
-    ```
+-   `/start`: Initializes the bot and confirms it's running.
+-   `/status`: The bot will perform a health check and use the Gemini API to generate a detailed summary of market activity over the last 24 hours, including significant whale movements and price trends.
 
 ---
 
