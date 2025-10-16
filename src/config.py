@@ -40,6 +40,14 @@ def load_config():
     # 2. Override with Environment Variables
     # This is more secure for production environments like Docker.
     
+    # --- DIAGNOSTIC LOG ---
+    gemini_key_env = os.getenv('GEMINI_API_KEY')
+    if gemini_key_env:
+        log.info(f"Found GEMINI_API_KEY environment variable. [Key: {gemini_key_env[:5]}...{gemini_key_env[-5:]}]")
+    else:
+        log.warning("GEMINI_API_KEY environment variable not found.")
+    # --- END DIAGNOSTIC LOG ---
+
     # API Keys
     config['api_keys']['whale_alert'] = os.getenv('WHALE_ALERT_API_KEY', config.get('api_keys', {}).get('whale_alert'))
     config['api_keys']['gemini'] = os.getenv('GEMINI_API_KEY', config.get('api_keys', {}).get('gemini'))
