@@ -5,6 +5,8 @@ import time
 from src.logger import log
 from src.config import app_config
 
+import re
+
 # --- Database Connection Management ---
 
 DB_URL = app_config.get('database', {}).get('url')
@@ -13,13 +15,48 @@ IS_POSTGRES = DB_URL is not None
 def get_db_connection():
     """
     Establishes a connection to the database.
-    Connects to PostgreSQL if DATABASE_URL is set, otherwise falls back to SQLite.
+    - In Google Cloud Run, connects to PostgreSQL via a Unix socket.
+    - Locally, connects to PostgreSQL using the DATABASE_URL.
+    - Falls back to SQLite if no DATABASE_URL is provided.
     """
+    # Check if running in Google Cloud Run
+    is_in_cloud_run = 'K_SERVICE' in os.environ
+
     if IS_POSTGRES:
         try:
-            conn = psycopg2.connect(DB_URL)
+            if is_in_cloud_run:
+                # Use Unix socket for Cloud Run
+                instance_connection_name = os.environ.get("DB_INSTANCE_CONNECTION_NAME")
+                if not instance_connection_name:
+                    raise ValueError("DB_INSTANCE_CONNECTION_NAME environment variable is not set for Cloud Run.")
+
+                # Extract dbname, user, password from DATABASE_URL
+                db_url_pattern = re.compile(r"postgresql://(?P<user>.*?):(?P<password>.*?)@(?P<host>.*?)/(?P<dbname>.*)")
+                match = db_url_pattern.match(DB_URL)
+                if not match:
+                    raise ValueError("DATABASE_URL format is invalid.")
+                db_parts = match.groupdict()
+                
+                db_user = db_parts['user']
+                db_pass = db_parts['password']
+                db_name = db_parts['dbname']
+                
+                socket_dir = '/cloudsql'
+                db_socket = f"{socket_dir}/{instance_connection_name}"
+
+                dsn = (
+                    f"dbname={db_name} "
+                    f"user={db_user} "
+                    f"password={db_pass} "
+                    f"host={db_socket}"
+                )
+                conn = psycopg2.connect(dsn)
+            else:
+                # Use TCP connection for local/other environments
+                conn = psycopg2.connect(DB_URL)
+            
             return conn
-        except psycopg2.OperationalError as e:
+        except (psycopg2.OperationalError, ValueError) as e:
             log.error(f"Could not connect to PostgreSQL database: {e}")
             raise
     else:
