@@ -226,3 +226,23 @@ def get_price_history_since(hours_ago: int = 24):
     cursor.close()
     conn.close()
     return history
+
+def get_table_counts():
+    """
+    Retrieves the row counts for the primary tables in the database.
+    """
+    counts = {}
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Count whale_transactions
+    cursor.execute("SELECT COUNT(*) FROM whale_transactions")
+    counts['whale_transactions'] = cursor.fetchone()[0]
+    
+    # Count market_prices
+    cursor.execute("SELECT COUNT(*) FROM market_prices")
+    counts['market_prices'] = cursor.fetchone()[0]
+    
+    cursor.close()
+    conn.close()
+    return counts

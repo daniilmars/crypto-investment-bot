@@ -15,7 +15,7 @@ from src.collectors.whale_alert import get_whale_transactions, get_stablecoin_fl
 from src.analysis.signal_engine import generate_signal
 from src.analysis.technical_indicators import calculate_rsi, calculate_transaction_velocity
 from src.notify.telegram_bot import send_telegram_alert, start_bot
-from src.database import initialize_database, get_historical_prices, get_transaction_timestamps_since
+from src.database import initialize_database, get_historical_prices, get_transaction_timestamps_since, get_table_counts
 from src.logger import log
 from src.config import app_config
 
@@ -67,70 +67,14 @@ def run_bot_cycle():
         if len(historical_prices) >= sma_period:
             price_series = pd.Series(historical_prices)
             market_price_data['sma'] = price_series.rolling(window=sma_period).mean().iloc[-1]
-        market_price_data['rsi'] = calculate_rsi(historical_prices, period=rsi_period)
-        
-        velocity_data = calculate_transaction_velocity(symbol.lower(), whale_transactions, historical_timestamps, baseline_hours)
-
-        signal = generate_signal(
-            whale_transactions,
-            market_price_data,
-            high_interest_wallets,
-            stablecoin_data,
-            settings.get('stablecoin_inflow_threshold_usd', 100000000),
-            velocity_data,
-            settings.get('transaction_velocity_threshold_multiplier', 5.0)
-        )
-
-        if not signal:
-            log.warning(f"Signal engine did not produce a valid signal for {symbol}.")
-            continue
-            
-        log.info(f"Signal for {symbol}: {signal['signal']} - Reason: {signal['reason']}")
-
-        # 3. Send notification if the signal is significant
-        if signal['signal'] in ["BUY", "SELL", "VOLATILITY_WARNING"]:
-            log.info(f"Significant signal detected for {symbol}. Sending notification...")
-            signal['symbol'] = symbol
-            signal['current_price'] = current_price
-            asyncio.run(send_telegram_alert(signal))
-        else:
-            log.info(f"Signal for {symbol} is 'HOLD'. No notification will be sent.")
-    
-    log.info("--- Bot cycle finished ---")
-
-def start_health_check_server():
-    """Starts a simple HTTP server for health checks."""
-    port = int(os.environ.get("PORT", 8080))
-    handler = http.server.SimpleHTTPRequestHandler
-    with socketserver.TCPServer(("", port), handler) as httpd:
-        log.info(f"Health check server started on port {port}")
-        httpd.serve_forever()
-
-def bot_loop():
-    """The main, long-running loop for the bot's analysis cycle."""
-    # Load configuration to get the run interval
-    settings = app_config.get('settings', {})
-    run_interval_minutes = settings.get('run_interval_minutes', 15)
-    log.info(f"Bot will run every {run_interval_minutes} minutes.")
-
-    while True:
-        try:
-            run_bot_cycle()
-        except Exception as e:
-            log.error(f"An error occurred in the main bot cycle: {e}", exc_info=True)
-        
-        sleep_duration_seconds = run_interval_minutes * 60
-        log.info(f"Sleeping for {run_interval_minutes} minutes...")
-        time.sleep(sleep_duration_seconds)
-
-if __name__ == "__main__":
-    # --- Argument Parser for Special Modes ---
-    import argparse
-    parser = argparse.ArgumentParser(description="Crypto Investment Alert Bot")
-    parser.add_argument(
-        '--test-notify',
+        market_price_data['rsi'].py",
         action='store_true',
         help='Send a test notification to the configured Telegram chat and exit.'
+    )
+    parser.add_argument(
+        '--stats',
+        action='store_true',
+        help='Connect to the database, print table counts, and exit.'
     )
     args = parser.parse_args()
 
@@ -144,6 +88,14 @@ if __name__ == "__main__":
         }
         asyncio.run(send_telegram_alert(test_signal))
         log.info("Test message sent. Exiting.")
+        exit()
+
+    if args.stats:
+        log.info("--- Running Database Stats Check ---")
+        initialize_database()
+        counts = get_table_counts()
+        log.info(f"Database Table Counts: {counts}")
+        log.info("Stats check complete. Exiting.")
         exit()
 
     # --- Main Application ---
