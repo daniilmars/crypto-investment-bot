@@ -16,3 +16,5 @@ env/
 *.log
 config/settings.yaml
 data/crypto_data.db
+key.json
+google-cloud-sdk/

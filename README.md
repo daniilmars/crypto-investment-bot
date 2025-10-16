@@ -205,6 +205,173 @@ Once the setup is complete, the process is fully automated:
 
 ---
 
+## 🚀 Deployment with Google Cloud Run & GitHub Actions
+
+This project is also configured for automated deployment to Google Cloud Run, a serverless platform that is highly scalable and cost-effective.
+
+### 1. Prerequisites
+
+-   A Google Cloud Platform (GCP) account with billing enabled.
+-   The project pushed to a GitHub repository.
+-   The Google Cloud CLI (`gcloud`) installed on your local machine.
+
+### 2. One-Time Google Cloud Setup (via gcloud CLI)
+
+This guide provides all the necessary terminal commands to provision your Google Cloud environment correctly.
+
+**Step 1: Authenticate and Select Your Project**
+
+First, log in to the `gcloud` CLI and identify your Project ID.
+
+```bash
+# Authenticate with your Google account
+gcloud auth login
+
+# List all your available projects to find the correct PROJECT_ID
+gcloud projects list
+
+# Set the gcloud CLI to use your chosen project
+gcloud config set project [YOUR_PROJECT_ID]
+```
+
+**Step 2: Enable Required APIs**
+
+Enable all the necessary services for the deployment.
+
+```bash
+gcloud services enable \
+  run.googleapis.com \
+  artifactregistry.googleapis.com \
+  cloudbuild.googleapis.com \
+  sqladmin.googleapis.com
+```
+
+**Step 3: Create the Service Account**
+
+Create a dedicated service account that the GitHub Actions workflow will use to deploy the application.
+
+```bash
+# Choose a name for your service account
+export SERVICE_ACCOUNT_NAME=crypto-bot-deployer
+
+# Create the service account
+gcloud iam service-accounts create ${SERVICE_ACCOUNT_NAME} \
+    --display-name "Crypto Bot Deployer"
+```
+
+**Step 4: Grant Permissions to the Service Account**
+
+Assign the necessary roles to the service account so it has permission to manage Cloud Run, Artifact Registry, Cloud Build, and Cloud SQL.
+
+```bash
+# Get your full Project ID
+export PROJECT_ID=$(gcloud config get-value project)
+
+# Grant the Cloud Run Admin role
+gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+    --member="serviceAccount:${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" \
+    --role="roles/run.admin"
+
+# Grant the Artifact Registry Admin role
+gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+    --member="serviceAccount:${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" \
+    --role="roles/artifactregistry.admin"
+
+# Grant the Cloud Build Editor role
+gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+    --member="serviceAccount:${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" \
+    --role="roles/cloudbuild.builds.editor"
+
+# Grant the Cloud SQL Client role
+gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+    --member="serviceAccount:${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" \
+    --role="roles/cloudsql.client"
+
+# Grant the Storage Admin role (used by Cloud Build)
+gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+    --member="serviceAccount:${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" \
+    --role="roles/storage.admin"
+```
+
+**Step 5: Create and Download the Service Account Key**
+
+Generate a JSON key file that will be used to authenticate from GitHub Actions.
+
+```bash
+gcloud iam service-accounts keys create key.json \
+    --iam-account="${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+```
+**Important:** The `key.json` file will be created in your current directory. You will copy the entire contents of this file for a GitHub secret in the next section.
+
+**Step 6: Create the PostgreSQL Database**
+
+Create a Cloud SQL for PostgreSQL instance and a database for the bot.
+
+```bash
+# Choose a name for your database instance
+export INSTANCE_NAME=crypto-bot-db
+
+# Choose a strong password and save it securely for the next steps
+export ROOT_PASSWORD="[CHOOSE_A_STRONG_PASSWORD]"
+
+# Create the Cloud SQL instance (this can take several minutes)
+gcloud sql instances create ${INSTANCE_NAME} \
+    --database-version=POSTGRES_14 \
+    --tier=db-g1-small \
+    --region=us-central1 \
+    --root-password="${ROOT_PASSWORD}"
+
+# Create the database within the instance
+gcloud sql databases create crypto_data --instance=${INSTANCE_NAME}
+```
+
+**Step 7: Get the Database Connection Info**
+
+Retrieve the public IP address of your new database instance to construct the `DATABASE_URL`.
+
+```bash
+# Get the public IP address
+export DB_IP=$(gcloud sql instances describe ${INSTANCE_NAME} --format="value(ipAddresses.ipAddress)")
+
+# Display the fully constructed DATABASE_URL to use in your GitHub secret
+echo "Your DATABASE_URL is: postgresql://postgres:${ROOT_PASSWORD}@${DB_IP}/crypto_data"
+```
+
+### 3. GitHub Repository Setup
+
+1.  **Add Secrets to GitHub:**
+    Go to your GitHub repository's "Settings" > "Secrets and variables" > "Actions" and add the following secrets:
+    -   `GCP_PROJECT_ID`: Your Google Cloud project ID.
+    -   `GCP_SA_KEY`: The content of the JSON key file you downloaded for the service account.
+    -   `WHALE_ALERT_API_KEY`: Your Whale Alert API key.
+    -   `TELEGRAM_BOT_TOKEN`: Your Telegram bot token.
+    -   `TELEGRAM_CHAT_ID`: Your Telegram chat ID.
+    -   `DATABASE_URL`: The connection string for your Cloud SQL for PostgreSQL instance. It should be in the following format: `postgresql://postgres:<your-password>@<your-instance-public-ip>/<your-database-name>`
+
+### 4. Automated Deployment
+
+Once the setup is complete, the process is fully automated:
+
+1.  **Push to GitHub:**
+    Commit and push your changes to the `main` branch.
+    ```bash
+    git push origin main
+    ```
+2.  **CI/CD Pipeline:**
+    The push automatically triggers the GitHub Actions workflow defined in `.github/workflows/google-cloud-run.yml`.
+    -   The workflow authenticates with Google Cloud.
+    -   It builds the Docker image using Cloud Build and pushes it to Google Artifact Registry.
+    -   It then deploys the new image to Cloud Run, securely setting the environment variables from GitHub Secrets.
+
+### 5. Managing the Bot on Cloud Run
+
+-   **To view logs:**
+    Go to the Cloud Run section of the Google Cloud Console, select your service, and go to the "Logs" tab.
+-   **To check if the service is running:**
+    In the Cloud Run section, you can see the status of your service, including the number of running instances.
+
+---
+
 ## 🧮 Implemented Data Sources
 
 | Category      | Source         | API                                                                |

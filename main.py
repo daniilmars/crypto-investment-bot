@@ -4,6 +4,10 @@
 
 import time
 import pandas as pd
+import http.server
+import socketserver
+import threading
+import os
 from src.collectors.binance_data import get_current_price
 from src.collectors.whale_alert import get_whale_transactions, get_stablecoin_flows
 from src.analysis.signal_engine import generate_signal
@@ -92,6 +96,13 @@ def run_bot_cycle():
     
     log.info("--- Bot cycle finished ---")
 
+def start_health_check_server():
+    """Starts a simple HTTP server for health checks."""
+    port = int(os.environ.get("PORT", 8080))
+    handler = http.server.SimpleHTTPRequestHandler
+    with socketserver.TCPServer(("", port), handler) as httpd:
+        log.info(f"Health check server started on port {port}")
+        httpd.serve_forever()
 
 if __name__ == "__main__":
     # --- Argument Parser for Special Modes ---
@@ -117,6 +128,11 @@ if __name__ == "__main__":
         exit()
 
     # --- Main Application ---
+    # Start health check server in a separate thread
+    health_check_thread = threading.Thread(target=start_health_check_server)
+    health_check_thread.daemon = True
+    health_check_thread.start()
+
     # Initialize the database first
     initialize_database()
 
