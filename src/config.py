@@ -42,6 +42,7 @@ def load_config():
     
     # API Keys
     config['api_keys']['whale_alert'] = os.getenv('WHALE_ALERT_API_KEY', config.get('api_keys', {}).get('whale_alert'))
+    config['api_keys']['gemini'] = os.getenv('GEMINI_API_KEY', config.get('api_keys', {}).get('gemini'))
     
     # Notification Services (Telegram)
     if 'telegram' not in config['notification_services']:
