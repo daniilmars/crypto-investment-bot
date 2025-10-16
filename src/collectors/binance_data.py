@@ -4,7 +4,7 @@ from src.database import get_db_connection, IS_POSTGRES
 from src.logger import log
 
 # Binance API base URL
-BINANCE_API_URL = "https://api.binance.com/api/v3"
+BINANCE_API_URL = "https://api.binance.us/api/v3"
 
 def save_price_data(price_data: dict):
     """Saves price data to the database."""
