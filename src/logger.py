@@ -24,16 +24,19 @@ def setup_logger():
     stream_handler.setFormatter(formatter)
     logger.addHandler(stream_handler)
 
-    # --- File Handler ---
-    # Create data directory if it doesn't exist
-    log_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
-    os.makedirs(log_dir, exist_ok=True)
-    log_file_path = os.path.join(log_dir, 'bot.log')
+    # --- File Handler (Optional) ---
+    # Only enable file logging if the environment variable is set
+    if os.getenv('ENABLE_FILE_LOGGING', 'false').lower() == 'true':
+        # Create data directory if it doesn't exist
+        log_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
+        os.makedirs(log_dir, exist_ok=True)
+        log_file_path = os.path.join(log_dir, 'bot.log')
 
-    # Add a file handler to write logs to a file
-    file_handler = logging.FileHandler(log_file_path)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
+        # Add a file handler to write logs to a file
+        file_handler = logging.FileHandler(log_file_path)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+        logger.info("File logging is enabled.")
 
     return logger
 
