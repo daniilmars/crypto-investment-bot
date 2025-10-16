@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-print("--- main.py starting ---")
 # --- Main Application File ---
 # This script orchestrates the entire bot's workflow.
 # Force redeploy 2025-10-16

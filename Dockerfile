@@ -13,8 +13,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the entire project context into the container
 COPY . .
 
-# Make the run script executable
-RUN chmod +x run.sh
-
 # Set up the entrypoint script
-ENTRYPOINT ["./run.sh"]
+CMD ["python3", "main.py"]
