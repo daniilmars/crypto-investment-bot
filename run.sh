@@ -1,5 +1,5 @@
 #!/bin/sh
-while true; do
-  echo "--- Container is running ---"
-  sleep 10
-done
+set -e
+
+# Start the main application
+exec python3 main.py "$@"
