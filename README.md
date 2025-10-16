@@ -246,7 +246,18 @@ gcloud services enable \
   sqladmin.googleapis.com
 ```
 
-**Step 3: Create the Service Account**
+**Step 3: Create Artifact Registry Repository**
+
+Create the repository in Artifact Registry where the bot's Docker images will be stored.
+
+```bash
+gcloud artifacts repositories create crypto-bot \
+    --repository-format=docker \
+    --location=us-central1 \
+    --description="Docker repository for crypto bot"
+```
+
+**Step 4: Create the Service Account**
 
 Create a dedicated service account that the GitHub Actions workflow will use to deploy the application.
 
