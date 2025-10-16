@@ -13,5 +13,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the entire project context into the container
 COPY . .
 
+# Set the environment variable to run the Telegram bot
+ENV RUN_TELEGRAM_BOT=true
+
 # Set up the entrypoint script
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["python3", "main.py"]

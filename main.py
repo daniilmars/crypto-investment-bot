@@ -67,7 +67,7 @@ def run_bot_cycle():
         if len(historical_prices) >= sma_period:
             price_series = pd.Series(historical_prices)
             market_price_data['sma'] = price_series.rolling(window=sma_period).mean().iloc[-1]
-        market_price_data['rsi'].py",
+        market_price_data['rsi'] = calculate_rsi(historical_prices, period=rsi_period)
         action='store_true',
         help='Send a test notification to the configured Telegram chat and exit.'
     )
@@ -106,11 +106,6 @@ def run_bot_cycle():
     main_bot_thread = threading.Thread(target=bot_loop)
     main_bot_thread.daemon = True
     main_bot_thread.start()
-
-    # Start Telegram bot in a separate thread
-    telegram_bot_thread = threading.Thread(target=start_bot)
-    telegram_bot_thread.daemon = True
-    telegram_bot_thread.start()
 
     # Start the health check server in the main thread
     # This is crucial for Cloud Run to keep the instance alive.
