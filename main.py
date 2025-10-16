@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # --- Main Application File ---
 # This script orchestrates the entire bot's workflow.
+# Force redeploy 2025-10-16
 
 import time
 import pandas as pd
