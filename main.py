@@ -105,6 +105,23 @@ def start_health_check_server():
         log.info(f"Health check server started on port {port}")
         httpd.serve_forever()
 
+def bot_loop():
+    """The main, long-running loop for the bot's analysis cycle."""
+    # Load configuration to get the run interval
+    settings = app_config.get('settings', {})
+    run_interval_minutes = settings.get('run_interval_minutes', 15)
+    log.info(f"Bot will run every {run_interval_minutes} minutes.")
+
+    while True:
+        try:
+            run_bot_cycle()
+        except Exception as e:
+            log.error(f"An error occurred in the main bot cycle: {e}", exc_info=True)
+        
+        sleep_duration_seconds = run_interval_minutes * 60
+        log.info(f"Sleeping for {run_interval_minutes} minutes...")
+        time.sleep(sleep_duration_seconds)
+
 if __name__ == "__main__":
     # --- Argument Parser for Special Modes ---
     import argparse
@@ -120,7 +137,7 @@ if __name__ == "__main__":
         log.info("--- Running Telegram Notification Test ---")
         test_signal = {
             'signal': 'TEST',
-            'reason': 'This is a test message to confirm the Heroku deployment is working correctly.',
+            'reason': 'This is a test message to confirm the deployment is working correctly.',
             'symbol': 'BOT',
             'current_price': 'N/A'
         }
@@ -129,27 +146,19 @@ if __name__ == "__main__":
         exit()
 
     # --- Main Application ---
-    # Start health check server in a separate thread
-    health_check_thread = threading.Thread(target=start_health_check_server)
-    health_check_thread.daemon = True
-    health_check_thread.start()
+    # Initialize the database first
+    initialize_database()
+
+    # Start the main bot cycle in a separate thread
+    main_bot_thread = threading.Thread(target=bot_loop)
+    main_bot_thread.daemon = True
+    main_bot_thread.start()
 
     # Start Telegram bot in a separate thread
     telegram_bot_thread = threading.Thread(target=start_bot)
     telegram_bot_thread.daemon = True
     telegram_bot_thread.start()
 
-    # Initialize the database first
-    initialize_database()
-
-    # Load configuration to get the run interval
-    settings = app_config.get('settings', {})
-    run_interval_minutes = settings.get('run_interval_minutes', 15)
-    log.info(f"Bot will run every {run_interval_minutes} minutes.")
-
-    # --- Main Application Loop ---
-    while True:
-        run_bot_cycle()
-        sleep_duration_seconds = run_interval_minutes * 60
-        log.info(f"Sleeping for {run_interval_minutes} minutes...")
-        time.sleep(sleep_duration_seconds)
+    # Start the health check server in the main thread
+    # This is crucial for Cloud Run to keep the instance alive.
+    start_health_check_server()
