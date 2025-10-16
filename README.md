@@ -65,25 +65,6 @@ v                v                                v
 +-------------------+      +-------------------+      +-------------------+
 ```
 
-### Deployment Architecture
-
-The deployment is fully automated via a CI/CD pipeline using GitHub Actions. Every push to the `master` branch triggers a workflow that tests the code and, if successful, deploys the application as a Docker container to Heroku.
-
-```text
-+------------------+      +--------------------+      +----------------------+
-| Developer        |----->| GitHub Repository  |----->| GitHub Actions       |
-| (git push)       |      | (master branch)    |      | (CI/CD Workflow)     |
-+------------------+      +--------------------+      +----------+-----------+
-                                                                 |
-         +-------------------------------------------------------+
-         |
-         v
-+----------+-----------+      +--------------------+      +----------------------+
-| Run Tests          |----->| Build Docker Image |----->| Deploy to Heroku     |
-| (pytest)           |      |                    |      | (Container Stack)    |
-+--------------------+      +--------------------+      +----------------------+
-```
-
 ---
 
 ## ⚙️ Setup

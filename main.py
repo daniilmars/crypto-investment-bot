@@ -8,11 +8,12 @@ import http.server
 import socketserver
 import threading
 import os
+import asyncio
 from src.collectors.binance_data import get_current_price
 from src.collectors.whale_alert import get_whale_transactions, get_stablecoin_flows
 from src.analysis.signal_engine import generate_signal
 from src.analysis.technical_indicators import calculate_rsi, calculate_transaction_velocity
-from src.notify.telegram_bot import send_telegram_alert
+from src.notify.telegram_bot import send_telegram_alert, start_bot
 from src.database import initialize_database, get_historical_prices, get_transaction_timestamps_since
 from src.logger import log
 from src.config import app_config
@@ -90,7 +91,7 @@ def run_bot_cycle():
             log.info(f"Significant signal detected for {symbol}. Sending notification...")
             signal['symbol'] = symbol
             signal['current_price'] = current_price
-            send_telegram_alert(signal)
+            asyncio.run(send_telegram_alert(signal))
         else:
             log.info(f"Signal for {symbol} is 'HOLD'. No notification will be sent.")
     
@@ -123,7 +124,7 @@ if __name__ == "__main__":
             'symbol': 'BOT',
             'current_price': 'N/A'
         }
-        send_telegram_alert(test_signal)
+        asyncio.run(send_telegram_alert(test_signal))
         log.info("Test message sent. Exiting.")
         exit()
 
@@ -132,6 +133,11 @@ if __name__ == "__main__":
     health_check_thread = threading.Thread(target=start_health_check_server)
     health_check_thread.daemon = True
     health_check_thread.start()
+
+    # Start Telegram bot in a separate thread
+    telegram_bot_thread = threading.Thread(target=start_bot)
+    telegram_bot_thread.daemon = True
+    telegram_bot_thread.start()
 
     # Initialize the database first
     initialize_database()

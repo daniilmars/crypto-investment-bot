@@ -32,6 +32,7 @@ api_keys:
   binance:
     api_key: "YOUR_BINANCE_API_KEY"
     api_secret: "YOUR_BINANCE_API_SECRET"
+  gemini: "YOUR_GEMINI_API_KEY"
   lunarcrush: "YOUR_LUNARCRUSH_API_KEY"
   glassnode: "YOUR_GLASSNODE_API_KEY"
   newsapi: "YOUR_NEWSAPI_ORG_KEY"

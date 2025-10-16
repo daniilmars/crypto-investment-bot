@@ -158,7 +158,7 @@ def get_transaction_timestamps_since(symbol: str, hours_ago: int):
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    if IS_POSTGRES:
+    if IS_POSTG-RES:
         query = "SELECT timestamp FROM whale_transactions WHERE symbol = %s AND recorded_at >= NOW() - INTERVAL '%s hours'"
         cursor.execute(query, (symbol, hours_ago))
     else:
@@ -172,3 +172,57 @@ def get_transaction_timestamps_since(symbol: str, hours_ago: int):
     conn.close()
         
     return timestamps
+
+def get_whale_transactions_since(hours_ago: int = 24):
+    """
+    Retrieves all whale transactions since a certain number of hours ago.
+    Returns a list of dictionaries.
+    """
+    conn = get_db_connection()
+    # Use a dictionary cursor for PostgreSQL or a row factory for SQLite
+    if IS_POSTGRES:
+        from psycopg2.extras import RealDictCursor
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+    else:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+    if IS_POSTGRES:
+        query = "SELECT * FROM whale_transactions WHERE recorded_at >= NOW() - INTERVAL '%s hours' ORDER BY timestamp DESC"
+        cursor.execute(query, (hours_ago,))
+    else:
+        start_timestamp = int(time.time()) - (hours_ago * 3600)
+        query = "SELECT * FROM whale_transactions WHERE timestamp >= ? ORDER BY timestamp DESC"
+        cursor.execute(query, (start_timestamp,))
+    
+    transactions = [dict(row) for row in cursor.fetchall()]
+    
+    cursor.close()
+    conn.close()
+    return transactions
+
+def get_price_history_since(hours_ago: int = 24):
+    """
+    Retrieves the price history for all symbols since a certain number of hours ago.
+    """
+    conn = get_db_connection()
+    if IS_POSTGRES:
+        from psycopg2.extras import RealDictCursor
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+    else:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+    if IS_POSTGRES:
+        query = "SELECT symbol, price, timestamp FROM market_prices WHERE timestamp >= NOW() - INTERVAL '%s hours' ORDER BY timestamp ASC"
+        cursor.execute(query, (hours_ago,))
+    else:
+        # For SQLite, CURRENT_TIMESTAMP is UTC, so we can compare directly
+        query = "SELECT symbol, price, timestamp FROM market_prices WHERE timestamp >= datetime('now', ? || ' hours') ORDER BY timestamp ASC"
+        cursor.execute(query, (f'-{hours_ago}',))
+
+    history = [dict(row) for row in cursor.fetchall()]
+    
+    cursor.close()
+    conn.close()
+    return history

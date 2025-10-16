@@ -14,4 +14,10 @@ pytest-mock
 # For reading YAML configuration
 PyYAML
 
+# For telegram bot
+python-telegram-bot
+
+# For Gemini API
+google-generativeai
+
 # Cache buster
