@@ -49,3 +49,4 @@ jobs:
             TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}
             DATABASE_URL=${{ secrets.DATABASE_URL }}
             DB_INSTANCE_CONNECTION_NAME=${{ secrets.DB_INSTANCE_CONNECTION_NAME }}
+            GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
