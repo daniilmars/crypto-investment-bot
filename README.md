@@ -243,7 +243,8 @@ gcloud services enable \
   run.googleapis.com \
   artifactregistry.googleapis.com \
   cloudbuild.googleapis.com \
-  sqladmin.googleapis.com
+  sqladmin.googleapis.com \
+  sql-component.googleapis.com
 ```
 
 **Step 3: Create Artifact Registry Repository**
@@ -270,7 +271,7 @@ gcloud iam service-accounts create ${SERVICE_ACCOUNT_NAME} \
     --display-name "Crypto Bot Deployer"
 ```
 
-**Step 4: Grant Permissions to the Service Account**
+**Step 5: Grant Permissions to the Service Account**
 
 Assign the necessary roles to the service account so it has permission to manage Cloud Run, Artifact Registry, Cloud Build, and Cloud SQL.
 
@@ -314,7 +315,7 @@ gcloud projects add-iam-policy-binding ${PROJECT_ID} \
     --role="roles/viewer"
 ```
 
-**Step 5: Create and Download the Service Account Key**
+**Step 6: Create and Download the Service Account Key**
 
 Generate a JSON key file that will be used to authenticate from GitHub Actions.
 
@@ -324,7 +325,7 @@ gcloud iam service-accounts keys create key.json \
 ```
 **Important:** The `key.json` file will be created in your current directory. You will copy the entire contents of this file for a GitHub secret in the next section.
 
-**Step 6: Create the PostgreSQL Database**
+**Step 7: Create the PostgreSQL Database**
 
 Create a Cloud SQL for PostgreSQL instance and a database for the bot.
 
@@ -346,16 +347,20 @@ gcloud sql instances create ${INSTANCE_NAME} \
 gcloud sql databases create crypto_data --instance=${INSTANCE_NAME}
 ```
 
-**Step 7: Get the Database Connection Info**
+**Step 8: Get Database Connection Info**
 
-Retrieve the public IP address of your new database instance to construct the `DATABASE_URL`.
+Retrieve the connection details for your new database. You will need the **Public IP Address** for local testing and the **Instance Connection Name** for the production deployment on Cloud Run.
 
 ```bash
-# Get the public IP address
+# Get the public IP address for local/external connections
 export DB_IP=$(gcloud sql instances describe ${INSTANCE_NAME} --format="value(ipAddresses.ipAddress)")
 
-# Display the fully constructed DATABASE_URL to use in your GitHub secret
+# Get the instance connection name for the Cloud Run service
+export INSTANCE_CONNECTION_NAME=$(gcloud sql instances describe ${INSTANCE_NAME} --format="value(connectionName)")
+
+# Display the values to use in your GitHub secrets
 echo "Your DATABASE_URL is: postgresql://postgres:${ROOT_PASSWORD}@${DB_IP}/crypto_data"
+echo "Your INSTANCE_CONNECTION_NAME is: ${INSTANCE_CONNECTION_NAME}"
 ```
 
 ### 3. GitHub Repository Setup
@@ -363,11 +368,12 @@ echo "Your DATABASE_URL is: postgresql://postgres:${ROOT_PASSWORD}@${DB_IP}/cryp
 1.  **Add Secrets to GitHub:**
     Go to your GitHub repository's "Settings" > "Secrets and variables" > "Actions" and add the following secrets:
     -   `GCP_PROJECT_ID`: Your Google Cloud project ID.
-    -   `GCP_SA_KEY`: The content of the JSON key file you downloaded for the service account.
+    -   `GCP_SA_KEY`: The content of the JSON key file you downloaded.
+    -   `DB_INSTANCE_CONNECTION_NAME`: The full instance connection name from the previous step.
+    -   `DATABASE_URL`: The connection string with the public IP. **Note:** This is primarily for local testing or external connections, not for the production Cloud Run service.
     -   `WHALE_ALERT_API_KEY`: Your Whale Alert API key.
     -   `TELEGRAM_BOT_TOKEN`: Your Telegram bot token.
     -   `TELEGRAM_CHAT_ID`: Your Telegram chat ID.
-    -   `DATABASE_URL`: The connection string for your Cloud SQL for PostgreSQL instance. It should be in the following format: `postgresql://postgres:<your-password>@<your-instance-public-ip>/<your-database-name>`
 
 ### 4. Automated Deployment
 
