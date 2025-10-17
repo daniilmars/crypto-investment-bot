@@ -285,6 +285,24 @@ echo "Your DATABASE_URL is: postgresql://postgres:${ROOT_PASSWORD}@${DB_IP}/cryp
 echo "Your INSTANCE_CONNECTION_NAME is: ${INSTANCE_CONNECTION_NAME}"
 ```
 
+**Step 9: Configure Cloud NAT for Internet Access**
+
+By default, Cloud Run services do not have outbound internet access. To allow the bot to connect to external APIs like Telegram and Whale Alert, you must set up a Cloud NAT gateway.
+
+```bash
+# Create a Cloud Router
+gcloud compute routers create crypto-bot-router \
+    --network default \
+    --region=us-central1
+
+# Create the NAT gateway
+gcloud compute routers nats create crypto-bot-nat \
+    --router=crypto-bot-router \
+    --region=us-central1 \
+    --auto-allocate-nat-external-ips \
+    --nat-all-subnet-ip-ranges
+```
+
 ### 3. GitHub Repository Setup
 
 1.  **Add Secrets to GitHub:**
