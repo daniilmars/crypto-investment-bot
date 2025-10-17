@@ -111,7 +111,7 @@ async def start_bot():
         return
 
     log.info("Starting Telegram bot listener...")
-    application = Application.builder().token(TOKEN).build()
+    application = Application.builder().token(TOKEN).connect_timeout(20).read_timeout(20).build()
 
     # Delete any existing webhook to prevent conflicts
     log.info("Deleting existing webhook...")
