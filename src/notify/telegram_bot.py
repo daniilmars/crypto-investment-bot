@@ -123,6 +123,12 @@ async def start_bot():
     application.add_handler(CommandHandler("status", status))
     application.add_handler(CommandHandler("db_stats", db_stats))
 
+    # Add a generic message handler to log all incoming messages
+    from telegram.ext import MessageHandler, filters
+    async def log_all_messages(update, context):
+        log.info(f"Received message from chat_id: {update.message.chat_id}. Message text: {update.message.text}")
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, log_all_messages))
+
     # Initialize and start the application
     log.info("Initializing and starting the application...")
     await application.initialize()
