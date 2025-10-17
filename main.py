@@ -82,9 +82,41 @@ def run_bot_cycle():
             high_interest_wallets
         )
 
-# Keep the main thread alive to allow background threads to run.
-while True:
-    time.sleep(1)
-# Keep the main thread alive to allow background threads to run.
-while True:
-    time.sleep(1)
+def bot_loop():
+    """
+    The main indefinite loop for the bot.
+    """
+    run_interval_minutes = app_config.get('settings', {}).get('run_interval_minutes', 15)
+    while True:
+        run_bot_cycle()
+        log.info(f"Cycle complete. Waiting for {run_interval_minutes} minutes...")
+        time.sleep(run_interval_minutes * 60)
+
+def start_health_check_server():
+    """
+    Starts a simple HTTP server in a thread to respond to Cloud Run health checks.
+    """
+    port = int(os.environ.get("PORT", 8080))
+    handler = http.server.SimpleHTTPRequestHandler
+    
+    with socketserver.TCPServer(("", port), handler) as httpd:
+        log.info(f"Health check server started on port {port}")
+        httpd.serve_forever()
+
+if __name__ == "__main__":
+    # Initialize the database first
+    initialize_database()
+
+    # Start the main bot cycle in a separate thread
+    main_bot_thread = threading.Thread(target=bot_loop)
+    main_bot_thread.daemon = True
+    main_bot_thread.start()
+
+    # Start the Telegram bot listener in a separate thread
+    telegram_thread = threading.Thread(target=asyncio.run, args=(start_bot(),))
+    telegram_thread.daemon = True
+    telegram_thread.start()
+
+    # Start the health check server in the main thread
+    # This is crucial for Cloud Run to keep the instance alive.
+    start_health_check_server()
