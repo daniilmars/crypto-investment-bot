@@ -63,10 +63,10 @@ def get_whale_transactions(min_value_usd: int = 1000000):
             return transactions
         else:
             log.warning(f"Whale Alert API error: {data.get('message')}")
-            return None
+            return []
     except requests.exceptions.RequestException as e:
         log.error(f"Error fetching from Whale Alert API: {e}")
-        return None
+        return []
 
 def get_stablecoin_flows(transactions: list, stablecoins: list):
     """
