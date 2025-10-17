@@ -57,7 +57,8 @@ async def status(update, context):
     """Handles the /status command."""
     log.info(f"/status command received from chat_id: {update.message.chat_id}")
     # --- Authorization Check ---
-    if str(update.message.chat_id) != str(CHAT_ID):
+    chat_id = app_config.get('notification_services', {}).get('telegram', {}).get('chat_id')
+    if str(update.message.chat_id) != str(chat_id):
         log.warning(f"Unauthorized /status command from chat_id: {update.message.chat_id}")
         await update.message.reply_text("You are not authorized to use this command.")
         return
@@ -83,7 +84,8 @@ async def db_stats(update, context):
     """Handles the /db_stats command to get database table counts."""
     log.info(f"/db_stats command received from chat_id: {update.message.chat_id}")
     # --- Authorization Check ---
-    if str(update.message.chat_id) != str(CHAT_ID):
+    chat_id = app_config.get('notification_services', {}).get('telegram', {}).get('chat_id')
+    if str(update.message.chat_id) != str(chat_id):
         log.warning(f"Unauthorized /db_stats command from chat_id: {update.message.chat_id}")
         await update.message.reply_text("You are not authorized to use this command.")
         return
