@@ -68,45 +68,16 @@ def run_bot_cycle():
             price_series = pd.Series(historical_prices)
             market_price_data['sma'] = price_series.rolling(window=sma_period).mean().iloc[-1]
         market_price_data['rsi'] = calculate_rsi(historical_prices, period=rsi_period)
-        action='store_true',
-        help='Send a test notification to the configured Telegram chat and exit.'
-    )
-    parser.add_argument(
-        '--stats',
-        action='store_true',
-        help='Connect to the database, print table counts, and exit.'
-    )
-    args = parser.parse_args()
-
-    if args.test_notify:
-        log.info("--- Running Telegram Notification Test ---")
-        test_signal = {
-            'signal': 'TEST',
-            'reason': 'This is a test message to confirm the deployment is working correctly.',
-            'symbol': 'BOT',
-            'current_price': 'N/A'
-        }
-        asyncio.run(send_telegram_alert(test_signal))
-        log.info("Test message sent. Exiting.")
-        exit()
-
-    if args.stats:
-        log.info("--- Running Database Stats Check ---")
-        initialize_database()
-        counts = get_table_counts()
-        log.info(f"Database Table Counts: {counts}")
-        log.info("Stats check complete. Exiting.")
-        exit()
-
-    # --- Main Application ---
-    # Initialize the database first
-    initialize_database()
-
-    # Start the main bot cycle in a separate thread
-    main_bot_thread = threading.Thread(target=bot_loop)
-    main_bot_thread.daemon = True
-    main_bot_thread.start()
-
-    # Start the health check server in the main thread
-    # This is crucial for Cloud Run to keep the instance alive.
-    start_health_check_server()
+        
+        transaction_velocity = calculate_transaction_velocity(historical_timestamps)
+        
+        # 3. Generate a signal
+        log.info(f"Generating signal for {symbol}...")
+        signal = generate_signal(
+            symbol,
+            market_price_data,
+            whale_transactions,
+            stablecoin_data,
+            transaction_velocity,
+            high_interest_wallets
+        )
