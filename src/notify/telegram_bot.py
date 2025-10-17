@@ -112,7 +112,9 @@ async def start_bot():
     application = Application.builder().token(TOKEN).build()
 
     # Delete any existing webhook to prevent conflicts
-    await application.bot.delete_webhook()
+    log.info("Deleting existing webhook...")
+    await application.bot.delete_webhook(drop_pending_updates=True)
+    log.info("Webhook deleted.")
 
     # Register command handlers
     application.add_handler(CommandHandler("start", start))
@@ -120,6 +122,7 @@ async def start_bot():
     application.add_handler(CommandHandler("db_stats", db_stats))
 
     # Initialize and start the application
+    log.info("Initializing and starting the application...")
     await application.initialize()
     await application.start()
     await application.updater.start_polling()
