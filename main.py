@@ -106,6 +106,9 @@ if __name__ == "__main__":
     # Initialize the database first
     initialize_database()
 
+    # Create the bot application instance
+    from src.notify.telegram_bot import start_bot, stop_bot
+    
     # Start the main bot cycle in a separate thread
     main_bot_thread = threading.Thread(target=bot_loop)
     main_bot_thread.daemon = True
@@ -116,9 +119,13 @@ if __name__ == "__main__":
     telegram_thread.daemon = True
     telegram_thread.start()
 
-    # Start the health check server in the main thread
-    # This is crucial for Cloud Run to keep the instance alive.
-    start_health_check_server()
+    try:
+        # Start the health check server in the main thread
+        # This is crucial for Cloud Run to keep the instance alive.
+        start_health_check_server()
+    finally:
+        # Gracefully stop the Telegram bot
+        asyncio.run(stop_bot())
 
     # Start the health check server in the main thread
     # This is crucial for Cloud Run to keep the instance alive.

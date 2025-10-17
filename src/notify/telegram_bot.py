@@ -74,8 +74,8 @@ async def status(update, context):
         log.error(f"Error generating /status report: {e}")
         await update.message.reply_text("Sorry, there was an error generating the report.")
 
-def start_bot():
-    """Starts the Telegram bot to listen for commands."""
+async def start_bot():
+    """Initializes and starts the Telegram bot application."""
     if not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
         log.error("Cannot start Telegram bot: Token is not configured.")
         return
@@ -87,5 +87,20 @@ def start_bot():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("status", status))
 
-    # Run the bot, disabling signal handlers for thread compatibility
-    application.run_polling(stop_signals=None)
+    # Initialize and start the application
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling()
+    log.info("Telegram bot is now polling.")
+
+    # Keep the bot running
+    while True:
+        await asyncio.sleep(3600) # Sleep for an hour, the bot runs in the background
+
+async def stop_bot(application):
+    """Stops the Telegram bot gracefully."""
+    log.info("Stopping Telegram bot...")
+    await application.updater.stop()
+    await application.stop()
+    await application.shutdown()
+    log.info("Telegram bot stopped.")
