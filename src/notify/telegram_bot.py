@@ -50,10 +50,12 @@ async def send_telegram_alert(signal: dict):
 # --- Command Handlers ---
 async def start(update, context):
     """Handles the /start command."""
+    log.info(f"/start command received from chat_id: {update.message.chat_id}")
     await update.message.reply_text('Crypto Investment Bot is running. Use /status to get a report.')
 
 async def status(update, context):
     """Handles the /status command."""
+    log.info(f"/status command received from chat_id: {update.message.chat_id}")
     # --- Authorization Check ---
     if str(update.message.chat_id) != str(CHAT_ID):
         log.warning(f"Unauthorized /status command from chat_id: {update.message.chat_id}")
@@ -79,6 +81,7 @@ async def status(update, context):
 
 async def db_stats(update, context):
     """Handles the /db_stats command to get database table counts."""
+    log.info(f"/db_stats command received from chat_id: {update.message.chat_id}")
     # --- Authorization Check ---
     if str(update.message.chat_id) != str(CHAT_ID):
         log.warning(f"Unauthorized /db_stats command from chat_id: {update.message.chat_id}")
