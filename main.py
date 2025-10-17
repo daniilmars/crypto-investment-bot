@@ -69,7 +69,7 @@ def run_bot_cycle():
             market_price_data['sma'] = price_series.rolling(window=sma_period).mean().iloc[-1]
         market_price_data['rsi'] = calculate_rsi(historical_prices, period=rsi_period)
         
-        transaction_velocity = calculate_transaction_velocity(historical_timestamps)
+        transaction_velocity = calculate_transaction_velocity(symbol, whale_transactions, historical_timestamps, baseline_hours)
         
         # 3. Generate a signal
         log.info(f"Generating signal for {symbol}...")
