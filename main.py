@@ -74,12 +74,11 @@ def run_bot_cycle():
         # 3. Generate a signal
         log.info(f"Generating signal for {symbol}...")
         signal = generate_signal(
-            symbol,
-            market_price_data,
-            whale_transactions,
-            stablecoin_data,
-            transaction_velocity,
-            high_interest_wallets
+            whale_transactions=whale_transactions,
+            market_data=market_price_data,
+            high_interest_wallets=high_interest_wallets,
+            stablecoin_data=stablecoin_data,
+            velocity_data=transaction_velocity
         )
 
 def bot_loop():
