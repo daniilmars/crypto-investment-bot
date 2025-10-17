@@ -119,3 +119,7 @@ if __name__ == "__main__":
     # Start the health check server in the main thread
     # This is crucial for Cloud Run to keep the instance alive.
     start_health_check_server()
+
+    # Start the health check server in the main thread
+    # This is crucial for Cloud Run to keep the instance alive.
+    start_health_check_server()
