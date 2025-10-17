@@ -11,6 +11,9 @@ telegram_config = app_config.get('notification_services', {}).get('telegram', {}
 TOKEN = telegram_config.get('token')
 CHAT_ID = telegram_config.get('chat_id')
 
+# --- Global Application Instance ---
+application: Application = None
+
 async def send_telegram_alert(signal: dict):
     """
     Sends a formatted message to a Telegram chat using the bot instance.
@@ -97,6 +100,7 @@ async def db_stats(update, context):
 
 async def start_bot():
     """Initializes and starts the Telegram bot application."""
+    global application
     if not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
         log.error("Cannot start Telegram bot: Token is not configured.")
         return
@@ -118,14 +122,13 @@ async def start_bot():
     await application.updater.start_polling()
     log.info("Telegram bot is now polling.")
 
-    # Keep the bot running
-    while True:
-        await asyncio.sleep(3600) # Sleep for an hour, the bot runs in the background
-
-async def stop_bot(application):
+async def stop_bot():
     """Stops the Telegram bot gracefully."""
-    log.info("Stopping Telegram bot...")
-    await application.updater.stop()
-    await application.stop()
-    await application.shutdown()
-    log.info("Telegram bot stopped.")
+    if application:
+        log.info("Stopping Telegram bot...")
+        await application.updater.stop()
+        await application.stop()
+        await application.shutdown()
+        log.info("Telegram bot stopped.")
+    else:
+        log.info("Telegram bot was not running.")

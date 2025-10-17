@@ -127,8 +127,6 @@ if __name__ == "__main__":
         start_health_check_server()
     finally:
         # Gracefully stop the Telegram bot
+        log.info("Shutdown signal received. Stopping Telegram bot...")
         asyncio.run(stop_bot())
-
-    # Start the health check server in the main thread
-    # This is crucial for Cloud Run to keep the instance alive.
-    start_health_check_server()
+        log.info("Telegram bot stopped.")
