@@ -81,3 +81,7 @@ def run_bot_cycle():
             transaction_velocity,
             high_interest_wallets
         )
+
+# Keep the main thread alive to allow background threads to run.
+while True:
+    time.sleep(1)
