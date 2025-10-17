@@ -74,6 +74,27 @@ async def status(update, context):
         log.error(f"Error generating /status report: {e}")
         await update.message.reply_text("Sorry, there was an error generating the report.")
 
+async def db_stats(update, context):
+    """Handles the /db_stats command to get database table counts."""
+    # --- Authorization Check ---
+    if str(update.message.chat_id) != str(CHAT_ID):
+        log.warning(f"Unauthorized /db_stats command from chat_id: {update.message.chat_id}")
+        await update.message.reply_text("You are not authorized to use this command.")
+        return
+
+    try:
+        from src.database import get_table_counts
+        counts = get_table_counts()
+        message = (
+            f"📊 *Database Statistics* 📊\n\n"
+            f"Whale Transactions: `{counts.get('whale_transactions', 0)}`\n"
+            f"Market Prices: `{counts.get('market_prices', 0)}`"
+        )
+        await update.message.reply_text(message, parse_mode='Markdown')
+    except Exception as e:
+        log.error(f"Error fetching DB stats: {e}")
+        await update.message.reply_text("Sorry, there was an error fetching database statistics.")
+
 async def start_bot():
     """Initializes and starts the Telegram bot application."""
     if not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
@@ -86,6 +107,7 @@ async def start_bot():
     # Register command handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("status", status))
+    application.add_handler(CommandHandler("db_stats", db_stats))
 
     # Initialize and start the application
     await application.initialize()
