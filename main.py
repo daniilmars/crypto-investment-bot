@@ -85,3 +85,6 @@ def run_bot_cycle():
 # Keep the main thread alive to allow background threads to run.
 while True:
     time.sleep(1)
+# Keep the main thread alive to allow background threads to run.
+while True:
+    time.sleep(1)
