@@ -38,6 +38,8 @@ def run_bot_cycle():
     # 1. Collect data
     log.info("Fetching data from all sources...")
     whale_transactions = get_whale_transactions(min_value_usd=min_whale_value)
+    if whale_transactions is None:
+        whale_transactions = []
     stablecoin_data = get_stablecoin_flows(whale_transactions, stablecoins_to_monitor)
     
     # Process each symbol in the watch list
