@@ -105,6 +105,22 @@ def start_health_check_server():
         httpd.serve_forever()
 
 if __name__ == "__main__":
+    # --- Network Connectivity Test ---
+    import subprocess
+    log.info("--- Running Network Connectivity Test ---")
+    token = app_config.get('notification_services', {}).get('telegram', {}).get('token')
+    if token:
+        url = f"https://api.telegram.org/bot{token}/getMe"
+        log.info(f"Curling URL: {url}")
+        result = subprocess.run(["curl", "-v", url], capture_output=True, text=True)
+        log.info(f"Curl Test Return Code: {result.returncode}")
+        log.info(f"Curl Test STDOUT: {result.stdout}")
+        log.info(f"Curl Test STDERR: {result.stderr}")
+    else:
+        log.error("TELEGRAM_BOT_TOKEN not found, skipping curl test.")
+    log.info("--- Network Connectivity Test Complete ---")
+    # --- End Test ---
+
     # Initialize the database first
     initialize_database()
 
