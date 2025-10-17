@@ -122,6 +122,7 @@ if __name__ == "__main__":
     telegram_thread.start()
 
     try:
+        log.info("Application startup complete. Starting health check server.")
         # Start the health check server in the main thread
         # This is crucial for Cloud Run to keep the instance alive.
         start_health_check_server()

@@ -124,6 +124,7 @@ async def start_bot():
 
 async def stop_bot():
     """Stops the Telegram bot gracefully."""
+    log.info("Executing stop_bot function.")
     if application:
         log.info("Stopping Telegram bot...")
         await application.updater.stop()
