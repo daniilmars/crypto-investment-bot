@@ -303,6 +303,16 @@ gcloud compute routers nats create crypto-bot-nat \
     --nat-all-subnet-ip-ranges
 ```
 
+**Step 10: Ensure Continuous Operation (Minimum Instances)**
+
+To ensure the bot runs continuously and doesn't shut down due to inactivity (as it's a background worker, not a web server), you must configure Cloud Run to always have at least one instance running.
+
+```bash
+gcloud run services update crypto-bot \
+    --min-instances=1 \
+    --region=us-central1
+```
+
 ### 3. GitHub Repository Setup
 
 1.  **Add Secrets to GitHub:**
