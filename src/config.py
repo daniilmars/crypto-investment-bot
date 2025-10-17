@@ -55,7 +55,15 @@ def load_config():
     # Notification Services (Telegram)
     if 'telegram' not in config['notification_services']:
         config['notification_services']['telegram'] = {}
-    config['notification_services']['telegram']['token'] = os.getenv('TELEGRAM_BOT_TOKEN', config.get('notification_services', {}).get('telegram', {}).get('token'))
+    
+    telegram_token_env = os.getenv('TELEGRAM_BOT_TOKEN')
+    if telegram_token_env:
+        log.info(f"Found TELEGRAM_BOT_TOKEN environment variable. Length: {len(telegram_token_env)}")
+        config['notification_services']['telegram']['token'] = telegram_token_env
+    else:
+        log.warning("TELEGRAM_BOT_TOKEN environment variable not found.")
+        config['notification_services']['telegram']['token'] = config.get('notification_services', {}).get('telegram', {}).get('token')
+
     config['notification_services']['telegram']['chat_id'] = os.getenv('TELEGRAM_CHAT_ID', config.get('notification_services', {}).get('telegram', {}).get('chat_id'))
 
     # General Settings (example, can be expanded)
