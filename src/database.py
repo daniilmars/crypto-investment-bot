@@ -65,14 +65,19 @@ def get_db_connection():
 def initialize_database():
     """
     Creates the necessary database tables if they don't already exist.
-    Uses PostgreSQL or SQLite syntax based on the connection type.
+    Dynamically uses PostgreSQL or SQLite syntax based on the connection type.
     """
-    log.info(f"Initializing database ({'PostgreSQL' if IS_POSTGRES else 'SQLite'})...")
+    log.info("Initializing database...")
     conn = None
     cursor = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
+
+        # Determine if the connection is PostgreSQL or SQLite at runtime
+        is_postgres_conn = hasattr(conn, 'dsn')
+
+        log.info(f"Connection type detected: {'PostgreSQL' if is_postgres_conn else 'SQLite'}")
 
         # --- Create market_prices table ---
         log.debug("Attempting to create market_prices table...")
@@ -83,7 +88,7 @@ def initialize_database():
                 price REAL NOT NULL,
                 timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             )
-        ''' if IS_POSTGRES else '''
+        ''' if is_postgres_conn else '''
             CREATE TABLE IF NOT EXISTS market_prices (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 symbol TEXT NOT NULL,
@@ -108,7 +113,7 @@ def initialize_database():
                 to_owner_type TEXT,
                 recorded_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             )
-        ''' if IS_POSTGRES else '''
+        ''' if is_postgres_conn else '''
             CREATE TABLE IF NOT EXISTS whale_transactions (
                 id TEXT PRIMARY KEY,
                 symbol TEXT NOT NULL,
@@ -135,7 +140,7 @@ def initialize_database():
                 price REAL,
                 timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             )
-        ''' if IS_POSTGRES else '''
+        ''' if is_postgres_conn else '''
             CREATE TABLE IF NOT EXISTS signals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 symbol TEXT NOT NULL,
@@ -164,7 +169,7 @@ def initialize_database():
                 entry_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 exit_timestamp TIMESTAMPTZ
             )
-        ''' if IS_POSTGRES else '''
+        ''' if is_postgres_conn else '''
             CREATE TABLE IF NOT EXISTS trades (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 symbol TEXT NOT NULL,
@@ -186,7 +191,7 @@ def initialize_database():
         log.info("Database tables created/verified successfully.")
 
     except (sqlite3.Error, psycopg2.Error) as e:
-        log.error(f"Error during database initialization: {e}")
+        log.error(f"Error during database initialization: {e}", exc_info=True)
         if conn:
             conn.rollback() # Rollback in case of error
     finally:
