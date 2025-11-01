@@ -260,31 +260,34 @@ async def db_stats(update, context):
         log.error(f"Error fetching DB stats: {e}")
         await update.message.reply_text("Sorry, there was an error fetching database statistics.")
 
-async def start_bot():
-    """Initializes and starts the Telegram bot application."""
-    if not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
-        log.error("Cannot start Telegram bot: Token is not configured.")
+import asyncio
+from telegram import Update, Bot
+from telegram.ext import Application, CommandHandler, ContextTypes
+from src.config import app_config
+from src.logger import log
+from src.database import get_db_stats, get_last_signals, get_open_trades
+import markdown
+
+async def start_bot() -> Application:
+    """Initializes and returns the Telegram bot application."""
+    token = app_config.get('telegram_bot_token')
+    if not token:
+        log.error("Telegram bot token not found.")
         return None
+    
+    application = Application.builder().token(token).build()
 
-    log.info("Starting Telegram bot listener...")
-    application = Application.builder().token(TOKEN).build()
-
-    # Register command handlers
+    # Add command handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("status", status))
-    application.add_handler(CommandHandler("positions", positions))
-    application.add_handler(CommandHandler("performance", performance))
     application.add_handler(CommandHandler("db_stats", db_stats))
-    application.add_handler(CommandHandler("pause", pause))
-    application.add_handler(CommandHandler("resume", resume))
-
-    # Initialize and start the application
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling()
-    log.info("Telegram bot is now polling.")
+    application.add_handler(CommandHandler("signals", signals))
+    application.add_handler(CommandHandler("trades", trades))
     
+    # Initialize the application
+    await application.initialize()
+    
+    log.info("Telegram bot application initialized.")
     return application
 
 async def stop_bot(application):
