@@ -55,10 +55,13 @@ def run_bot_cycle():
     # Process each symbol in the watch list
     for symbol in watch_list:
         log.info(f"--- Processing symbol: {symbol} ---")
-        price_data = get_current_price(f"{symbol}USDT") # Assuming USDT pairs for now
+        
+        # Ensure the symbol format is correct for the Binance API (e.g., BTCUSDT)
+        api_symbol = symbol if "USDT" in symbol else f"{symbol}USDT"
+        price_data = get_current_price(api_symbol)
         
         if not price_data or not price_data.get('price'):
-            log.warning(f"Could not fetch current price for {symbol}. Skipping analysis.")
+            log.warning(f"Could not fetch current price for {api_symbol}. Skipping analysis.")
             continue
 
         current_price = float(price_data.get('price'))
