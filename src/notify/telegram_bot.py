@@ -85,7 +85,7 @@ async def start(update, context):
 async def help_command(update, context):
     """Handles the /help command."""
     help_text = (
-        "*Available Commands:*\n\n"
+        "Available Commands:\n\n"
         "/start - Check if the bot is running.\n"
         "/status - Get a detailed AI-generated market and bot health summary.\n"
         "/positions - View all open paper trades.\n"
@@ -95,7 +95,7 @@ async def help_command(update, context):
         "/resume - Resume trading after a pause.\n"
         "/help - Show this help message."
     )
-    await update.message.reply_text(help_text, parse_mode='Markdown')
+    await update.message.reply_text(help_text)
 
 async def positions(update, context):
     """Handles the /positions command."""
