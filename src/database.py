@@ -74,113 +74,133 @@ def initialize_database():
     Uses PostgreSQL or SQLite syntax based on the connection type.
     """
     log.info(f"Initializing database ({'PostgreSQL' if IS_POSTGRES else 'SQLite'})...")
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
 
-    # --- Create market_prices table ---
-    market_prices_sql = '''
-        CREATE TABLE IF NOT EXISTS market_prices (
-            id SERIAL PRIMARY KEY,
-            symbol TEXT NOT NULL,
-            price REAL NOT NULL,
-            timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        )
-    ''' if IS_POSTGRES else '''
-        CREATE TABLE IF NOT EXISTS market_prices (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            symbol TEXT NOT NULL,
-            price REAL NOT NULL,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    '''
-    cursor.execute(market_prices_sql)
+        # --- Create market_prices table ---
+        log.debug("Attempting to create market_prices table...")
+        market_prices_sql = '''
+            CREATE TABLE IF NOT EXISTS market_prices (
+                id SERIAL PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                price REAL NOT NULL,
+                timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+        ''' if IS_POSTGRES else '''
+            CREATE TABLE IF NOT EXISTS market_prices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                price REAL NOT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        '''
+        cursor.execute(market_prices_sql)
+        log.debug("market_prices table creation command executed.")
 
-    # --- Create whale_transactions table ---
-    whale_transactions_sql = '''
-        CREATE TABLE IF NOT EXISTS whale_transactions (
-            id TEXT PRIMARY KEY,
-            symbol TEXT NOT NULL,
-            timestamp BIGINT NOT NULL,
-            amount_usd REAL NOT NULL,
-            from_owner TEXT,
-            from_owner_type TEXT,
-            to_owner TEXT,
-            to_owner_type TEXT,
-            recorded_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        )
-    ''' if IS_POSTGRES else '''
-        CREATE TABLE IF NOT EXISTS whale_transactions (
-            id TEXT PRIMARY KEY,
-            symbol TEXT NOT NULL,
-            timestamp INTEGER NOT NULL,
-            amount_usd REAL NOT NULL,
-            from_owner TEXT,
-            from_owner_type TEXT,
-            to_owner TEXT,
-            to_owner_type TEXT,
-            recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    '''
-    cursor.execute(whale_transactions_sql)
+        # --- Create whale_transactions table ---
+        log.debug("Attempting to create whale_transactions table...")
+        whale_transactions_sql = '''
+            CREATE TABLE IF NOT EXISTS whale_transactions (
+                id TEXT PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                timestamp BIGINT NOT NULL,
+                amount_usd REAL NOT NULL,
+                from_owner TEXT,
+                from_owner_type TEXT,
+                to_owner TEXT,
+                to_owner_type TEXT,
+                recorded_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+        ''' if IS_POSTGRES else '''
+            CREATE TABLE IF NOT EXISTS whale_transactions (
+                id TEXT PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                amount_usd REAL NOT NULL,
+                from_owner TEXT,
+                from_owner_type TEXT,
+                to_owner TEXT,
+                to_owner_type TEXT,
+                recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        '''
+        cursor.execute(whale_transactions_sql)
+        log.debug("whale_transactions table creation command executed.")
 
-    # --- Create signals table ---
-    signals_sql = '''
-        CREATE TABLE IF NOT EXISTS signals (
-            id SERIAL PRIMARY KEY,
-            symbol TEXT NOT NULL,
-            signal_type TEXT NOT NULL,
-            reason TEXT,
-            price REAL,
-            timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        )
-    ''' if IS_POSTGRES else '''
-        CREATE TABLE IF NOT EXISTS signals (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            symbol TEXT NOT NULL,
-            signal_type TEXT NOT NULL,
-            reason TEXT,
-            price REAL,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    '''
-    cursor.execute(signals_sql)
+        # --- Create signals table ---
+        log.debug("Attempting to create signals table...")
+        signals_sql = '''
+            CREATE TABLE IF NOT EXISTS signals (
+                id SERIAL PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                signal_type TEXT NOT NULL,
+                reason TEXT,
+                price REAL,
+                timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+        ''' if IS_POSTGRES else '''
+            CREATE TABLE IF NOT EXISTS signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                signal_type TEXT NOT NULL,
+                reason TEXT,
+                price REAL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        '''
+        cursor.execute(signals_sql)
+        log.debug("signals table creation command executed.")
 
-    # --- Create trades table ---
-    trades_sql = '''
-        CREATE TABLE IF NOT EXISTS trades (
-            id SERIAL PRIMARY KEY,
-            symbol TEXT NOT NULL,
-            order_id TEXT UNIQUE,
-            side TEXT NOT NULL, -- BUY or SELL
-            entry_price REAL NOT NULL,
-            quantity REAL NOT NULL,
-            status TEXT NOT NULL, -- OPEN, CLOSED, CANCELED
-            pnl REAL, -- Profit and Loss
-            exit_price REAL,
-            entry_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            exit_timestamp TIMESTAMPTZ
-        )
-    ''' if IS_POSTGRES else '''
-        CREATE TABLE IF NOT EXISTS trades (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            symbol TEXT NOT NULL,
-            order_id TEXT UNIQUE,
-            side TEXT NOT NULL,
-            entry_price REAL NOT NULL,
-            quantity REAL NOT NULL,
-            status TEXT NOT NULL,
-            pnl REAL,
-            exit_price REAL,
-            entry_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            exit_timestamp TIMESTAMP
-        )
-    '''
-    cursor.execute(trades_sql)
+        # --- Create trades table ---
+        log.debug("Attempting to create trades table...")
+        trades_sql = '''
+            CREATE TABLE IF NOT EXISTS trades (
+                id SERIAL PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                order_id TEXT UNIQUE,
+                side TEXT NOT NULL, -- BUY or SELL
+                entry_price REAL NOT NULL,
+                quantity REAL NOT NULL,
+                status TEXT NOT NULL, -- OPEN, CLOSED, CANCELED
+                pnl REAL, -- Profit and Loss
+                exit_price REAL,
+                entry_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                exit_timestamp TIMESTAMPTZ
+            )
+        ''' if IS_POSTGRES else '''
+            CREATE TABLE IF NOT EXISTS trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                order_id TEXT UNIQUE,
+                side TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                quantity REAL NOT NULL,
+                status TEXT NOT NULL,
+                pnl REAL,
+                exit_price REAL,
+                entry_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                exit_timestamp TIMESTAMP
+            )
+        '''
+        cursor.execute(trades_sql)
+        log.debug("trades table creation command executed.")
 
-    conn.commit()
-    cursor.close()
-    conn.close()
-    log.info("Database initialized successfully.")
+        conn.commit()
+        log.info("Database tables created/verified successfully.")
+
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Error during database initialization: {e}")
+        if conn:
+            conn.rollback() # Rollback in case of error
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+    log.info("Database initialization process completed.")
 
 # --- Data Access Functions ---
 
