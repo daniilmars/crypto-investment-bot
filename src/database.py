@@ -288,3 +288,53 @@ def get_trade_summary(hours_ago: int = 24) -> dict:
         "total_pnl": total_pnl,
         "win_rate": win_rate
     }
+
+def get_whale_transactions_since(hours_ago: int = 24) -> list:
+    """
+    Retrieves all whale transactions recorded in the last N hours.
+    """
+    conn = get_db_connection()
+    if IS_POSTGRES:
+        from psycopg2.extras import RealDictCursor
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+    else:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+    if IS_POSTGRES:
+        query = "SELECT * FROM whale_transactions WHERE recorded_at >= NOW() - INTERVAL '%s hours' ORDER BY timestamp DESC"
+        cursor.execute(query, (hours_ago,))
+    else:
+        query = "SELECT * FROM whale_transactions WHERE recorded_at >= datetime('now', ? || ' hours') ORDER BY timestamp DESC"
+        cursor.execute(query, (f'-{hours_ago}',))
+    
+    transactions = [dict(row) for row in cursor.fetchall()]
+    cursor.close()
+    conn.close()
+    log.info(f"Retrieved {len(transactions)} whale transactions from the last {hours_ago} hours.")
+    return transactions
+
+def get_price_history_since(hours_ago: int = 24) -> list:
+    """
+    Retrieves all price history recorded in the last N hours.
+    """
+    conn = get_db_connection()
+    if IS_POSTGRES:
+        from psycopg2.extras import RealDictCursor
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+    else:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+    if IS_POSTGRES:
+        query = "SELECT * FROM market_prices WHERE timestamp >= NOW() - INTERVAL '%s hours' ORDER BY timestamp ASC"
+        cursor.execute(query, (hours_ago,))
+    else:
+        query = "SELECT * FROM market_prices WHERE timestamp >= datetime('now', ? || ' hours') ORDER BY timestamp ASC"
+        cursor.execute(query, (f'-{hours_ago}',))
+    
+    prices = [dict(row) for row in cursor.fetchall()]
+    cursor.close()
+    conn.close()
+    log.info(f"Retrieved {len(prices)} price points from the last {hours_ago} hours.")
+    return prices
