@@ -44,10 +44,43 @@ async def send_telegram_alert(signal: dict):
     except Exception as e:
         log.error(f"Error sending Telegram alert: {e}")
 
+async def send_performance_report(summary: dict, interval_hours: int):
+    """
+    Sends a periodic performance report to the Telegram chat.
+    """
+    if not telegram_config.get('enabled'):
+        log.info("Telegram notifications are disabled.")
+        return
+
+    if not TOKEN or not CHAT_ID or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
+        log.error("Telegram bot token or chat ID is not configured.")
+        return
+
+    bot = Bot(token=TOKEN)
+    
+    message = (
+        f"📈 *Bot Performance Report ({interval_hours}h)* 📈\n\n"
+        f"✅ Bot is running.\n\n"
+        f"*Trades (Paper Trading):*\n"
+        f"- Total Closed: {summary.get('total_closed', 0)}\n"
+        f"- Wins: {summary.get('wins', 0)}\n"
+        f"- Losses: {summary.get('losses', 0)}\n\n"
+        f"*Performance:*\n"
+        f"- Total PnL: ${summary.get('total_pnl', 0):,.2f}\n"
+        f"- Win Rate: {summary.get('win_rate', 0):.2f}%\n\n"
+        f"*This is a paper trading summary.*"
+    )
+
+    try:
+        await bot.send_message(chat_id=CHAT_ID, text=message, parse_mode='Markdown')
+        log.info("Successfully sent performance report.")
+    except Exception as e:
+        log.error(f"Error sending performance report: {e}")
+
 # --- Command Handlers ---
 async def start(update, context):
     """Handles the /start command."""
-    await update.message.reply_text('Crypto Investment Bot is running. Use /status to get a report.')
+    await update.message.reply_text('Crypto Investment Bot is running. Use /status to get a market report or /db_stats for database statistics.')
 
 async def status(update, context):
     """Handles the /status command."""
@@ -60,12 +93,16 @@ async def status(update, context):
     await update.message.reply_text('Fetching status and generating report...')
     
     try:
+        report_hours = app_config.get('settings', {}).get('status_report_hours', 24)
+
         # 1. Gather data
-        whale_transactions = get_whale_transactions_since(hours_ago=24)
-        price_history = get_price_history_since(hours_ago=24)
+        whale_transactions = get_whale_transactions_since(hours_ago=report_hours)
+        price_history = get_price_history_since(hours_ago=report_hours)
+        from src.database import get_last_signal # Import here to avoid circular dependency if needed
+        last_signal = get_last_signal()
         
         # 2. Generate summary
-        summary = generate_market_summary(whale_transactions, price_history)
+        summary = generate_market_summary(whale_transactions, price_history, last_signal)
         
         # 3. Send the report
         await update.message.reply_text(summary)

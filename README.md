@@ -6,25 +6,23 @@ A sophisticated, multi-source bot that analyzes on-chain activity and technical 
 
 ## 📘 Overview
 
-This bot is designed to identify potential crypto investment opportunities by systematically collecting and analyzing data from multiple key sources. It runs in a continuous cycle, fetching the latest data, evaluating it against a configurable strategy, and sending real-time alerts via Telegram for significant signals.
+This bot is designed to identify potential crypto investment opportunities by systematically collecting and analyzing data from multiple key sources. It runs in a continuous cycle, fetching the latest data, evaluating it against a configurable strategy, and, in **paper trading mode**, simulates trades and sends real-time alerts via Telegram for significant signals.
 
-All collected data is stored in a local **SQLite database**, enabling historical analysis and strategy evaluation with a built-in **backtesting framework**.
+All collected data, along with simulated trades and generated signals, is stored in a local **SQLite database**, enabling historical analysis and strategy evaluation with a built-in **backtesting framework**.
 
 ---
 
 ## 🧠 Core Features
 
 -   📊 **Multi-Source Data Collection:**
-    -   **On-Chain Activity:** Whale Alert API for large transaction tracking.
-    -   **Market Data:** Real-time prices from Binance.
--   💾 **Data Persistence:** All collected data is automatically saved to a local SQLite database for historical analysis.
--   🧮 **Technical Analysis Signal Engine:** A rule-based engine that combines on-chain flow with two key technical indicators for robust signals:
-    -   **Simple Moving Average (SMA):** To identify the primary market trend.
-    -   **Relative Strength Index (RSI):** To measure momentum and identify overbought/oversold conditions.
--   🧪 **Backtesting Framework:** A powerful simulation tool (`backtest.py`) that runs your strategy against historical data to objectively measure its performance (Profit/Loss, number of trades).
--   📲 **Telegram Notifications:** Instant alerts for BUY or SELL signals sent directly to your Telegram.
+    -   **On-Chain Activity:** Whale Alert API for large transaction tracking, including expanded stablecoin inflow analysis.
+    -   **Market Data:** Real-time prices from Binance for an expanded `watch_list` of cryptocurrencies.
+-   💾 **Data Persistence:** All collected data, generated signals, and simulated trades are automatically saved to a local SQLite database for historical analysis.
+-   🧮 **Technical Analysis Signal Engine:** A configurable, rule-based engine that combines on-chain flow with two key technical indicators (SMA and RSI) for robust, symbol-specific signals.
+-   🧪 **Paper Trading Framework:** A powerful simulation mode that executes trades against live market data without risking real capital, recording all trades to the database.
+-   📲 **Telegram Notifications:** Instant alerts for BUY or SELL signals, plus regular, automated performance reports sent directly to your Telegram.
 -   📝 **Structured Logging:** Professional logging for clear, timestamped monitoring of the bot's activity.
--   🤖 **AI-Powered Status Reports:** An interactive `/status` command in Telegram that uses the Gemini API to provide AI-generated summaries of market activity and bot health over the last 24 hours.
+-   🤖 **AI-Powered Status Reports:** An interactive `/status` command in Telegram that uses the Gemini API to provide AI-generated summaries of market activity and bot health, including the last generated signal.
 
 ---
 
@@ -34,7 +32,7 @@ The project is divided into two key architectural components: the application lo
 
 ### Application Architecture
 
-The bot's core logic follows a linear data flow, from collection to notification. The database is designed to be PostgreSQL in production for reliability and SQLite for ease of local development.
+The bot's core logic follows a linear data flow, from collection to notification. The database is designed to be PostgreSQL in production for reliability and SQLite for ease of local development, now also storing generated signals and simulated trades.
 
 ```text
 +--------------------------------+
@@ -48,6 +46,8 @@ The bot's core logic follows a linear data flow, from collection to notification
 |   Database (database.py)       |
 |  - PostgreSQL (Production)     |
 |  - SQLite (Local Development)  |
+|  - Trades Table                |
+|  - Signals Table               |
 +----------------+---------------+
                  |
                  v
@@ -63,7 +63,8 @@ v                v                                v
 +----------------+--+      +----------------+--+      +----------------+--+
 | Notification      |      | Backtesting       |      | Live Execution    |
 | - telegram_bot.py |      | - backtest.py     |      | - main.py (worker)|
-+-------------------+      +-------------------+      +-------------------+
++-------------------+      +-------------------+      | - binance_trader.py |
+                                                       +-------------------+
 ```
 
 ---
@@ -94,7 +95,13 @@ v                v                                v
 
 3.  **Configure the bot:**
     -   Rename `config/settings.yaml.example` to `config/settings.yaml`.
-    -   Open `config/settings.yaml` and add your API keys and Telegram details.
+    -   Open `config/settings.yaml` and add your API keys and Telegram details. Also, review and adjust the new settings for:
+        -   `watch_list`: Expanded list of cryptocurrencies to monitor.
+        -   `stablecoins_to_monitor`: Expanded list of stablecoins for inflow analysis.
+        -   `sma_period`, `rsi_overbought_threshold`, `rsi_oversold_threshold`: Configurable technical indicator parameters.
+        -   `paper_trading`, `paper_trading_initial_capital`: Enable/disable paper trading and set initial capital.
+        -   `trade_risk_percentage`, `stop_loss_percentage`, `take_profit_percentage`, `max_concurrent_positions`: Essential risk management parameters.
+        -   `regular_status_update`: Configure automated performance reports to Telegram.
 
 ---
 
@@ -122,8 +129,36 @@ The backtester will output the simulated Profit/Loss based on the logic in `sign
 
 Once the bot is running, you can interact with it directly in your configured Telegram chat:
 
--   `/start`: Initializes the bot and confirms it's running.
--   `/status`: The bot will perform a health check and use the Gemini API to generate a detailed summary of market activity over the last 24 hours, including significant whale movements and price trends.
+-   `/start`: Initializes the bot and confirms it's running. Also provides a brief overview of available commands.
+-   `/status`: The bot will perform a health check and use the Gemini API to generate a detailed summary of market activity and bot health, including the last generated signal.
+-   `/db_stats`: Provides a quick overview of the number of entries in the `whale_transactions`, `market_prices`, `signals`, and `trades` tables.
+
+Additionally, if configured, the bot will send **regular, automated performance reports** to your Telegram chat at a set interval (e.g., hourly), summarizing paper trading activity and PnL.
+
+### Paper Trading Configuration
+
+To enable or disable paper trading, and to configure its parameters, edit the `settings.yaml` file:
+
+```yaml
+settings:
+  # ... other settings ...
+
+  paper_trading: true # Set to false to disable paper trading (NOT RECOMMENDED FOR LIVE TRADING YET)
+  paper_trading_initial_capital: 10000.0 # Starting capital for simulation
+
+  # Risk Management Settings
+  trade_risk_percentage: 0.01 # e.g., 1% of total capital per trade
+  stop_loss_percentage: 0.02  # e.g., 2% below entry price
+  take_profit_percentage: 0.05 # e.g., 5% above entry price
+  max_concurrent_positions: 3 # Limit open trades
+
+  # Regular Status Update Settings
+  regular_status_update:
+    enabled: true
+    interval_hours: 1 # Send report every 1 hour
+```
+
+**Important:** Always start with `paper_trading: true` and thoroughly test your strategy before considering live trading.
 
 ---
 
@@ -343,17 +378,19 @@ Once the setup is complete, the process is fully automated:
 
 | Category      | Source         | API                                                                |
 | ------------- | -------------- | ------------------------------------------------------------------ |
-| On-Chain      | Whale Alert    | [https://whale-alert.io](https://whale-alert.io)                   |
+| On-Chain      | Whale Alert    | [https://whale-alert.io](https://whale-alert.io) (Monitors BTC, ETH, SOL, XRP, ADA, AVAX, DOGE, MATIC, BNB, TRX, USDT, USDC, BUSD, DAI, TUSD, FDUSD, PYUSD and more) |
 | Marktpreise   | Binance        | [https://binance-docs.github.io](https://binance-docs.github.io)   |
 
 ---
 
 ## 🧱 Next Steps & Extensions
 
--   🤖 Enhance the signal engine with more technical indicators (e.g., MACD, Bollinger Bands).
--   🕸 Build a web dashboard with Streamlit or Flask to visualize data and backtest results.
--   🧩 Implement auto-portfolio management via the Binance API.
+Refer to `docs/LIVE_TRADING_ROADMAP.md` for the detailed strategic plan to evolve this bot into a fully automated trader. Our immediate focus is on:
 
+-   **Phase 1: Enhancing Current Intelligence and Usability** (Signal Engine improvements, richer Telegram reports).
+-   **Phase 2: Building Core Trading Infrastructure (Paper Trading First)** (Trade execution, position management, essential risk parameters, and robust paper trading mode).
+
+Future considerations include advanced trading strategies (arbitrage, market making, AI/ML), sophisticated risk management, and a professional-grade system architecture.
 ---
 
 ## ⚠️ Disclaimer

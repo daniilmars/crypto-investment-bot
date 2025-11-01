@@ -4,6 +4,7 @@ import os
 import time
 from src.logger import log
 from src.config import app_config
+from src.execution.binance_trader import initialize_trades_table
 
 import re
 
@@ -123,12 +124,82 @@ def initialize_database():
     '''
     cursor.execute(whale_transactions_sql)
 
+    # --- Create signals table ---
+    signals_sql = '''
+        CREATE TABLE IF NOT EXISTS signals (
+            id SERIAL PRIMARY KEY,
+            symbol TEXT NOT NULL,
+            signal_type TEXT NOT NULL,
+            reason TEXT,
+            price REAL,
+            timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+    ''' if IS_POSTGRES else '''
+        CREATE TABLE IF NOT EXISTS signals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT NOT NULL,
+            signal_type TEXT NOT NULL,
+            reason TEXT,
+            price REAL,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    '''
+    cursor.execute(signals_sql)
+
     conn.commit()
     cursor.close()
     conn.close()
     log.info("Database initialized successfully.")
+    initialize_trades_table()
 
 # --- Data Access Functions ---
+
+def save_signal(signal_data: dict):
+    """
+    Saves a generated signal to the database.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    query = 'INSERT INTO signals (symbol, signal_type, reason, price) VALUES (%s, %s, %s, %s)' if IS_POSTGRES else \
+            'INSERT INTO signals (symbol, signal_type, reason, price) VALUES (?, ?, ?, ?)'
+
+    cursor.execute(query, (
+        signal_data.get('symbol'),
+        signal_data.get('signal'),
+        signal_data.get('reason'),
+        signal_data.get('current_price')
+    ))
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+    log.info(f"Saved signal for {signal_data.get('symbol')}: {signal_data.get('signal')}")
+
+def get_last_signal():
+    """
+    Retrieves the last generated signal from the database.
+    Returns a dictionary with signal details or an empty dict if no signals.
+    """
+    conn = get_db_connection()
+    if IS_POSTGRES:
+        from psycopg2.extras import RealDictCursor
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+    else:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+    query = 'SELECT symbol, signal_type AS signal, reason, price AS current_price, timestamp FROM signals ORDER BY timestamp DESC LIMIT 1'
+    cursor.execute(query)
+    
+    last_signal = cursor.fetchone()
+    
+    cursor.close()
+    conn.close()
+    
+    if last_signal:
+        return dict(last_signal)
+    return {"signal": "HOLD", "symbol": "N/A", "reason": "No signals recorded yet.", "timestamp": "N/A"}
 
 def get_historical_prices(symbol: str, limit: int = 5):
     """
@@ -151,59 +222,9 @@ def get_historical_prices(symbol: str, limit: int = 5):
     prices.reverse()
     return prices
 
-def get_transaction_timestamps_since(symbol: str, hours_ago: int):
+def get_trade_summary(hours_ago: int = 24) -> dict:
     """
-    Retrieves all transaction timestamps for a symbol since a certain number of hours ago.
-    """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    if IS_POSTGRES:
-        query = "SELECT timestamp FROM whale_transactions WHERE symbol = %s AND recorded_at >= NOW() - INTERVAL '%s hours'"
-        cursor.execute(query, (symbol, hours_ago))
-    else:
-        start_timestamp = int(time.time()) - (hours_ago * 3600)
-        query = "SELECT timestamp FROM whale_transactions WHERE symbol = ? AND timestamp >= ?"
-        cursor.execute(query, (symbol, start_timestamp))
-    
-    timestamps = [row[0] for row in cursor.fetchall()]
-    
-    cursor.close()
-    conn.close()
-        
-    return timestamps
-
-def get_whale_transactions_since(hours_ago: int = 24):
-    """
-    Retrieves all whale transactions since a certain number of hours ago.
-    Returns a list of dictionaries.
-    """
-    conn = get_db_connection()
-    # Use a dictionary cursor for PostgreSQL or a row factory for SQLite
-    if IS_POSTGRES:
-        from psycopg2.extras import RealDictCursor
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
-    else:
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-
-    if IS_POSTGRES:
-        query = "SELECT * FROM whale_transactions WHERE recorded_at >= NOW() - INTERVAL '%s hours' ORDER BY timestamp DESC"
-        cursor.execute(query, (hours_ago,))
-    else:
-        start_timestamp = int(time.time()) - (hours_ago * 3600)
-        query = "SELECT * FROM whale_transactions WHERE timestamp >= ? ORDER BY timestamp DESC"
-        cursor.execute(query, (start_timestamp,))
-    
-    transactions = [dict(row) for row in cursor.fetchall()]
-    
-    cursor.close()
-    conn.close()
-    return transactions
-
-def get_price_history_since(hours_ago: int = 24):
-    """
-    Retrieves the price history for all symbols since a certain number of hours ago.
+    Calculates and returns a summary of trade performance over a given period.
     """
     conn = get_db_connection()
     if IS_POSTGRES:
@@ -214,35 +235,26 @@ def get_price_history_since(hours_ago: int = 24):
         cursor = conn.cursor()
 
     if IS_POSTGRES:
-        query = "SELECT symbol, price, timestamp FROM market_prices WHERE timestamp >= NOW() - INTERVAL '%s hours' ORDER BY timestamp ASC"
+        query = "SELECT * FROM trades WHERE status = 'CLOSED' AND exit_timestamp >= NOW() - INTERVAL '%s hours'"
         cursor.execute(query, (hours_ago,))
     else:
-        # For SQLite, CURRENT_TIMESTAMP is UTC, so we can compare directly
-        query = "SELECT symbol, price, timestamp FROM market_prices WHERE timestamp >= datetime('now', ? || ' hours') ORDER BY timestamp ASC"
+        query = "SELECT * FROM trades WHERE status = 'CLOSED' AND exit_timestamp >= datetime('now', ? || ' hours')"
         cursor.execute(query, (f'-{hours_ago}',))
-
-    history = [dict(row) for row in cursor.fetchall()]
     
+    closed_trades = [dict(row) for row in cursor.fetchall()]
     cursor.close()
     conn.close()
-    return history
 
-def get_table_counts():
-    """
-    Retrieves the row counts for the primary tables in the database.
-    """
-    counts = {}
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    # Count whale_transactions
-    cursor.execute("SELECT COUNT(*) FROM whale_transactions")
-    counts['whale_transactions'] = cursor.fetchone()[0]
-    
-    # Count market_prices
-    cursor.execute("SELECT COUNT(*) FROM market_prices")
-    counts['market_prices'] = cursor.fetchone()[0]
-    
-    cursor.close()
-    conn.close()
-    return counts
+    total_trades = len(closed_trades)
+    wins = sum(1 for trade in closed_trades if trade.get('pnl', 0) > 0)
+    losses = total_trades - wins
+    total_pnl = sum(trade.get('pnl', 0) for trade in closed_trades)
+    win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+
+    return {
+        "total_closed": total_trades,
+        "wins": wins,
+        "losses": losses,
+        "total_pnl": total_pnl,
+        "win_rate": win_rate
+    }

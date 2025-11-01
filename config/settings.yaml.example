@@ -44,12 +44,27 @@ settings:
 
   # List of cryptocurrencies to monitor. Use symbols.
   # Example: ["BTC", "ETH", "SOL"]
-  watch_list:
-    - "BTC"
-    - "ETH"
-
+    watch_list:
+      - "BTC"
+      - "ETH"
+      - "SOL"
+      - "XRP"
+      - "ADA"
+      - "AVAX"
+      - "DOGE"
+      - "MATIC"
+      - "BNB"
+      - "TRX" 
   # How often the bot should run its analysis cycle, in minutes.
   run_interval_minutes: 15
+
+  # -- Technical Indicator Settings --
+  # Period for Simple Moving Average (SMA) calculation.
+  sma_period: 20
+  # RSI overbought threshold (e.g., 70 for overbought).
+  rsi_overbought_threshold: 70
+  # RSI oversold threshold (e.g., 30 for oversold).
+  rsi_oversold_threshold: 30
 
   # -- Advanced Signal Settings --
   # List of specific wallet owners to watch for high-priority signals.
@@ -63,12 +78,14 @@ settings:
   stablecoin_inflow_threshold_usd: 100000000
 
   # List of stablecoin symbols (lowercase) to monitor for exchange inflows.
-  stablecoins_to_monitor:
-    - "usdt"
-    - "usdc"
-    - "busd"
-    - "dai"
-
+    stablecoins_to_monitor:
+      - "usdt"
+      - "usdc"
+      - "busd"
+      - "dai"
+      - "tusd"
+      - "fdusd"
+      - "pyusd" 
   # -- Volatility & Anomaly Detection --
   # The number of hours to look back to establish a baseline for transaction frequency.
   transaction_velocity_baseline_hours: 24
@@ -76,3 +93,28 @@ settings:
   # The multiplier to apply to the baseline average. If the current hour's transaction
   # count exceeds this, it's flagged as a volatility anomaly.
   transaction_velocity_threshold_multiplier: 5.0
+
+  # -- Telegram Bot Settings --
+  # The number of hours to look back for the /status report.
+  status_report_hours: 24
+
+  # -- Trading Settings --
+  # Enable or disable paper trading mode. If true, no real trades will be placed.
+  paper_trading: true
+  # Initial capital for paper trading simulation.
+  paper_trading_initial_capital: 10000.0
+
+  # -- Risk Management Settings --
+  # Percentage of total capital to risk per trade (e.g., 0.01 for 1%).
+  trade_risk_percentage: 0.01
+  # Percentage below entry price to set a stop-loss (e.g., 0.02 for 2%).
+  stop_loss_percentage: 0.02
+  # Percentage above entry price to set a take-profit (e.g., 0.05 for 5%).
+  take_profit_percentage: 0.05
+  # Maximum number of concurrent open positions.
+  max_concurrent_positions: 3
+
+  # -- Regular Status Update Settings --
+  regular_status_update:
+    enabled: true
+    interval_hours: 1

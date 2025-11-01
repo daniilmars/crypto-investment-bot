@@ -164,7 +164,7 @@ While SQLite was excellent for initial development, it is not suitable for a pro
 **Date:** 2025-10-15
 
 **Decision:**
-- **Implemented a full CI/CD pipeline using GitHub Actions.** A workflow was created at `.github/workflows/deploy.yml` that automates the testing and deployment of the application.
+- **Implemented a full CI/CD pipeline using GitHub Actions.** A workflow was created at `.github/workflows/deploy.yml` that automates the testing and deployment of the.
 - **The workflow is triggered on every push to the `master` branch.** It performs the following steps:
     1.  Installs all project dependencies.
     2.  Runs the complete `pytest` suite.
@@ -246,3 +246,35 @@ A multi-step debugging and resolution process was undertaken to achieve a stable
 **Reasoning:**
 Deploying a multi-threaded, networked application to a serverless environment like Cloud Run requires careful management of the applications lifecycle, concurrency, and network configuration. These decisions document the iterative process of hardening the application to make it compatible with the specific requirements of the Cloud Run platform, resulting in a stable and resilient deployment.
 
+---
+
+### ADR-017: Enhancements for Mid-Frequency Trading and Paper Trading Readiness
+
+**Date:** 2025-11-01
+
+**Decision:**
+- **Expanded Cryptocurrency and Stablecoin Monitoring:** The `watch_list` was expanded to include 10 major cryptocurrencies (BTC, ETH, SOL, XRP, ADA, AVAX, DOGE, MATIC, BNB, TRX), and the `stablecoins_to_monitor` list was extended with TUSD, FDUSD, and PYUSD in `config/settings.yaml.example`.
+- **Improved Signal Engine Configurability:** The `signal_engine.py` was updated to use configurable `sma_period`, `rsi_overbought_threshold`, and `rsi_oversold_threshold` from `settings.yaml.example`. The whale flow analysis was refactored to be symbol-specific, and the transaction velocity anomaly check was simplified.
+- **Enhanced Telegram `/status` Report:** The `/status` command in `telegram_bot.py` now uses a configurable `status_report_hours` from `settings.yaml.example`. The report also includes the bot's last generated signal, and the `/start` message was updated to mention the `/db_stats` command. The `gemini_summary.py` was updated to incorporate the last signal into the AI's market summary prompt.
+- **Implemented Signal and Trade Persistence:** New `signals` and `trades` tables were added to the database (`src/database.py`) to store generated signals and simulated trade records. Functions `save_signal` and `get_last_signal` were implemented.
+- **Introduced Paper Trading Infrastructure:** A new `src/execution/binance_trader.py` module was created with `place_order` (for simulated trades), `get_open_positions`, and `get_account_balance` functions. The `initialize_trades_table` function was integrated into `src/database.py`.
+- **Integrated Paper Trading Logic into Main Loop:** The `main.py` was updated to load `paper_trading` and risk management parameters (`trade_risk_percentage`, `stop_loss_percentage`, `take_profit_percentage`, `max_concurrent_positions`, `paper_trading_initial_capital`) from `settings.yaml.example`. The `run_bot_cycle` now includes logic for monitoring open positions, applying stop-loss/take-profit, and placing simulated BUY/SELL orders based on signals and risk management rules.
+
+**Reasoning:**
+These decisions represent a significant step towards building a robust, mid-frequency automated trading bot. By expanding asset coverage, making the signal engine more configurable, enhancing reporting, and introducing a comprehensive paper trading system with basic risk management, the bot is now better equipped for realistic simulation and future live trading. The focus on paper trading allows for thorough testing and validation of the strategy and risk controls without financial risk, aligning with the strategic roadmap for live trading readiness.
+
+---
+
+### ADR-018: Implementation of Regular Performance Notifications
+
+**Date:** 2025-11-01
+
+**Decision:**
+- **Implemented a new feature for regular, automated status updates via Telegram.** This provides periodic, at-a-glance summaries of the bot's paper trading performance.
+- **Made the feature configurable:** Added a `regular_status_update` section to `config/settings.yaml.example` to enable/disable the feature and set the update interval (defaulting to 1 hour as requested).
+- **Created a new database function (`get_trade_summary`):** This function queries the `trades` table to calculate key performance indicators (total PnL, win/loss count, win rate) for closed trades within the reporting period.
+- **Added a new Telegram notifier (`send_performance_report`):** This function formats the performance summary into a clear, readable message.
+- **Implemented a background scheduler:** A new thread (`status_update_loop`) was added to `main.py` to run the reporting task at the configured interval without blocking the main trading logic.
+
+**Reasoning:**
+This feature significantly improves the bot's observability and user-friendliness. Instead of relying solely on on-demand `/status` checks, users now receive proactive, regular updates on the bot's health and trading performance. This is a crucial feature for monitoring the bot's effectiveness over time, especially during extended paper trading tests, and builds confidence in the system before a live deployment. The multi-threaded implementation ensures this new feature does not interfere with the core trading cycle.
