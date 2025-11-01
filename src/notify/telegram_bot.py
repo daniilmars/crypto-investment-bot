@@ -251,7 +251,9 @@ async def db_stats(update, context):
         message = (
             f"📊 *Database Statistics* 📊\n\n"
             f"Whale Transactions: `{counts.get('whale_transactions', 0)}`\n"
-            f"Market Prices: `{counts.get('market_prices', 0)}`"
+            f"Market Prices: `{counts.get('market_prices', 0)}`\n"
+            f"Signals: `{counts.get('signals', 0)}`\n"
+            f"Trades: `{counts.get('trades', 0)}`"
         )
         await update.message.reply_text(message, parse_mode='Markdown')
     except Exception as e:
