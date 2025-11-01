@@ -264,7 +264,7 @@ async def start_bot():
     """Initializes and starts the Telegram bot application."""
     if not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
         log.error("Cannot start Telegram bot: Token is not configured.")
-        return
+        return None
 
     log.info("Starting Telegram bot listener...")
     application = Application.builder().token(TOKEN).build()
@@ -284,15 +284,14 @@ async def start_bot():
     await application.start()
     await application.updater.start_polling()
     log.info("Telegram bot is now polling.")
-
-    # Keep the bot running
-    while True:
-        await asyncio.sleep(3600) # Sleep for an hour, the bot runs in the background
+    
+    return application
 
 async def stop_bot(application):
     """Stops the Telegram bot gracefully."""
-    log.info("Stopping Telegram bot...")
-    await application.updater.stop()
-    await application.stop()
-    await application.shutdown()
-    log.info("Telegram bot stopped.")
+    if application:
+        log.info("Stopping Telegram bot...")
+        await application.updater.stop()
+        await application.stop()
+        await application.shutdown()
+        log.info("Telegram bot stopped.")

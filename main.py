@@ -161,10 +161,10 @@ def bot_loop():
     The main indefinite loop for the bot.
     """
     run_interval_minutes = app_config.get('settings', {}).get('run_interval_minutes', 15)
-    while True:
+    while not shutdown_event.is_set():
         run_bot_cycle()
         log.info(f"Cycle complete. Waiting for {run_interval_minutes} minutes...")
-        time.sleep(run_interval_minutes * 60)
+        shutdown_event.wait(run_interval_minutes * 60)
 
 def status_update_loop():
     """
@@ -175,63 +175,95 @@ def status_update_loop():
         log.info("Regular status updates are disabled.")
         return
 
-    interval_hours = status_config.get('interval_hours', 24)
+    interval_hours = status_config.get('interval_hours', 1)
     log.info(f"Starting regular status update loop. Interval: {interval_hours} hours.")
     
     from src.database import get_trade_summary
     from src.notify.telegram_bot import send_performance_report
 
-    while True:
+    while not shutdown_event.is_set():
         try:
             log.info("Fetching trade summary for periodic status update...")
             summary = get_trade_summary(hours_ago=interval_hours)
+            # We need to run the async function in a thread-safe way
             asyncio.run(send_performance_report(summary, interval_hours))
         except Exception as e:
             log.error(f"Error in status_update_loop: {e}")
         
-        time.sleep(interval_hours * 3600)
+        # Wait for the interval, but check for shutdown event periodically
+        shutdown_event.wait(interval_hours * 3600)
 
 def start_health_check_server():
     """
     Starts a simple HTTP server in a thread to respond to Cloud Run health checks.
     """
     port = int(os.environ.get("PORT", 8080))
-    handler = http.server.SimpleHTTPRequestHandler
     
-    with socketserver.TCPServer(("", port), handler) as httpd:
+    class HealthCheckHandler(http.server.SimpleHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"OK")
+
+    with socketserver.TCPServer(("", port), HealthCheckHandler) as httpd:
         log.info(f"Health check server started on port {port}")
         httpd.serve_forever()
 
 if __name__ == "__main__":
-    # Initialize the database first
-    initialize_database()
-
-    # Create the bot application instance
-    from src.notify.telegram_bot import start_bot, stop_bot
+    # --- Global Application State ---
+    telegram_app = None
+    shutdown_event = threading.Event()
     
-    # Start the main bot cycle in a separate thread
-    main_bot_thread = threading.Thread(target=bot_loop)
-    main_bot_thread.daemon = True
-    main_bot_thread.start()
+    # --- Graceful Shutdown Logic ---
+    def shutdown(signum, frame):
+        """Gracefully shuts down all application threads."""
+        if not shutdown_event.is_set():
+            log.info(f"Shutdown signal {signum} received. Initiating graceful shutdown...")
+            shutdown_event.set() # Signal all loops to exit
 
-    # Start the periodic status update loop in a separate thread
-    status_update_thread = threading.Thread(target=status_update_loop)
-    status_update_thread.daemon = True
-    status_update_thread.start()
+            # Stop the Telegram bot
+            if telegram_app:
+                # Running async stop function from a sync context
+                asyncio.run(stop_bot(telegram_app))
+            
+            log.info("Shutdown complete.")
+    
+    # Register signal handlers
+    import signal
+    signal.signal(signal.SIGINT, shutdown)
+    signal.signal(signal.SIGTERM, shutdown)
 
-    # Start the Telegram bot listener in a separate thread
-    telegram_thread = threading.Thread(target=asyncio.run, args=(start_bot(),))
-    telegram_thread.daemon = True
-    telegram_thread.start()
-
+    # --- Main Application ---
     try:
+        # Initialize the database first
+        initialize_database()
+
+        # Start the Telegram bot and get the application instance
+        from src.notify.telegram_bot import start_bot, stop_bot
+        telegram_app = asyncio.run(start_bot())
+
+        if telegram_app:
+            # Start the main bot cycle in a separate thread
+            main_bot_thread = threading.Thread(target=bot_loop)
+            main_bot_thread.daemon = True
+            main_bot_thread.start()
+
+            # Start the periodic status update loop in a separate thread
+            status_update_thread = threading.Thread(target=status_update_loop)
+            status_update_thread.daemon = True
+            status_update_thread.start()
+        else:
+            log.error("Failed to initialize Telegram bot. Application will not start.")
+            shutdown(None, None)
+
         # Start the health check server in the main thread
         # This is crucial for Cloud Run to keep the instance alive.
         start_health_check_server()
-    finally:
-        # Gracefully stop the Telegram bot
-        asyncio.run(stop_bot())
 
-    # Start the health check server in the main thread
-    # This is crucial for Cloud Run to keep the instance alive.
-    start_health_check_server()
+    except (KeyboardInterrupt, SystemExit):
+        log.info("Caught KeyboardInterrupt or SystemExit.")
+        shutdown(None, None)
+    except Exception as e:
+        log.error(f"An unexpected error occurred in the main thread: {e}", exc_info=True)
+        shutdown(None, None)
