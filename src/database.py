@@ -338,3 +338,69 @@ def get_price_history_since(hours_ago: int = 24) -> list:
     conn.close()
     log.info(f"Retrieved {len(prices)} price points from the last {hours_ago} hours.")
     return prices
+
+def get_transaction_timestamps_since(symbol: str, hours_ago: int) -> list:
+    """
+    Retrieves the timestamps of all whale transactions for a specific symbol
+    in the last N hours.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    if IS_POSTGRES:
+        query = "SELECT timestamp FROM whale_transactions WHERE symbol = %s AND recorded_at >= NOW() - INTERVAL '%s hours'"
+        cursor.execute(query, (symbol, hours_ago))
+    else:
+        query = "SELECT timestamp FROM whale_transactions WHERE symbol = ? AND recorded_at >= datetime('now', ? || ' hours')"
+        cursor.execute(query, (symbol, f'-{hours_ago}'))
+        
+    timestamps = [row[0] for row in cursor.fetchall()]
+    cursor.close()
+    conn.close()
+    return timestamps
+
+def get_table_counts() -> dict:
+    """
+    Retrieves the row count for the main tables in the database.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    tables = ["whale_transactions", "market_prices", "signals", "trades"]
+    counts = {}
+
+    for table in tables:
+        try:
+            query = f"SELECT COUNT(*) FROM {table}"
+            cursor.execute(query)
+            count = cursor.fetchone()[0]
+            counts[table] = count
+        except (sqlite3.OperationalError, psycopg2.errors.UndefinedTable):
+            # If a table doesn't exist yet, report 0
+            counts[table] = 0
+            log.warning(f"Table '{table}' not found while getting counts. Assuming 0.")
+
+    cursor.close()
+    conn.close()
+    log.info(f"Retrieved table counts: {counts}")
+    return counts
+
+def get_transaction_timestamps_since(symbol: str, hours_ago: int) -> list:
+    """
+    Retrieves the timestamps of all whale transactions for a specific symbol
+    in the last N hours.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    if IS_POSTGRES:
+        query = "SELECT timestamp FROM whale_transactions WHERE symbol = %s AND recorded_at >= NOW() - INTERVAL '%s hours'"
+        cursor.execute(query, (symbol, hours_ago))
+    else:
+        query = "SELECT timestamp FROM whale_transactions WHERE symbol = ? AND recorded_at >= datetime('now', ? || ' hours')"
+        cursor.execute(query, (symbol, f'-{hours_ago}'))
+        
+    timestamps = [row[0] for row in cursor.fetchall()]
+    cursor.close()
+    conn.close()
+    return timestamps
