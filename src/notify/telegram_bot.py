@@ -80,7 +80,133 @@ async def send_performance_report(summary: dict, interval_hours: int):
 # --- Command Handlers ---
 async def start(update, context):
     """Handles the /start command."""
-    await update.message.reply_text('Crypto Investment Bot is running. Use /status to get a market report or /db_stats for database statistics.')
+    await update.message.reply_text('Crypto Investment Bot is running. Use /help to see a list of available commands.')
+
+async def help_command(update, context):
+    """Handles the /help command."""
+    help_text = (
+        "*Available Commands:*\n\n"
+        "/start - Check if the bot is running.\n"
+        "/status - Get a detailed AI-generated market and bot health summary.\n"
+        "/positions - View all open paper trades.\n"
+        "/performance - Get a performance report of closed trades.\n"
+        "/db_stats - View database table statistics.\n"
+        "/pause - Temporarily pause new trades.\n"
+        "/resume - Resume trading after a pause.\n"
+        "/help - Show this help message."
+    )
+    await update.message.reply_text(help_text, parse_mode='Markdown')
+
+async def positions(update, context):
+    """Handles the /positions command."""
+    # --- Authorization Check ---
+    if str(update.message.chat_id) != str(CHAT_ID):
+        log.warning(f"Unauthorized /positions command from chat_id: {update.message.chat_id}")
+        await update.message.reply_text("You are not authorized to use this command.")
+        return
+
+    try:
+        from src.execution.binance_trader import get_open_positions
+        from src.collectors.binance_data import get_current_price
+        
+        open_positions = get_open_positions()
+        if not open_positions:
+            await update.message.reply_text("No open positions.")
+            return
+
+        message = "📊 *Open Positions (Paper Trading)* 📊\n\n"
+        total_pnl = 0
+
+        for pos in open_positions:
+            symbol = pos.get('symbol')
+            quantity = pos.get('quantity', 0)
+            entry_price = pos.get('entry_price', 0)
+            
+            price_data = get_current_price(f"{symbol}USDT")
+            current_price = float(price_data.get('price', 0)) if price_data else entry_price
+            
+            pnl = (current_price - entry_price) * quantity
+            pnl_percentage = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+            total_pnl += pnl
+
+            message += (
+                f"*Symbol: {symbol}*\n"
+                f"- Quantity: {quantity}\n"
+                f"- Entry Price: ${entry_price:,.2f}\n"
+                f"- Current Price: ${current_price:,.2f}\n"
+                f"- PnL: ${pnl:,.2f} ({pnl_percentage:+.2f}%)\n\n"
+            )
+        
+        message += f"*Total PnL on Open Positions: ${total_pnl:,.2f}*"
+        await update.message.reply_text(message, parse_mode='Markdown')
+
+    except Exception as e:
+        log.error(f"Error fetching open positions: {e}")
+        await update.message.reply_text("Sorry, there was an error fetching open positions.")
+
+async def performance(update, context):
+    """Handles the /performance command."""
+    # --- Authorization Check ---
+    if str(update.message.chat_id) != str(CHAT_ID):
+        log.warning(f"Unauthorized /performance command from chat_id: {update.message.chat_id}")
+        await update.message.reply_text("You are not authorized to use this command.")
+        return
+
+    try:
+        from src.database import get_trade_summary
+        
+        # For now, we'll use the same lookback period as the status report.
+        # This could be extended to accept arguments like /performance 7d
+        report_hours = app_config.get('settings', {}).get('status_report_hours', 24)
+        summary = get_trade_summary(hours_ago=report_hours)
+
+        message = (
+            f"📈 *Performance Report ({report_hours}h)* 📈\n\n"
+            f"*Trades (Paper Trading):*\n"
+            f"- Total Closed: {summary.get('total_closed', 0)}\n"
+            f"- Wins: {summary.get('wins', 0)}\n"
+            f"- Losses: {summary.get('losses', 0)}\n\n"
+            f"*Performance:*\n"
+            f"- Total PnL: ${summary.get('total_pnl', 0):,.2f}\n"
+            f"- Win Rate: {summary.get('win_rate', 0):.2f}%"
+        )
+        await update.message.reply_text(message, parse_mode='Markdown')
+
+    except Exception as e:
+        log.error(f"Error fetching performance summary: {e}")
+        await update.message.reply_text("Sorry, there was an error fetching the performance summary.")
+
+async def pause(update, context):
+    """Handles the /pause command."""
+    # --- Authorization Check ---
+    if str(update.message.chat_id) != str(CHAT_ID):
+        log.warning(f"Unauthorized /pause command from chat_id: {update.message.chat_id}")
+        await update.message.reply_text("You are not authorized to use this command.")
+        return
+    
+    from src.state import bot_is_running
+    if bot_is_running.is_set():
+        bot_is_running.clear() # Pauses the bot
+        log.info("Bot trading has been paused via Telegram command.")
+        await update.message.reply_text("⏸️ Bot trading is now paused. Open positions will still be monitored, but no new trades will be initiated.")
+    else:
+        await update.message.reply_text("Bot is already paused.")
+
+async def resume(update, context):
+    """Handles the /resume command."""
+    # --- Authorization Check ---
+    if str(update.message.chat_id) != str(CHAT_ID):
+        log.warning(f"Unauthorized /resume command from chat_id: {update.message.chat_id}")
+        await update.message.reply_text("You are not authorized to use this command.")
+        return
+
+    from src.state import bot_is_running
+    if not bot_is_running.is_set():
+        bot_is_running.set() # Resumes the bot
+        log.info("Bot trading has been resumed via Telegram command.")
+        await update.message.reply_text("▶️ Bot trading has been resumed.")
+    else:
+        await update.message.reply_text("Bot is already running.")
 
 async def status(update, context):
     """Handles the /status command."""
@@ -143,8 +269,13 @@ async def start_bot():
 
     # Register command handlers
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("status", status))
+    application.add_handler(CommandHandler("positions", positions))
+    application.add_handler(CommandHandler("performance", performance))
     application.add_handler(CommandHandler("db_stats", db_stats))
+    application.add_handler(CommandHandler("pause", pause))
+    application.add_handler(CommandHandler("resume", resume))
 
     # Initialize and start the application
     await application.initialize()

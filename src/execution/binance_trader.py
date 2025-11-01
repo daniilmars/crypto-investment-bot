@@ -3,50 +3,6 @@ from src.logger import log
 from src.config import app_config
 from src.database import get_db_connection, IS_POSTGRES
 
-def initialize_trades_table():
-    """
-    Creates the 'trades' table if it doesn't already exist.
-    This table will store both open and closed paper trades.
-    """
-    log.info(f"Initializing trades table ({'PostgreSQL' if IS_POSTGRES else 'SQLite'})...")
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    trades_sql = '''
-        CREATE TABLE IF NOT EXISTS trades (
-            id SERIAL PRIMARY KEY,
-            symbol TEXT NOT NULL,
-            order_id TEXT UNIQUE,
-            side TEXT NOT NULL, -- BUY or SELL
-            entry_price REAL NOT NULL,
-            quantity REAL NOT NULL,
-            status TEXT NOT NULL, -- OPEN, CLOSED, CANCELED
-            pnl REAL, -- Profit and Loss
-            exit_price REAL,
-            entry_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            exit_timestamp TIMESTAMPTZ
-        )
-    ''' if IS_POSTGRES else '''
-        CREATE TABLE IF NOT EXISTS trades (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            symbol TEXT NOT NULL,
-            order_id TEXT UNIQUE,
-            side TEXT NOT NULL,
-            entry_price REAL NOT NULL,
-            quantity REAL NOT NULL,
-            status TEXT NOT NULL,
-            pnl REAL,
-            exit_price REAL,
-            entry_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            exit_timestamp TIMESTAMP
-        )
-    '''
-    cursor.execute(trades_sql)
-    conn.commit()
-    cursor.close()
-    conn.close()
-    log.info("Trades table initialized successfully.")
-
 def place_order(symbol: str, side: str, quantity: float, price: float, order_type: str = "MARKET") -> dict:
     """
     Simulates placing an order for paper trading.

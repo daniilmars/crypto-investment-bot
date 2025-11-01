@@ -19,6 +19,7 @@ from src.database import initialize_database, get_historical_prices, get_transac
 from src.logger import log
 from src.config import app_config
 from src.execution.binance_trader import place_order, get_open_positions, get_account_balance
+from src.state import bot_is_running
 
 def run_bot_cycle():
     """
@@ -62,11 +63,37 @@ def run_bot_cycle():
 
         current_price = float(price_data.get('price'))
         
+        # --- Position Monitoring (runs regardless of paused state) ---
+        if paper_trading:
+            open_positions = get_open_positions()
+            for position in open_positions:
+                if position['symbol'] == symbol and position['status'] == 'OPEN':
+                    pnl_percentage = (current_price - position['entry_price']) / position['entry_price']
+
+                    # Check for Stop Loss
+                    if pnl_percentage <= -stop_loss_percentage:
+                        log.info(f"[PAPER TRADE] Stop-loss hit for {symbol}. Closing position.")
+                        place_order(symbol, "SELL", position['quantity'], current_price)
+                        send_telegram_alert({"signal": "SELL", "symbol": symbol, "current_price": current_price, "reason": f"Stop-loss hit ({stop_loss_percentage*100:.2f}% loss)."})
+                        continue
+
+                    # Check for Take Profit
+                    if pnl_percentage >= take_profit_percentage:
+                        log.info(f"[PAPER TRADE] Take-profit hit for {symbol}. Closing position.")
+                        place_order(symbol, "SELL", position['quantity'], current_price)
+                        send_telegram_alert({"signal": "SELL", "symbol": symbol, "current_price": current_price, "reason": f"Take-profit hit ({take_profit_percentage*100:.2f}% gain)."})
+                        continue
+        
+        # --- Pause Check ---
+        # If the bot is paused, we skip the signal generation and new trade execution part.
+        if not bot_is_running.is_set():
+            log.info(f"Bot is paused. Skipping new signal generation for {symbol}.")
+            continue
+
         # 2. Analyze data for a signal
         log.info(f"Analyzing data for {symbol}...")
         
         # Fetch historical data for technical analysis
-        # Need enough data for both SMA and RSI
         historical_prices = get_historical_prices(symbol, limit=max(sma_period, rsi_period) + 1)
         historical_timestamps = get_transaction_timestamps_since(symbol.lower(), hours_ago=baseline_hours)
         
@@ -97,58 +124,30 @@ def run_bot_cycle():
         )
         save_signal(signal)
 
-        # --- 4. Paper Trading Logic (if enabled) ---
+        # --- 4. Paper Trading Logic (if enabled and not paused) ---
         if paper_trading:
             log.info(f"Paper trading mode is active. Processing signals for {symbol}.")
-            open_positions = get_open_positions()
+            open_positions = get_open_positions() # Re-fetch in case a position was closed
             current_balance = get_account_balance().get('total_usd', paper_trading_initial_capital)
             
-            # Monitor existing positions for stop-loss/take-profit
-            for position in open_positions:
-                if position['symbol'] == symbol and position['status'] == 'OPEN':
-                    pnl_percentage = (current_price - position['entry_price']) / position['entry_price']
-
-                    # Check for Stop Loss
-                    if pnl_percentage <= -stop_loss_percentage:
-                        log.info(f"[PAPER TRADE] Stop-loss hit for {symbol}. Closing position.")
-                        # Simulate closing the position
-                        place_order(symbol, "SELL", position['quantity'], current_price)
-                        # TODO: Update position status in DB to CLOSED and calculate PnL
-                        send_telegram_alert({"signal": "SELL", "symbol": symbol, "current_price": current_price, "reason": f"Stop-loss hit ({stop_loss_percentage*100:.2f}% loss)."})
-                        continue
-
-                    # Check for Take Profit
-                    if pnl_percentage >= take_profit_percentage:
-                        log.info(f"[PAPER TRADE] Take-profit hit for {symbol}. Closing position.")
-                        # Simulate closing the position
-                        place_order(symbol, "SELL", position['quantity'], current_price)
-                        # TODO: Update position status in DB to CLOSED and calculate PnL
-                        send_telegram_alert({"signal": "SELL", "symbol": symbol, "current_price": current_price, "reason": f"Take-profit hit ({take_profit_percentage*100:.2f}% gain)."})
-                        continue
-
             # Execute new trades based on signals
             if signal['signal'] == "BUY":
-                # Check if we already have an open position for this symbol
                 if any(p['symbol'] == symbol and p['status'] == 'OPEN' for p in open_positions):
                     log.info(f"[PAPER TRADE] Already have an open position for {symbol}. Skipping BUY.")
                 elif len(open_positions) >= max_concurrent_positions:
                     log.info(f"[PAPER TRADE] Max concurrent positions ({max_concurrent_positions}) reached. Skipping BUY for {symbol}.")
                 else:
-                    # Calculate quantity to buy based on risk percentage
-                    # For simplicity in paper trading, we'll use a fixed percentage of capital
-                    # A more advanced approach would use the trade_risk_percentage to calculate position size based on stop loss distance
                     capital_to_risk = current_balance * trade_risk_percentage
-                    quantity_to_buy = capital_to_risk / current_price # This is a simplified calculation
+                    quantity_to_buy = capital_to_risk / current_price
 
-                    if quantity_to_buy * current_price > current_balance: # Ensure we don't overspend
-                        log.warning(f"[PAPER TRADE] Insufficient balance to place BUY order for {symbol}. Needed: {quantity_to_buy * current_price:.2f}, Available: {current_balance:.2f}")
+                    if quantity_to_buy * current_price > current_balance:
+                        log.warning(f"[PAPER TRADE] Insufficient balance to place BUY order for {symbol}.")
                     else:
                         log.info(f"[PAPER TRADE] Placing BUY order for {quantity_to_buy:.4f} {symbol} at ${current_price:,.2f}.")
                         place_order(symbol, "BUY", quantity_to_buy, current_price)
                         send_telegram_alert(signal)
 
             elif signal['signal'] == "SELL":
-                # For paper trading, we only sell if we have an open position
                 position_to_close = next((p for p in open_positions if p['symbol'] == symbol and p['status'] == 'OPEN'), None)
                 if position_to_close:
                     log.info(f"[PAPER TRADE] Placing SELL order for {position_to_close['quantity']:.4f} {symbol} at ${current_price:,.2f}.")

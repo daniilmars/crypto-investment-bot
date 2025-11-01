@@ -53,7 +53,7 @@ def generate_market_summary(whale_transactions: list, price_history: list, last_
             "significant gains or losses?\n"
             "4. **Data-Driven Outlook:** Based ONLY on the data provided, what is the neutral outlook for the next few hours? "
             "Mention any potential indicators of volatility or stability.\n\n"
-            "Provide the summary in a clear, well-formatted report."
+            "Provide the summary in a clear, well-formatted report using Markdown (e.g., bolding, bullet points, etc.)."
         )
 
         response = model.generate_content(prompt)

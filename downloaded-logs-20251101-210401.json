@@ -1,0 +1,868 @@
+[
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/app/main.py\", line 13, in <module>\n    from src.collectors.binance_data import get_current_price\n  File \"/app/src/collectors/binance_data.py\", line 3, in <module>\n    from src.database import get_db_connection, IS_POSTGRES\n  File \"/app/src/database.py\", line 7, in <module>\n    from src.execution.binance_trader import initialize_trades_table\n  File \"/app/src/execution/binance_trader.py\", line 4, in <module>\n    from src.database import get_db_connection, IS_POSTGRES\nImportError: cannot import name 'get_db_connection' from partially initialized module 'src.database' (most likely due to a circular import) (/app/src/database.py)",
+    "insertId": "6906662200097715e8c92eea",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "revision_name": "crypto-bot-00015-r9r",
+        "project_id": "weighty-works-476914-j2",
+        "configuration_name": "crypto-bot",
+        "service_name": "crypto-bot",
+        "location": "us-central1"
+      }
+    },
+    "timestamp": "2025-11-01T19:57:22.620309Z",
+    "severity": "ERROR",
+    "labels": {
+      "instanceId": "00147782963e071d9bceb14b7b2fd0e9cabcc6a59bc8f5b936a094df3bc1bd0a7b84bfb72d35d1728edb9bfd30f85060583ed962e6b69369900528600ec0990916f9267f8df65cc3263841fa31b6"
+    },
+    "logName": "projects/weighty-works-476914-j2/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2025-11-01T19:57:22.625097916Z",
+    "errorGroups": [
+      {
+        "id": "CJC9goTftMSlWQ"
+      }
+    ]
+  },
+  {
+    "textPayload": "Default STARTUP TCP probe failed 1 time consecutively for container \"crypto-bot-1\" on port 8080. The instance was not started.\nConnection failed with status CANCELLED.",
+    "insertId": "6906662300080beaa5d727b6",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "revision_name": "crypto-bot-00015-r9r",
+        "configuration_name": "crypto-bot",
+        "location": "us-central1",
+        "project_id": "weighty-works-476914-j2",
+        "service_name": "crypto-bot"
+      }
+    },
+    "timestamp": "2025-11-01T19:57:23.527338Z",
+    "severity": "ERROR",
+    "labels": {
+      "instanceId": "00147782963e071d9bceb14b7b2fd0e9cabcc6a59bc8f5b936a094df3bc1bd0a7b84bfb72d35d1728edb9bfd30f85060583ed962e6b69369900528600ec0990916f9267f8df65cc3263841fa31b6"
+    },
+    "logName": "projects/weighty-works-476914-j2/logs/run.googleapis.com%2Fvarlog%2Fsystem",
+    "receiveTimestamp": "2025-11-01T19:57:23.635207109Z"
+  },
+  {
+    "protoPayload": {
+      "@type": "type.googleapis.com/google.cloud.audit.AuditLog",
+      "status": {
+        "code": 9,
+        "message": "Ready condition status changed to False for Revision crypto-bot-00015-r9r with message: The user-provided container failed to start and listen on the port defined provided by the PORT=8080 environment variable within the allocated timeout. This can happen when the container port is misconfigured or if the timeout is too short. The health check timeout can be extended. Logs for this revision might contain more information.\n\nLogs URL: https://console.cloud.google.com/logs/viewer?project=weighty-works-476914-j2&resource=cloud_run_revision/service_name/crypto-bot/revision_name/crypto-bot-00015-r9r&advancedFilter=resource.type%3D%22cloud_run_revision%22%0Aresource.labels.service_name%3D%22crypto-bot%22%0Aresource.labels.revision_name%3D%22crypto-bot-00015-r9r%22 \nFor more troubleshooting guidance, see https://cloud.google.com/run/docs/troubleshooting#container-failed-to-start"
+      },
+      "serviceName": "run.googleapis.com",
+      "methodName": "/Services.ReplaceService",
+      "resourceName": "namespaces/weighty-works-476914-j2/revisions/crypto-bot-00015-r9r",
+      "response": {
+        "metadata": {
+          "name": "crypto-bot-00015-r9r",
+          "namespace": "533569077001",
+          "selfLink": "/apis/serving.knative.dev/v1/namespaces/533569077001/revisions/crypto-bot-00015-r9r",
+          "uid": "97523437-951e-4734-83e1-c030fcd4fc47",
+          "resourceVersion": "AAZCjeQDj9E",
+          "generation": 1,
+          "creationTimestamp": "2025-11-01T19:57:00.264595Z",
+          "labels": {
+            "client.knative.dev/nonce": "zvqqawsdsr",
+            "serving.knative.dev/configuration": "crypto-bot",
+            "serving.knative.dev/configurationGeneration": "15",
+            "serving.knative.dev/service": "crypto-bot",
+            "serving.knative.dev/serviceUid": "72459d2b-cb7e-4258-9cf9-781f27ad7faf",
+            "serving.knative.dev/route": "crypto-bot",
+            "cloud.googleapis.com/location": "us-central1",
+            "run.googleapis.com/startupProbeType": "Default"
+          },
+          "annotations": {
+            "autoscaling.knative.dev/maxScale": "20",
+            "autoscaling.knative.dev/minScale": "1",
+            "run.googleapis.com/client-name": "gcloud",
+            "run.googleapis.com/client-version": "545.0.0",
+            "run.googleapis.com/cloudsql-instances": "weighty-works-476914-j2:us-central1:crypto-bot-db",
+            "serving.knative.dev/creator": "crypto-bot-deployer@weighty-works-476914-j2.iam.gserviceaccount.com",
+            "run.googleapis.com/operation-id": "b7498601-a2c9-4380-804a-6c73af3b644f",
+            "run.googleapis.com/startup-cpu-boost": "true"
+          },
+          "ownerReferences": [
+            {
+              "kind": "Configuration",
+              "name": "crypto-bot",
+              "uid": "cd94dc00-d4a8-48ce-9ff3-0ad7ca799a3e",
+              "apiVersion": "serving.knative.dev/v1",
+              "controller": true,
+              "blockOwnerDeletion": true
+            }
+          ]
+        },
+        "apiVersion": "serving.knative.dev/v1",
+        "kind": "Revision",
+        "spec": {
+          "containerConcurrency": 80,
+          "timeoutSeconds": 300,
+          "serviceAccountName": "533569077001-compute@developer.gserviceaccount.com",
+          "containers": [
+            {
+              "name": "crypto-bot-1",
+              "image": "us-central1-docker.pkg.dev/weighty-works-476914-j2/crypto-bot/crypto-bot@sha256:00f0e3a8aea082739774fc0da3d3b82200d0a8dcbb2fbf35cfbd3a76ae16c5dc",
+              "ports": [
+                {
+                  "name": "http1",
+                  "containerPort": 8080
+                }
+              ],
+              "env": [
+                {
+                  "name": "WHALE_ALERT_API_KEY",
+                  "value": "eGC6U4L8FqJylw2DTX1s3UskwFn2qBAJ"
+                },
+                {
+                  "name": "TELEGRAM_BOT_TOKEN",
+                  "value": "8323515226:AAEEo7_lbvk870cj2eZKWkcPQDM47DBbwVw"
+                },
+                {
+                  "name": "TELEGRAM_CHAT_ID",
+                  "value": "7910661624"
+                },
+                {
+                  "name": "DATABASE_URL",
+                  "value": "postgresql://postgres:Arugambay2023@35.193.176.100/crypto_data"
+                },
+                {
+                  "name": "DB_INSTANCE_CONNECTION_NAME",
+                  "value": "weighty-works-476914-j2:us-central1:crypto-bot-db"
+                },
+                {
+                  "name": "GEMINI_API_KEY",
+                  "value": "AIzaSyCZHz6m8tVee1Ui4snp0-jqCt-h04PZIZM"
+                }
+              ],
+              "resources": {
+                "limits": {
+                  "cpu": "1000m",
+                  "memory": "512Mi"
+                }
+              },
+              "startupProbe": {
+                "timeoutSeconds": 240,
+                "periodSeconds": 240,
+                "failureThreshold": 1,
+                "tcpSocket": {
+                  "port": 8080
+                }
+              }
+            }
+          ]
+        },
+        "status": {
+          "observedGeneration": 1,
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False",
+              "reason": "HealthCheckContainerError",
+              "message": "The user-provided container failed to start and listen on the port defined provided by the PORT=8080 environment variable within the allocated timeout. This can happen when the container port is misconfigured or if the timeout is too short. The health check timeout can be extended. Logs for this revision might contain more information.\n\nLogs URL: https://console.cloud.google.com/logs/viewer?project=weighty-works-476914-j2&resource=cloud_run_revision/service_name/crypto-bot/revision_name/crypto-bot-00015-r9r&advancedFilter=resource.type%3D%22cloud_run_revision%22%0Aresource.labels.service_name%3D%22crypto-bot%22%0Aresource.labels.revision_name%3D%22crypto-bot-00015-r9r%22 \nFor more troubleshooting guidance, see https://cloud.google.com/run/docs/troubleshooting#container-failed-to-start",
+              "lastTransitionTime": "2025-11-01T19:57:23.524561Z"
+            },
+            {
+              "type": "ContainerHealthy",
+              "status": "False",
+              "reason": "HealthCheckContainerError",
+              "message": "The user-provided container failed to start and listen on the port defined provided by the PORT=8080 environment variable within the allocated timeout. This can happen when the container port is misconfigured or if the timeout is too short. The health check timeout can be extended. Logs for this revision might contain more information.\n\nLogs URL: https://console.cloud.google.com/logs/viewer?project=weighty-works-476914-j2&resource=cloud_run_revision/service_name/crypto-bot/revision_name/crypto-bot-00015-r9r&advancedFilter=resource.type%3D%22cloud_run_revision%22%0Aresource.labels.service_name%3D%22crypto-bot%22%0Aresource.labels.revision_name%3D%22crypto-bot-00015-r9r%22 \nFor more troubleshooting guidance, see https://cloud.google.com/run/docs/troubleshooting#container-failed-to-start",
+              "lastTransitionTime": "2025-11-01T19:57:23.524561Z"
+            },
+            {
+              "type": "ContainerReady",
+              "status": "True",
+              "message": "Container image import completed in 16.14s.",
+              "lastTransitionTime": "2025-11-01T19:57:17.043840Z"
+            },
+            {
+              "type": "ResourcesAvailable",
+              "status": "True",
+              "message": "Provisioning imported containers completed in 1.5s. Checking container health. This will wait for up to 4m for the configured startup probe, including an initial delay of 0s.",
+              "lastTransitionTime": "2025-11-01T19:57:18.540579Z"
+            },
+            {
+              "type": "Retry",
+              "status": "True",
+              "reason": "ImmediateRetry",
+              "message": "System will retry after 0:00:00 from lastTransitionTime for attempt 0.",
+              "lastTransitionTime": "2025-11-01T19:57:18.540579Z",
+              "severity": "Info"
+            }
+          ],
+          "logUrl": "https://console.cloud.google.com/logs/viewer?project=weighty-works-476914-j2&resource=cloud_run_revision/service_name/crypto-bot/revision_name/crypto-bot-00015-r9r&advancedFilter=resource.type%3D%22cloud_run_revision%22%0Aresource.labels.service_name%3D%22crypto-bot%22%0Aresource.labels.revision_name%3D%22crypto-bot-00015-r9r%22",
+          "imageDigest": "us-central1-docker.pkg.dev/weighty-works-476914-j2/crypto-bot/crypto-bot@sha256:00f0e3a8aea082739774fc0da3d3b82200d0a8dcbb2fbf35cfbd3a76ae16c5dc",
+          "containerStatuses": [
+            {
+              "name": "crypto-bot-1",
+              "imageDigest": "us-central1-docker.pkg.dev/weighty-works-476914-j2/crypto-bot/crypto-bot@sha256:00f0e3a8aea082739774fc0da3d3b82200d0a8dcbb2fbf35cfbd3a76ae16c5dc"
+            }
+          ],
+          "desiredReplicas": 1
+        },
+        "@type": "type.googleapis.com/google.cloud.run.v1.Revision"
+      }
+    },
+    "insertId": "-t44nj8dho9q",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "service_name": "crypto-bot",
+        "location": "us-central1",
+        "project_id": "weighty-works-476914-j2",
+        "revision_name": "crypto-bot-00015-r9r",
+        "configuration_name": "crypto-bot"
+      }
+    },
+    "timestamp": "2025-11-01T19:57:23.535691Z",
+    "severity": "ERROR",
+    "logName": "projects/weighty-works-476914-j2/logs/cloudaudit.googleapis.com%2Fsystem_event",
+    "receiveTimestamp": "2025-11-01T19:57:23.823271190Z"
+  },
+  {
+    "protoPayload": {
+      "@type": "type.googleapis.com/google.cloud.audit.AuditLog",
+      "status": {
+        "code": 9,
+        "message": "Ready condition status changed to False for Service crypto-bot with message: Revision 'crypto-bot-00015-r9r' is not ready and cannot serve traffic. The user-provided container failed to start and listen on the port defined provided by the PORT=8080 environment variable within the allocated timeout. This can happen when the container port is misconfigured or if the timeout is too short. The health check timeout can be extended. Logs for this revision might contain more information.\n\nLogs URL: https://console.cloud.google.com/logs/viewer?project=weighty-works-476914-j2&resource=cloud_run_revision/service_name/crypto-bot/revision_name/crypto-bot-00015-r9r&advancedFilter=resource.type%3D%22cloud_run_revision%22%0Aresource.labels.service_name%3D%22crypto-bot%22%0Aresource.labels.revision_name%3D%22crypto-bot-00015-r9r%22 \nFor more troubleshooting guidance, see https://cloud.google.com/run/docs/troubleshooting#container-failed-to-start"
+      },
+      "serviceName": "run.googleapis.com",
+      "methodName": "/Services.ReplaceService",
+      "resourceName": "namespaces/weighty-works-476914-j2/services/crypto-bot",
+      "response": {
+        "metadata": {
+          "name": "crypto-bot",
+          "namespace": "533569077001",
+          "selfLink": "/apis/serving.knative.dev/v1/namespaces/533569077001/services/crypto-bot",
+          "uid": "72459d2b-cb7e-4258-9cf9-781f27ad7faf",
+          "resourceVersion": "AAZCjeQFPN8",
+          "generation": 15,
+          "creationTimestamp": "2025-11-01T15:38:56.047602Z",
+          "labels": {
+            "cloud.googleapis.com/location": "us-central1"
+          },
+          "annotations": {
+            "serving.knative.dev/creator": "crypto-bot-deployer@weighty-works-476914-j2.iam.gserviceaccount.com",
+            "serving.knative.dev/lastModifier": "crypto-bot-deployer@weighty-works-476914-j2.iam.gserviceaccount.com",
+            "run.googleapis.com/client-name": "gcloud",
+            "run.googleapis.com/client-version": "545.0.0",
+            "run.googleapis.com/operation-id": "b7498601-a2c9-4380-804a-6c73af3b644f",
+            "run.googleapis.com/ingress": "all",
+            "run.googleapis.com/ingress-status": "all",
+            "run.googleapis.com/urls": "[\"https://crypto-bot-533569077001.us-central1.run.app\",\"https://crypto-bot-niqe53bsiq-uc.a.run.app\"]"
+          }
+        },
+        "apiVersion": "serving.knative.dev/v1",
+        "kind": "Service",
+        "spec": {
+          "template": {
+            "metadata": {
+              "labels": {
+                "client.knative.dev/nonce": "zvqqawsdsr",
+                "run.googleapis.com/startupProbeType": "Default"
+              },
+              "annotations": {
+                "autoscaling.knative.dev/maxScale": "20",
+                "autoscaling.knative.dev/minScale": "1",
+                "run.googleapis.com/client-name": "gcloud",
+                "run.googleapis.com/client-version": "545.0.0",
+                "run.googleapis.com/cloudsql-instances": "weighty-works-476914-j2:us-central1:crypto-bot-db",
+                "run.googleapis.com/startup-cpu-boost": "true"
+              }
+            },
+            "spec": {
+              "containerConcurrency": 80,
+              "timeoutSeconds": 300,
+              "serviceAccountName": "533569077001-compute@developer.gserviceaccount.com",
+              "containers": [
+                {
+                  "image": "us-central1-docker.pkg.dev/weighty-works-476914-j2/crypto-bot/crypto-bot:7b8fe3b279d608527a63b0fa864189584d6416e7",
+                  "ports": [
+                    {
+                      "name": "http1",
+                      "containerPort": 8080
+                    }
+                  ],
+                  "env": [
+                    {
+                      "name": "WHALE_ALERT_API_KEY",
+                      "value": "eGC6U4L8FqJylw2DTX1s3UskwFn2qBAJ"
+                    },
+                    {
+                      "name": "TELEGRAM_BOT_TOKEN",
+                      "value": "8323515226:AAEEo7_lbvk870cj2eZKWkcPQDM47DBbwVw"
+                    },
+                    {
+                      "name": "TELEGRAM_CHAT_ID",
+                      "value": "7910661624"
+                    },
+                    {
+                      "name": "DATABASE_URL",
+                      "value": "postgresql://postgres:Arugambay2023@35.193.176.100/crypto_data"
+                    },
+                    {
+                      "name": "DB_INSTANCE_CONNECTION_NAME",
+                      "value": "weighty-works-476914-j2:us-central1:crypto-bot-db"
+                    },
+                    {
+                      "name": "GEMINI_API_KEY",
+                      "value": "AIzaSyCZHz6m8tVee1Ui4snp0-jqCt-h04PZIZM"
+                    }
+                  ],
+                  "resources": {
+                    "limits": {
+                      "cpu": "1000m",
+                      "memory": "512Mi"
+                    }
+                  },
+                  "startupProbe": {
+                    "timeoutSeconds": 240,
+                    "periodSeconds": 240,
+                    "failureThreshold": 1,
+                    "tcpSocket": {
+                      "port": 8080
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "traffic": [
+            {
+              "percent": 100,
+              "latestRevision": true
+            }
+          ]
+        },
+        "status": {
+          "observedGeneration": 15,
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False",
+              "reason": "HealthCheckContainerError",
+              "message": "Revision 'crypto-bot-00015-r9r' is not ready and cannot serve traffic. The user-provided container failed to start and listen on the port defined provided by the PORT=8080 environment variable within the allocated timeout. This can happen when the container port is misconfigured or if the timeout is too short. The health check timeout can be extended. Logs for this revision might contain more information.\n\nLogs URL: https://console.cloud.google.com/logs/viewer?project=weighty-works-476914-j2&resource=cloud_run_revision/service_name/crypto-bot/revision_name/crypto-bot-00015-r9r&advancedFilter=resource.type%3D%22cloud_run_revision%22%0Aresource.labels.service_name%3D%22crypto-bot%22%0Aresource.labels.revision_name%3D%22crypto-bot-00015-r9r%22 \nFor more troubleshooting guidance, see https://cloud.google.com/run/docs/troubleshooting#container-failed-to-start",
+              "lastTransitionTime": "2025-11-01T19:57:23.593763Z"
+            },
+            {
+              "type": "ConfigurationsReady",
+              "status": "False",
+              "reason": "HealthCheckContainerError",
+              "message": "The user-provided container failed to start and listen on the port defined provided by the PORT=8080 environment variable within the allocated timeout. This can happen when the container port is misconfigured or if the timeout is too short. The health check timeout can be extended. Logs for this revision might contain more information.\n\nLogs URL: https://console.cloud.google.com/logs/viewer?project=weighty-works-476914-j2&resource=cloud_run_revision/service_name/crypto-bot/revision_name/crypto-bot-00015-r9r&advancedFilter=resource.type%3D%22cloud_run_revision%22%0Aresource.labels.service_name%3D%22crypto-bot%22%0Aresource.labels.revision_name%3D%22crypto-bot-00015-r9r%22 \nFor more troubleshooting guidance, see https://cloud.google.com/run/docs/troubleshooting#container-failed-to-start",
+              "lastTransitionTime": "2025-11-01T19:57:23.560595Z"
+            },
+            {
+              "type": "RoutesReady",
+              "status": "False",
+              "reason": "HealthCheckContainerError",
+              "message": "Revision 'crypto-bot-00015-r9r' is not ready and cannot serve traffic. The user-provided container failed to start and listen on the port defined provided by the PORT=8080 environment variable within the allocated timeout. This can happen when the container port is misconfigured or if the timeout is too short. The health check timeout can be extended. Logs for this revision might contain more information.\n\nLogs URL: https://console.cloud.google.com/logs/viewer?project=weighty-works-476914-j2&resource=cloud_run_revision/service_name/crypto-bot/revision_name/crypto-bot-00015-r9r&advancedFilter=resource.type%3D%22cloud_run_revision%22%0Aresource.labels.service_name%3D%22crypto-bot%22%0Aresource.labels.revision_name%3D%22crypto-bot-00015-r9r%22 \nFor more troubleshooting guidance, see https://cloud.google.com/run/docs/troubleshooting#container-failed-to-start",
+              "lastTransitionTime": "2025-11-01T19:57:23.593763Z"
+            }
+          ],
+          "latestReadyRevisionName": "crypto-bot-00014-ps9",
+          "latestCreatedRevisionName": "crypto-bot-00015-r9r",
+          "traffic": [
+            {
+              "revisionName": "crypto-bot-00014-ps9",
+              "percent": 100,
+              "latestRevision": true
+            }
+          ],
+          "url": "https://crypto-bot-niqe53bsiq-uc.a.run.app",
+          "address": {
+            "url": "https://crypto-bot-niqe53bsiq-uc.a.run.app"
+          }
+        },
+        "@type": "type.googleapis.com/google.cloud.run.v1.Service"
+      }
+    },
+    "insertId": "u9fg3sdh3oi",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "configuration_name": "",
+        "service_name": "crypto-bot",
+        "revision_name": "",
+        "project_id": "weighty-works-476914-j2",
+        "location": "us-central1"
+      }
+    },
+    "timestamp": "2025-11-01T19:57:23.645840Z",
+    "severity": "ERROR",
+    "logName": "projects/weighty-works-476914-j2/logs/cloudaudit.googleapis.com%2Fsystem_event",
+    "receiveTimestamp": "2025-11-01T19:57:23.719623011Z"
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/app/main.py\", line 13, in <module>\n    from src.collectors.binance_data import get_current_price\n  File \"/app/src/collectors/binance_data.py\", line 3, in <module>\n    from src.database import get_db_connection, IS_POSTGRES\n  File \"/app/src/database.py\", line 7, in <module>\n    from src.execution.binance_trader import initialize_trades_table\n  File \"/app/src/execution/binance_trader.py\", line 4, in <module>\n    from src.database import get_db_connection, IS_POSTGRES\nImportError: cannot import name 'get_db_connection' from partially initialized module 'src.database' (most likely due to a circular import) (/app/src/database.py)",
+    "insertId": "690666250001072dd8b0b277",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "location": "us-central1",
+        "service_name": "crypto-bot",
+        "project_id": "weighty-works-476914-j2",
+        "configuration_name": "crypto-bot",
+        "revision_name": "crypto-bot-00015-r9r"
+      }
+    },
+    "timestamp": "2025-11-01T19:57:25.067373Z",
+    "severity": "ERROR",
+    "labels": {
+      "instanceId": "0014778296ba59d763edf1dfb126f92bdeb208b0f042072eeb3bd7e0474fbf116906319cf4c02bade9d228965a12d3733dc4c4ed021e38c820a81689784da6f74c0e0c373348cd47a543286be910"
+    },
+    "logName": "projects/weighty-works-476914-j2/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2025-11-01T19:57:25.291016282Z",
+    "errorGroups": [
+      {
+        "id": "CJC9goTftMSlWQ"
+      }
+    ]
+  },
+  {
+    "textPayload": "Default STARTUP TCP probe failed 1 time consecutively for container \"crypto-bot-1\" on port 8080. The instance was not started.\nConnection failed with status CANCELLED.",
+    "insertId": "69066625000eea4aa3c85cce",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "service_name": "crypto-bot",
+        "project_id": "weighty-works-476914-j2",
+        "configuration_name": "crypto-bot",
+        "location": "us-central1",
+        "revision_name": "crypto-bot-00015-r9r"
+      }
+    },
+    "timestamp": "2025-11-01T19:57:25.977482Z",
+    "severity": "ERROR",
+    "labels": {
+      "instanceId": "0014778296ba59d763edf1dfb126f92bdeb208b0f042072eeb3bd7e0474fbf116906319cf4c02bade9d228965a12d3733dc4c4ed021e38c820a81689784da6f74c0e0c373348cd47a543286be910"
+    },
+    "logName": "projects/weighty-works-476914-j2/logs/run.googleapis.com%2Fvarlog%2Fsystem",
+    "receiveTimestamp": "2025-11-01T19:57:26.305828267Z"
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/app/main.py\", line 13, in <module>\n    from src.collectors.binance_data import get_current_price\n  File \"/app/src/collectors/binance_data.py\", line 3, in <module>\n    from src.database import get_db_connection, IS_POSTGRES\n  File \"/app/src/database.py\", line 7, in <module>\n    from src.execution.binance_trader import initialize_trades_table\n  File \"/app/src/execution/binance_trader.py\", line 4, in <module>\n    from src.database import get_db_connection, IS_POSTGRES\nImportError: cannot import name 'get_db_connection' from partially initialized module 'src.database' (most likely due to a circular import) (/app/src/database.py)",
+    "insertId": "690666280001247ea79bfc14",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "location": "us-central1",
+        "project_id": "weighty-works-476914-j2",
+        "configuration_name": "crypto-bot",
+        "revision_name": "crypto-bot-00015-r9r",
+        "service_name": "crypto-bot"
+      }
+    },
+    "timestamp": "2025-11-01T19:57:28.074878Z",
+    "severity": "ERROR",
+    "labels": {
+      "instanceId": "00147782961964ab250f7ecf655b1a4a9a5e6e7d84ef196accf0a2bb28178da674345229e0f17a22be7ab77b75bdad5eb5167fe6975c0daf8d42165cdf307890e89796bb8f2d9b7050f0d0b2c4ee"
+    },
+    "logName": "projects/weighty-works-476914-j2/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2025-11-01T19:57:28.292085525Z",
+    "errorGroups": [
+      {
+        "id": "CJC9goTftMSlWQ"
+      }
+    ]
+  },
+  {
+    "textPayload": "Default STARTUP TCP probe failed 1 time consecutively for container \"crypto-bot-1\" on port 8080. The instance was not started.\nConnection failed with status CANCELLED.",
+    "insertId": "69066628000e952a6d72acda",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "service_name": "crypto-bot",
+        "project_id": "weighty-works-476914-j2",
+        "revision_name": "crypto-bot-00015-r9r",
+        "location": "us-central1",
+        "configuration_name": "crypto-bot"
+      }
+    },
+    "timestamp": "2025-11-01T19:57:28.955690Z",
+    "severity": "ERROR",
+    "labels": {
+      "instanceId": "00147782961964ab250f7ecf655b1a4a9a5e6e7d84ef196accf0a2bb28178da674345229e0f17a22be7ab77b75bdad5eb5167fe6975c0daf8d42165cdf307890e89796bb8f2d9b7050f0d0b2c4ee"
+    },
+    "logName": "projects/weighty-works-476914-j2/logs/run.googleapis.com%2Fvarlog%2Fsystem",
+    "receiveTimestamp": "2025-11-01T19:57:28.966945950Z"
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/app/main.py\", line 13, in <module>\n    from src.collectors.binance_data import get_current_price\n  File \"/app/src/collectors/binance_data.py\", line 3, in <module>\n    from src.database import get_db_connection, IS_POSTGRES\n  File \"/app/src/database.py\", line 7, in <module>\n    from src.execution.binance_trader import initialize_trades_table\n  File \"/app/src/execution/binance_trader.py\", line 4, in <module>\n    from src.database import get_db_connection, IS_POSTGRES\nImportError: cannot import name 'get_db_connection' from partially initialized module 'src.database' (most likely due to a circular import) (/app/src/database.py)",
+    "insertId": "6906662b0003052c16aad166",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "project_id": "weighty-works-476914-j2",
+        "revision_name": "crypto-bot-00015-r9r",
+        "service_name": "crypto-bot",
+        "location": "us-central1",
+        "configuration_name": "crypto-bot"
+      }
+    },
+    "timestamp": "2025-11-01T19:57:31.197932Z",
+    "severity": "ERROR",
+    "labels": {
+      "instanceId": "0014778296a80448438a53e82f51fb734b5543242bde766e5ffcf5d4d832b275f1975ee3ff13073e337639e2ae307e0e4344fec07136ddf0efe7fef7e0e869c662ee0be1c25eae0c3418ea8b079f"
+    },
+    "logName": "projects/weighty-works-476914-j2/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2025-11-01T19:57:31.293975092Z",
+    "errorGroups": [
+      {
+        "id": "CJC9goTftMSlWQ"
+      }
+    ]
+  },
+  {
+    "textPayload": "Default STARTUP TCP probe failed 1 time consecutively for container \"crypto-bot-1\" on port 8080. The instance was not started.\nConnection failed with status CANCELLED.",
+    "insertId": "6906662b000f1cc55ead6d8c",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "revision_name": "crypto-bot-00015-r9r",
+        "project_id": "weighty-works-476914-j2",
+        "location": "us-central1",
+        "configuration_name": "crypto-bot",
+        "service_name": "crypto-bot"
+      }
+    },
+    "timestamp": "2025-11-01T19:57:31.990405Z",
+    "severity": "ERROR",
+    "labels": {
+      "instanceId": "0014778296a80448438a53e82f51fb734b5543242bde766e5ffcf5d4d832b275f1975ee3ff13073e337639e2ae307e0e4344fec07136ddf0efe7fef7e0e869c662ee0be1c25eae0c3418ea8b079f"
+    },
+    "logName": "projects/weighty-works-476914-j2/logs/run.googleapis.com%2Fvarlog%2Fsystem",
+    "receiveTimestamp": "2025-11-01T19:57:32.302140453Z"
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/app/main.py\", line 13, in <module>\n    from src.collectors.binance_data import get_current_price\n  File \"/app/src/collectors/binance_data.py\", line 3, in <module>\n    from src.database import get_db_connection, IS_POSTGRES\n  File \"/app/src/database.py\", line 7, in <module>\n    from src.execution.binance_trader import initialize_trades_table\n  File \"/app/src/execution/binance_trader.py\", line 4, in <module>\n    from src.database import get_db_connection, IS_POSTGRES\nImportError: cannot import name 'get_db_connection' from partially initialized module 'src.database' (most likely due to a circular import) (/app/src/database.py)",
+    "insertId": "6906662d000dded0cd520a2a",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "revision_name": "crypto-bot-00015-r9r",
+        "configuration_name": "crypto-bot",
+        "service_name": "crypto-bot",
+        "project_id": "weighty-works-476914-j2",
+        "location": "us-central1"
+      }
+    },
+    "timestamp": "2025-11-01T19:57:33.909008Z",
+    "severity": "ERROR",
+    "labels": {
+      "instanceId": "0014778296b34b8b83e7f5918e3ce55af4926583970833d7dfe8f46468227a95f76a2db05b61b0adb38c817aab5ac69438ffdf624aaeb2da21125e7b74c413accb99b49709572b7a13ac4f068fd2"
+    },
+    "logName": "projects/weighty-works-476914-j2/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2025-11-01T19:57:33.959686855Z",
+    "errorGroups": [
+      {
+        "id": "CJC9goTftMSlWQ"
+      }
+    ]
+  },
+  {
+    "textPayload": "Default STARTUP TCP probe failed 1 time consecutively for container \"crypto-bot-1\" on port 8080. The instance was not started.\nConnection failed with status CANCELLED.",
+    "insertId": "6906662e000e5d9f47c6e641",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "project_id": "weighty-works-476914-j2",
+        "revision_name": "crypto-bot-00015-r9r",
+        "location": "us-central1",
+        "configuration_name": "crypto-bot",
+        "service_name": "crypto-bot"
+      }
+    },
+    "timestamp": "2025-11-01T19:57:34.941471Z",
+    "severity": "ERROR",
+    "labels": {
+      "instanceId": "0014778296b34b8b83e7f5918e3ce55af4926583970833d7dfe8f46468227a95f76a2db05b61b0adb38c817aab5ac69438ffdf624aaeb2da21125e7b74c413accb99b49709572b7a13ac4f068fd2"
+    },
+    "logName": "projects/weighty-works-476914-j2/logs/run.googleapis.com%2Fvarlog%2Fsystem",
+    "receiveTimestamp": "2025-11-01T19:57:34.970816249Z"
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/app/main.py\", line 13, in <module>\n    from src.collectors.binance_data import get_current_price\n  File \"/app/src/collectors/binance_data.py\", line 3, in <module>\n    from src.database import get_db_connection, IS_POSTGRES\n  File \"/app/src/database.py\", line 7, in <module>\n    from src.execution.binance_trader import initialize_trades_table\n  File \"/app/src/execution/binance_trader.py\", line 4, in <module>\n    from src.database import get_db_connection, IS_POSTGRES\nImportError: cannot import name 'get_db_connection' from partially initialized module 'src.database' (most likely due to a circular import) (/app/src/database.py)",
+    "insertId": "6906663200056ce924ada061",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "configuration_name": "crypto-bot",
+        "revision_name": "crypto-bot-00015-r9r",
+        "service_name": "crypto-bot",
+        "project_id": "weighty-works-476914-j2",
+        "location": "us-central1"
+      }
+    },
+    "timestamp": "2025-11-01T19:57:38.355561Z",
+    "severity": "ERROR",
+    "labels": {
+      "instanceId": "001477829670037f37bc9395ec84292b1b5f4c6e28f3ef468e8fb828ce5fee2efaf92c4a85b5a97a85247abc5460673f95f495141de30ddcce4b33f4e8a4f306d0178f49ee788e78a1738840ee69"
+    },
+    "logName": "projects/weighty-works-476914-j2/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2025-11-01T19:57:38.633443328Z",
+    "errorGroups": [
+      {
+        "id": "CJC9goTftMSlWQ"
+      }
+    ]
+  },
+  {
+    "textPayload": "Default STARTUP TCP probe failed 1 time consecutively for container \"crypto-bot-1\" on port 8080. The instance was not started.\nConnection failed with status CANCELLED.",
+    "insertId": "6906663300043fd33690978c",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "revision_name": "crypto-bot-00015-r9r",
+        "location": "us-central1",
+        "configuration_name": "crypto-bot",
+        "project_id": "weighty-works-476914-j2",
+        "service_name": "crypto-bot"
+      }
+    },
+    "timestamp": "2025-11-01T19:57:39.278483Z",
+    "severity": "ERROR",
+    "labels": {
+      "instanceId": "001477829670037f37bc9395ec84292b1b5f4c6e28f3ef468e8fb828ce5fee2efaf92c4a85b5a97a85247abc5460673f95f495141de30ddcce4b33f4e8a4f306d0178f49ee788e78a1738840ee69"
+    },
+    "logName": "projects/weighty-works-476914-j2/logs/run.googleapis.com%2Fvarlog%2Fsystem",
+    "receiveTimestamp": "2025-11-01T19:57:39.301322267Z"
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/app/main.py\", line 13, in <module>\n    from src.collectors.binance_data import get_current_price\n  File \"/app/src/collectors/binance_data.py\", line 3, in <module>\n    from src.database import get_db_connection, IS_POSTGRES\n  File \"/app/src/database.py\", line 7, in <module>\n    from src.execution.binance_trader import initialize_trades_table\n  File \"/app/src/execution/binance_trader.py\", line 4, in <module>\n    from src.database import get_db_connection, IS_POSTGRES\nImportError: cannot import name 'get_db_connection' from partially initialized module 'src.database' (most likely due to a circular import) (/app/src/database.py)",
+    "insertId": "6906663700026e6428609831",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "project_id": "weighty-works-476914-j2",
+        "location": "us-central1",
+        "service_name": "crypto-bot",
+        "configuration_name": "crypto-bot",
+        "revision_name": "crypto-bot-00015-r9r"
+      }
+    },
+    "timestamp": "2025-11-01T19:57:43.159332Z",
+    "severity": "ERROR",
+    "labels": {
+      "instanceId": "0014778296948f5d5df40614ca918f37a1e2faa462cdfe4b042aa9fc4b78a01296114ba5c30cdadb0d9fe01718ab9dc5d9214a18157d0638b7c93075fe117697d683eed1ec20a3278a60a2d03684"
+    },
+    "logName": "projects/weighty-works-476914-j2/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2025-11-01T19:57:43.297272389Z",
+    "errorGroups": [
+      {
+        "id": "CJC9goTftMSlWQ"
+      }
+    ]
+  },
+  {
+    "textPayload": "Default STARTUP TCP probe failed 1 time consecutively for container \"crypto-bot-1\" on port 8080. The instance was not started.\nConnection failed with status CANCELLED.",
+    "insertId": "69066638000105f5383dcce5",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "configuration_name": "crypto-bot",
+        "revision_name": "crypto-bot-00015-r9r",
+        "project_id": "weighty-works-476914-j2",
+        "location": "us-central1",
+        "service_name": "crypto-bot"
+      }
+    },
+    "timestamp": "2025-11-01T19:57:44.067061Z",
+    "severity": "ERROR",
+    "labels": {
+      "instanceId": "0014778296948f5d5df40614ca918f37a1e2faa462cdfe4b042aa9fc4b78a01296114ba5c30cdadb0d9fe01718ab9dc5d9214a18157d0638b7c93075fe117697d683eed1ec20a3278a60a2d03684"
+    },
+    "logName": "projects/weighty-works-476914-j2/logs/run.googleapis.com%2Fvarlog%2Fsystem",
+    "receiveTimestamp": "2025-11-01T19:57:44.299299066Z"
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/app/main.py\", line 13, in <module>\n    from src.collectors.binance_data import get_current_price\n  File \"/app/src/collectors/binance_data.py\", line 3, in <module>\n    from src.database import get_db_connection, IS_POSTGRES\n  File \"/app/src/database.py\", line 7, in <module>\n    from src.execution.binance_trader import initialize_trades_table\n  File \"/app/src/execution/binance_trader.py\", line 4, in <module>\n    from src.database import get_db_connection, IS_POSTGRES\nImportError: cannot import name 'get_db_connection' from partially initialized module 'src.database' (most likely due to a circular import) (/app/src/database.py)",
+    "insertId": "6906663c00020fc70accc554",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "service_name": "crypto-bot",
+        "configuration_name": "crypto-bot",
+        "revision_name": "crypto-bot-00015-r9r",
+        "location": "us-central1",
+        "project_id": "weighty-works-476914-j2"
+      }
+    },
+    "timestamp": "2025-11-01T19:57:48.135111Z",
+    "severity": "ERROR",
+    "labels": {
+      "instanceId": "0014778296b5f6a1da3d83bf8381e93efc44acbd0bbdca85b5c6870eca0153b3048a858f8a21c465fb4a8a175515a9b413ba1d232b2d1e39f8833db95edfeeccb001d86850ffb778b6b38727fca5"
+    },
+    "logName": "projects/weighty-works-476914-j2/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2025-11-01T19:57:48.291679963Z",
+    "errorGroups": [
+      {
+        "id": "CJC9goTftMSlWQ"
+      }
+    ]
+  },
+  {
+    "textPayload": "Default STARTUP TCP probe failed 1 time consecutively for container \"crypto-bot-1\" on port 8080. The instance was not started.\nConnection failed with status CANCELLED.",
+    "insertId": "6906663c000f380ddcbf56dd",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "project_id": "weighty-works-476914-j2",
+        "location": "us-central1",
+        "service_name": "crypto-bot",
+        "configuration_name": "crypto-bot",
+        "revision_name": "crypto-bot-00015-r9r"
+      }
+    },
+    "timestamp": "2025-11-01T19:57:48.997389Z",
+    "severity": "ERROR",
+    "labels": {
+      "instanceId": "0014778296b5f6a1da3d83bf8381e93efc44acbd0bbdca85b5c6870eca0153b3048a858f8a21c465fb4a8a175515a9b413ba1d232b2d1e39f8833db95edfeeccb001d86850ffb778b6b38727fca5"
+    },
+    "logName": "projects/weighty-works-476914-j2/logs/run.googleapis.com%2Fvarlog%2Fsystem",
+    "receiveTimestamp": "2025-11-01T19:57:49.300053272Z"
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/app/main.py\", line 13, in <module>\n    from src.collectors.binance_data import get_current_price\n  File \"/app/src/collectors/binance_data.py\", line 3, in <module>\n    from src.database import get_db_connection, IS_POSTGRES\n  File \"/app/src/database.py\", line 7, in <module>\n    from src.execution.binance_trader import initialize_trades_table\n  File \"/app/src/execution/binance_trader.py\", line 4, in <module>\n    from src.database import get_db_connection, IS_POSTGRES\nImportError: cannot import name 'get_db_connection' from partially initialized module 'src.database' (most likely due to a circular import) (/app/src/database.py)",
+    "insertId": "69066641000460f0b895fa76",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "configuration_name": "crypto-bot",
+        "location": "us-central1",
+        "revision_name": "crypto-bot-00015-r9r",
+        "project_id": "weighty-works-476914-j2",
+        "service_name": "crypto-bot"
+      }
+    },
+    "timestamp": "2025-11-01T19:57:53.286960Z",
+    "severity": "ERROR",
+    "labels": {
+      "instanceId": "00147782969398a4d14cf4cd51475fe686bc2422e33598e4df2e16f467f09ec84fec26ddd01957d261836cd90b24c67ea2c1a4145a36bca146adb64842d1b4afad27bbb7e0f36d491d6d9dfb1a96"
+    },
+    "logName": "projects/weighty-works-476914-j2/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2025-11-01T19:57:53.624913378Z",
+    "errorGroups": [
+      {
+        "id": "CJC9goTftMSlWQ"
+      }
+    ]
+  },
+  {
+    "textPayload": "Default STARTUP TCP probe failed 1 time consecutively for container \"crypto-bot-1\" on port 8080. The instance was not started.\nConnection failed with status CANCELLED.",
+    "insertId": "690666420000445781b35a5a",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "project_id": "weighty-works-476914-j2",
+        "configuration_name": "crypto-bot",
+        "service_name": "crypto-bot",
+        "location": "us-central1",
+        "revision_name": "crypto-bot-00015-r9r"
+      }
+    },
+    "timestamp": "2025-11-01T19:57:54.017495Z",
+    "severity": "ERROR",
+    "labels": {
+      "instanceId": "00147782969398a4d14cf4cd51475fe686bc2422e33598e4df2e16f467f09ec84fec26ddd01957d261836cd90b24c67ea2c1a4145a36bca146adb64842d1b4afad27bbb7e0f36d491d6d9dfb1a96"
+    },
+    "logName": "projects/weighty-works-476914-j2/logs/run.googleapis.com%2Fvarlog%2Fsystem",
+    "receiveTimestamp": "2025-11-01T19:57:54.299232076Z"
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/app/main.py\", line 13, in <module>\n    from src.collectors.binance_data import get_current_price\n  File \"/app/src/collectors/binance_data.py\", line 3, in <module>\n    from src.database import get_db_connection, IS_POSTGRES\n  File \"/app/src/database.py\", line 7, in <module>\n    from src.execution.binance_trader import initialize_trades_table\n  File \"/app/src/execution/binance_trader.py\", line 4, in <module>\n    from src.database import get_db_connection, IS_POSTGRES\nImportError: cannot import name 'get_db_connection' from partially initialized module 'src.database' (most likely due to a circular import) (/app/src/database.py)",
+    "insertId": "690666470001b827e93e9879",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "location": "us-central1",
+        "service_name": "crypto-bot",
+        "revision_name": "crypto-bot-00015-r9r",
+        "project_id": "weighty-works-476914-j2",
+        "configuration_name": "crypto-bot"
+      }
+    },
+    "timestamp": "2025-11-01T19:57:59.112679Z",
+    "severity": "ERROR",
+    "labels": {
+      "instanceId": "00147782961e3ec15c200b0e9c403ad235ea74255ba5ce90fd536f4c45e990596144b0dabf2896bae57aded405fe83a904a54dcd4f633352e889fd13cde00d11875fb09e10a05a64440fe26929e8"
+    },
+    "logName": "projects/weighty-works-476914-j2/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2025-11-01T19:57:59.284665635Z",
+    "errorGroups": [
+      {
+        "id": "CJC9goTftMSlWQ"
+      }
+    ]
+  },
+  {
+    "textPayload": "Default STARTUP TCP probe failed 1 time consecutively for container \"crypto-bot-1\" on port 8080. The instance was not started.\nConnection failed with status CANCELLED.",
+    "insertId": "69066647000eb23586ed9493",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "configuration_name": "crypto-bot",
+        "location": "us-central1",
+        "project_id": "weighty-works-476914-j2",
+        "revision_name": "crypto-bot-00015-r9r",
+        "service_name": "crypto-bot"
+      }
+    },
+    "timestamp": "2025-11-01T19:57:59.963125Z",
+    "severity": "ERROR",
+    "labels": {
+      "instanceId": "00147782961e3ec15c200b0e9c403ad235ea74255ba5ce90fd536f4c45e990596144b0dabf2896bae57aded405fe83a904a54dcd4f633352e889fd13cde00d11875fb09e10a05a64440fe26929e8"
+    },
+    "logName": "projects/weighty-works-476914-j2/logs/run.googleapis.com%2Fvarlog%2Fsystem",
+    "receiveTimestamp": "2025-11-01T19:58:00.300367672Z"
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/app/main.py\", line 13, in <module>\n    from src.collectors.binance_data import get_current_price\n  File \"/app/src/collectors/binance_data.py\", line 3, in <module>\n    from src.database import get_db_connection, IS_POSTGRES\n  File \"/app/src/database.py\", line 7, in <module>\n    from src.execution.binance_trader import initialize_trades_table\n  File \"/app/src/execution/binance_trader.py\", line 4, in <module>\n    from src.database import get_db_connection, IS_POSTGRES\nImportError: cannot import name 'get_db_connection' from partially initialized module 'src.database' (most likely due to a circular import) (/app/src/database.py)",
+    "insertId": "6906664e00019232f14dd4f7",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "service_name": "crypto-bot",
+        "revision_name": "crypto-bot-00015-r9r",
+        "configuration_name": "crypto-bot",
+        "project_id": "weighty-works-476914-j2",
+        "location": "us-central1"
+      }
+    },
+    "timestamp": "2025-11-01T19:58:06.102962Z",
+    "severity": "ERROR",
+    "labels": {
+      "instanceId": "0014778296a44ca73dd9cdfb6bca0a84a82b7fa9429cdca139cb015d3416ec17d392efee87306776837b73874bf33a2ea716d032b1eafcfa4123ab28a4d045c3344f5d56b7b1f5cede0346b73bd2"
+    },
+    "logName": "projects/weighty-works-476914-j2/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2025-11-01T19:58:06.274325249Z",
+    "errorGroups": [
+      {
+        "id": "CJC9goTftMSlWQ"
+      }
+    ]
+  },
+  {
+    "textPayload": "Default STARTUP TCP probe failed 1 time consecutively for container \"crypto-bot-1\" on port 8080. The instance was not started.\nConnection failed with status CANCELLED.",
+    "insertId": "6906664e000edd7a2c1628ac",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "revision_name": "crypto-bot-00015-r9r",
+        "configuration_name": "crypto-bot",
+        "service_name": "crypto-bot",
+        "location": "us-central1",
+        "project_id": "weighty-works-476914-j2"
+      }
+    },
+    "timestamp": "2025-11-01T19:58:06.974202Z",
+    "severity": "ERROR",
+    "labels": {
+      "instanceId": "0014778296a44ca73dd9cdfb6bca0a84a82b7fa9429cdca139cb015d3416ec17d392efee87306776837b73874bf33a2ea716d032b1eafcfa4123ab28a4d045c3344f5d56b7b1f5cede0346b73bd2"
+    },
+    "logName": "projects/weighty-works-476914-j2/logs/run.googleapis.com%2Fvarlog%2Fsystem",
+    "receiveTimestamp": "2025-11-01T19:58:07.282936142Z"
+  }
+]

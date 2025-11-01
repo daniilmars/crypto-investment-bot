@@ -4,7 +4,6 @@ import os
 import time
 from src.logger import log
 from src.config import app_config
-from src.execution.binance_trader import initialize_trades_table
 
 import re
 
@@ -146,11 +145,42 @@ def initialize_database():
     '''
     cursor.execute(signals_sql)
 
+    # --- Create trades table ---
+    trades_sql = '''
+        CREATE TABLE IF NOT EXISTS trades (
+            id SERIAL PRIMARY KEY,
+            symbol TEXT NOT NULL,
+            order_id TEXT UNIQUE,
+            side TEXT NOT NULL, -- BUY or SELL
+            entry_price REAL NOT NULL,
+            quantity REAL NOT NULL,
+            status TEXT NOT NULL, -- OPEN, CLOSED, CANCELED
+            pnl REAL, -- Profit and Loss
+            exit_price REAL,
+            entry_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            exit_timestamp TIMESTAMPTZ
+        )
+    ''' if IS_POSTGRES else '''
+        CREATE TABLE IF NOT EXISTS trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT NOT NULL,
+            order_id TEXT UNIQUE,
+            side TEXT NOT NULL,
+            entry_price REAL NOT NULL,
+            quantity REAL NOT NULL,
+            status TEXT NOT NULL,
+            pnl REAL,
+            exit_price REAL,
+            entry_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            exit_timestamp TIMESTAMP
+        )
+    '''
+    cursor.execute(trades_sql)
+
     conn.commit()
     cursor.close()
     conn.close()
     log.info("Database initialized successfully.")
-    initialize_trades_table()
 
 # --- Data Access Functions ---
 
