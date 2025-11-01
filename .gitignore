@@ -10,11 +10,15 @@ __pycache__/
 .venv/
 venv/
 env/
+.pytest_cache/
 
 # General
 .DS_Store
 *.log
 config/settings.yaml
-data/crypto_data.db
 key.json
+*.json
 google-cloud-sdk/
+
+# Local Data
+data/
