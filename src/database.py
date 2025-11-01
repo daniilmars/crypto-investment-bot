@@ -19,48 +19,42 @@ def get_db_connection():
     - Locally, connects to PostgreSQL using the DATABASE_URL.
     - Falls back to SQLite if no DATABASE_URL is provided.
     """
-    # Check if running in Google Cloud Run
-    is_in_cloud_run = 'K_SERVICE' in os.environ
+    instance_connection_name = app_config.get('DB_INSTANCE_CONNECTION_NAME')
+    db_config = app_config.get('db', {})
+    db_url = app_config.get('DATABASE_URL')
 
-    if IS_POSTGRES:
+    # Prioritize Unix socket connection for Cloud Run
+    if instance_connection_name and db_config:
         try:
-            if is_in_cloud_run:
-                # Use Unix socket for Cloud Run
-                instance_connection_name = os.environ.get("DB_INSTANCE_CONNECTION_NAME")
-                if not instance_connection_name:
-                    raise ValueError("DB_INSTANCE_CONNECTION_NAME environment variable is not set for Cloud Run.")
-
-                # Extract dbname, user, password from DATABASE_URL
-                db_url_pattern = re.compile(r"postgresql://(?P<user>.*?):(?P<password>.*?)@(?P<host>.*?)/(?P<dbname>.*)")
-                match = db_url_pattern.match(DB_URL)
-                if not match:
-                    raise ValueError("DATABASE_URL format is invalid.")
-                db_parts = match.groupdict()
-                
-                db_user = db_parts['user']
-                db_pass = db_parts['password']
-                db_name = db_parts['dbname']
-                
-                socket_dir = '/cloudsql'
-                db_socket = f"{socket_dir}/{instance_connection_name}"
-
-                dsn = (
-                    f"dbname={db_name} "
-                    f"user={db_user} "
-                    f"password={db_pass} "
-                    f"host={db_socket}"
-                )
-                conn = psycopg2.connect(dsn)
-            else:
-                # Use TCP connection for local/other environments
-                conn = psycopg2.connect(DB_URL)
+            socket_path = f"/cloudsql/{instance_connection_name}"
+            log.info(f"Connecting to Cloud SQL via Unix socket: {socket_path}")
             
+            conn = psycopg2.connect(
+                host=socket_path,
+                user=db_config.get('user'),
+                password=db_config.get('password'),
+                dbname=db_config.get('name')
+            )
+            log.info("Successfully connected to Cloud SQL.")
             return conn
-        except (psycopg2.OperationalError, ValueError) as e:
-            log.error(f"Could not connect to PostgreSQL database: {e}")
+        except psycopg2.OperationalError as e:
+            log.error(f"Could not connect to PostgreSQL via socket: {e}")
             raise
+
+    # Fallback to DATABASE_URL for local PostgreSQL
+    elif db_url:
+        try:
+            log.info("Connecting to PostgreSQL using DATABASE_URL.")
+            conn = psycopg2.connect(db_url)
+            log.info("Successfully connected to PostgreSQL.")
+            return conn
+        except psycopg2.OperationalError as e:
+            log.error(f"Could not connect to PostgreSQL via DATABASE_URL: {e}")
+            raise
+            
+    # Fallback to SQLite for local development without PostgreSQL
     else:
-        # Fallback to SQLite for local development
+        log.info("No PostgreSQL config found, falling back to SQLite.")
         db_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
         db_path = os.path.join(db_dir, 'crypto_data.db')
         os.makedirs(db_dir, exist_ok=True)

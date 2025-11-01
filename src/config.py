@@ -65,10 +65,29 @@ def load_config():
     if min_usd_str and min_usd_str.isdigit():
         config['settings']['min_whale_transaction_usd'] = int(min_usd_str)
 
-    # Database URL (for PostgreSQL in production)
-    config['database'] = {
-        'url': os.getenv('DATABASE_URL')
-    }
+    # Database Configuration
+    db_url = os.getenv('DATABASE_URL')
+    config['DATABASE_URL'] = db_url # Keep the raw URL for fallback
+    config['DB_INSTANCE_CONNECTION_NAME'] = os.getenv('DB_INSTANCE_CONNECTION_NAME')
+
+    if db_url and db_url.startswith('postgresql://'):
+        try:
+            # Parse the DATABASE_URL to extract components
+            from urllib.parse import urlparse
+            result = urlparse(db_url)
+            config['db'] = {
+                'user': result.username,
+                'password': result.password,
+                'host': result.hostname,
+                'port': result.port,
+                'name': result.path[1:] # Remove the leading '/'
+            }
+            log.info("Successfully parsed DATABASE_URL for PostgreSQL credentials.")
+        except Exception as e:
+            log.error(f"Could not parse DATABASE_URL: {e}")
+            config['db'] = {}
+    else:
+        config['db'] = {}
 
     return config
 
