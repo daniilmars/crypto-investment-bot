@@ -62,6 +62,7 @@ def run_bot_cycle():
             continue
 
         current_price = float(price_data.get('price'))
+        log.info(f"Current price for {symbol}: ${current_price:,.2f}")
         
         # --- Position Monitoring (runs regardless of paused state) ---
         if paper_trading:
@@ -85,30 +86,25 @@ def run_bot_cycle():
                         continue
         
         # --- Pause Check ---
-        # If the bot is paused, we skip the signal generation and new trade execution part.
         if not bot_is_running.is_set():
-            log.info(f"Bot is paused. Skipping new signal generation for {symbol}.")
+            log.info("Bot is paused. Skipping new signal generation and trading.")
             continue
 
         # 2. Analyze data for a signal
         log.info(f"Analyzing data for {symbol}...")
         
-        # Fetch historical data for technical analysis
         historical_prices = get_historical_prices(symbol, limit=max(sma_period, rsi_period) + 1)
         historical_timestamps = get_transaction_timestamps_since(symbol.lower(), hours_ago=baseline_hours)
         
-        # Calculate technical indicators and velocity
-        market_price_data = {
-            'current_price': current_price,
-            'sma': None,
-            'rsi': None
-        }
+        market_price_data = { 'current_price': current_price, 'sma': None, 'rsi': None }
         if len(historical_prices) >= sma_period:
             price_series = pd.Series(historical_prices)
             market_price_data['sma'] = price_series.rolling(window=sma_period).mean().iloc[-1]
         market_price_data['rsi'] = calculate_rsi(historical_prices, period=rsi_period)
+        log.info(f"Technical Indicators for {symbol}: SMA={market_price_data['sma']}, RSI={market_price_data['rsi']}")
         
         transaction_velocity = calculate_transaction_velocity(symbol, whale_transactions, historical_timestamps, baseline_hours)
+        log.info(f"Transaction Velocity for {symbol}: {transaction_velocity}")
         
         # 3. Generate a signal
         log.info(f"Generating signal for {symbol}...")
@@ -122,39 +118,40 @@ def run_bot_cycle():
             rsi_overbought_threshold=rsi_overbought_threshold,
             rsi_oversold_threshold=rsi_oversold_threshold
         )
+        log.info(f"Generated Signal for {symbol}: {signal}")
         save_signal(signal)
 
-        # --- 4. Paper Trading Logic (if enabled and not paused) ---
+        # --- 4. Paper Trading Logic ---
         if paper_trading:
-            log.info(f"Paper trading mode is active. Processing signals for {symbol}.")
-            open_positions = get_open_positions() # Re-fetch in case a position was closed
+            log.info(f"Processing signal for paper trading...")
+            open_positions = get_open_positions()
             current_balance = get_account_balance().get('total_usd', paper_trading_initial_capital)
             
-            # Execute new trades based on signals
             if signal['signal'] == "BUY":
                 if any(p['symbol'] == symbol and p['status'] == 'OPEN' for p in open_positions):
-                    log.info(f"[PAPER TRADE] Already have an open position for {symbol}. Skipping BUY.")
+                    log.info(f"Skipping BUY for {symbol}: Position already open.")
                 elif len(open_positions) >= max_concurrent_positions:
-                    log.info(f"[PAPER TRADE] Max concurrent positions ({max_concurrent_positions}) reached. Skipping BUY for {symbol}.")
+                    log.info(f"Skipping BUY for {symbol}: Max concurrent positions ({max_concurrent_positions}) reached.")
                 else:
                     capital_to_risk = current_balance * trade_risk_percentage
                     quantity_to_buy = capital_to_risk / current_price
-
                     if quantity_to_buy * current_price > current_balance:
-                        log.warning(f"[PAPER TRADE] Insufficient balance to place BUY order for {symbol}.")
+                        log.warning(f"Skipping BUY for {symbol}: Insufficient balance.")
                     else:
-                        log.info(f"[PAPER TRADE] Placing BUY order for {quantity_to_buy:.4f} {symbol} at ${current_price:,.2f}.")
+                        log.info(f"Executing paper trade: BUY {quantity_to_buy:.4f} {symbol}.")
                         place_order(symbol, "BUY", quantity_to_buy, current_price)
                         send_telegram_alert(signal)
 
             elif signal['signal'] == "SELL":
                 position_to_close = next((p for p in open_positions if p['symbol'] == symbol and p['status'] == 'OPEN'), None)
                 if position_to_close:
-                    log.info(f"[PAPER TRADE] Placing SELL order for {position_to_close['quantity']:.4f} {symbol} at ${current_price:,.2f}.")
+                    log.info(f"Executing paper trade: SELL {position_to_close['quantity']:.4f} {symbol}.")
                     place_order(symbol, "SELL", position_to_close['quantity'], current_price)
                     send_telegram_alert(signal)
                 else:
-                    log.info(f"[PAPER TRADE] No open position for {symbol} to SELL. Skipping.")
+                    log.info(f"Skipping SELL for {symbol}: No open position found.")
+            else: # HOLD
+                log.info(f"Signal is HOLD for {symbol}. No trade action taken.")
 
 def bot_loop():
     """
