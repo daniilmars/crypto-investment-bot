@@ -1,9 +1,10 @@
 import requests
 import os
 import time
-from src.database import get_db_connection, IS_POSTGRES
+from src.database import get_db_connection
 from src.config import app_config
 from src.logger import log
+import psycopg2
 
 # Whale Alert API base URL
 WHALE_ALERT_API_URL = "https://api.whale-alert.io/v1"
@@ -16,11 +17,14 @@ def save_whale_transactions(transactions: list):
     conn = get_db_connection()
     cursor = conn.cursor()
     
+    # Determine if the connection is PostgreSQL or SQLite at runtime
+    is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
+
     query = '''
         INSERT INTO whale_transactions (id, symbol, timestamp, amount_usd, from_owner, from_owner_type, to_owner, to_owner_type)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (id) DO NOTHING
-    ''' if IS_POSTGRES else '''
+    ''' if is_postgres_conn else '''
         INSERT OR IGNORE INTO whale_transactions (id, symbol, timestamp, amount_usd, from_owner, from_owner_type, to_owner, to_owner_type)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     '''
