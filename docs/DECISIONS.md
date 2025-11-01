@@ -278,3 +278,17 @@ These decisions represent a significant step towards building a robust, mid-freq
 
 **Reasoning:**
 This feature significantly improves the bot's observability and user-friendliness. Instead of relying solely on on-demand `/status` checks, users now receive proactive, regular updates on the bot's health and trading performance. This is a crucial feature for monitoring the bot's effectiveness over time, especially during extended paper trading tests, and builds confidence in the system before a live deployment. The multi-threaded implementation ensures this new feature does not interfere with the core trading cycle.
+
+---
+
+### ADR-019: Configuration of Static Outbound IP for Cloud Run
+
+**Date:** 2025-11-01
+
+**Decision:**
+- **Provisioned a Serverless VPC Access connector, Cloud Router, and Cloud NAT gateway.** This was done to provide the Cloud Run service with a static outbound IP address.
+- **The deployment workflow (`.github/workflows/google-cloud-run.yml`) was updated** to associate the Cloud Run service with the newly created VPC connector using the `--vpc-connector` flag.
+- **Created a new documentation file (`docs/NETWORKING.md`)** to explain the purpose and setup of this networking infrastructure.
+
+**Reasoning:**
+The deployment was failing due to `RemoteDisconnected` errors when trying to connect to the Whale Alert API. This indicated a network-level issue, likely caused by the ephemeral and unpredictable nature of Cloud Run's default outbound IP addresses. By routing outbound traffic through a Cloud NAT gateway, we ensure that all external requests originate from a single, static IP address. This provides a reliable and stable connection to external APIs and is a prerequisite for any services that might require IP address whitelisting in the future. This is a one-time infrastructure setup that significantly improves the reliability of the production deployment.

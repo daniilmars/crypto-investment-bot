@@ -320,17 +320,24 @@ echo "Your DATABASE_URL is: postgresql://postgres:${ROOT_PASSWORD}@${DB_IP}/cryp
 echo "Your INSTANCE_CONNECTION_NAME is: ${INSTANCE_CONNECTION_NAME}"
 ```
 
-**Step 9: Configure Cloud NAT for Internet Access**
+**Step 9: Configure Networking for Outbound Internet Access**
 
-By default, Cloud Run services do not have outbound internet access. To allow the bot to connect to external APIs like Telegram and Whale Alert, you must set up a Cloud NAT gateway.
+To allow the bot to connect to external APIs (like Whale Alert and Telegram), you must configure a Serverless VPC Access connector and a Cloud NAT gateway. This provides the Cloud Run service with a static outbound IP address and reliable internet access.
+
+For a detailed explanation of this setup, please refer to the [Networking Documentation](docs/NETWORKING.md).
 
 ```bash
+# Create the VPC Access Connector (this can take a few minutes)
+gcloud compute networks vpc-access connectors create crypto-bot-connector \
+    --region=us-central1 \
+    --range=10.8.0.0/28
+
 # Create a Cloud Router
 gcloud compute routers create crypto-bot-router \
     --network default \
     --region=us-central1
 
-# Create the NAT gateway
+# Create the NAT gateway to route traffic from the connector
 gcloud compute routers nats create crypto-bot-nat \
     --router=crypto-bot-router \
     --region=us-central1 \
@@ -349,6 +356,7 @@ gcloud compute routers nats create crypto-bot-nat \
     -   `WHALE_ALERT_API_KEY`: Your Whale Alert API key.
     -   `TELEGRAM_BOT_TOKEN`: Your Telegram bot token.
     -   `TELEGRAM_CHAT_ID`: Your Telegram chat ID.
+    -   `GEMINI_API_KEY`: Your Gemini API key.
 
 ### 4. Automated Deployment
 
