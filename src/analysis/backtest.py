@@ -1,117 +1,170 @@
-import sqlite3
 import pandas as pd
 import sys
 import os
+from datetime import timedelta
 
-# Add the project root to the Python path to allow imports from 'src'
+# Add the project root to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
+from src.config import app_config
 from src.database import get_db_connection
-from src.analysis.signal_engine import generate_comprehensive_signal
+from src.analysis.signal_engine import generate_signal
+from src.analysis.technical_indicators import calculate_rsi, calculate_sma
+from src.logger import log
 
 # --- Backtesting Configuration ---
-INITIAL_CAPITAL = 10000  # Start with $10,000
-TRADE_SIZE = 1000      # Each trade will be $1,000
+INITIAL_CAPITAL = app_config.get('settings', {}).get('paper_trading_initial_capital', 10000.0)
+TRADE_RISK_PERCENTAGE = app_config.get('settings', {}).get('trade_risk_percentage', 0.01)
+STOP_LOSS_PERCENTAGE = app_config.get('settings', {}).get('stop_loss_percentage', 0.02)
+TAKE_PROFIT_PERCENTAGE = app_config.get('settings', {}).get('take_profit_percentage', 0.05)
+MAX_CONCURRENT_POSITIONS = app_config.get('settings', {}).get('max_concurrent_positions', 3)
+SMA_PERIOD = app_config.get('settings', {}).get('sma_period', 20)
+RSI_PERIOD = app_config.get('settings', {}).get('rsi_period', 14)
 
 def load_historical_data():
-    """Loads all historical data from the database and merges it into a single DataFrame."""
-    print("Loading historical data from database...")
+    """Loads all historical price and whale data from the database."""
+    log.info("Loading all historical data...")
     conn = get_db_connection()
     
-    # Load data into pandas DataFrames
-    fng = pd.read_sql_query("SELECT * FROM fear_and_greed", conn)
-    prices = pd.read_sql_query("SELECT * FROM market_prices WHERE symbol = 'BTCUSDT'", conn) # Focus on BTC for now
-    whales = pd.read_sql_query("SELECT * FROM whale_transactions", conn)
+    prices_df = pd.read_sql_query("SELECT * FROM market_prices ORDER BY timestamp ASC", conn)
+    whales_df = pd.read_sql_query("SELECT * FROM whale_transactions ORDER BY timestamp ASC", conn)
     
     conn.close()
 
-    # Convert timestamp columns to datetime objects for proper merging
-    fng['date'] = pd.to_datetime(fng['timestamp'], unit='s').dt.date
-    # Rename price timestamp to avoid conflicts
-    prices.rename(columns={'timestamp': 'price_timestamp'}, inplace=True)
-    prices['date'] = pd.to_datetime(prices['price_timestamp']).dt.date
-    whales['date'] = pd.to_datetime(whales['timestamp'], unit='s').dt.date
+    prices_df['timestamp'] = pd.to_datetime(prices_df['timestamp'])
+    whales_df['timestamp'] = pd.to_datetime(whales_df['timestamp'], unit='s')
 
-    # Aggregate whale data by day
-    whale_summary = whales.groupby('date').agg(
-        num_transactions=('id', 'count'),
-        total_usd=('amount_usd', 'sum')
-    ).reset_index()
+    return prices_df, whales_df
 
-    # Merge the datasets
-    data = pd.merge(prices, fng, on='date', how='left')
-    data = pd.merge(data, whale_summary, on='date', how='left')
+class MockBinanceTrader:
+    """A mock trader to simulate portfolio management during the backtest."""
+    def __init__(self, initial_capital):
+        self.capital = initial_capital
+        self.positions = {}
+        self.trade_history = []
 
-    # Forward-fill missing F&G values
-    data['value'] = data['value'].ffill()
-    data['value_classification'] = data['value_classification'].ffill()
-    data = data.fillna(0) # Fill any remaining NaNs
+    def get_open_positions(self):
+        return list(self.positions.values())
 
-    # Calculate a simple moving average (SMA) for the price
-    data['price_sma_5'] = data['price'].rolling(window=5).mean()
-    # Drop initial rows where SMA is not available
-    data = data.dropna().reset_index(drop=True)
+    def get_account_balance(self):
+        total_value = self.capital
+        for symbol, pos in self.positions.items():
+            if 'current_price' in pos:
+                total_value += pos['quantity'] * pos['current_price']
+        return {'total_usd': total_value}
 
-    print(f"Loaded and merged {len(data)} data points for backtesting.")
-    return data
+    def place_order(self, symbol, side, quantity, price):
+        if side == 'BUY':
+            cost = quantity * price
+            if self.capital >= cost:
+                self.capital -= cost
+                if symbol in self.positions:
+                    existing_pos = self.positions[symbol]
+                    new_quantity = existing_pos['quantity'] + quantity
+                    new_entry_price = ((existing_pos['entry_price'] * existing_pos['quantity']) + cost) / new_quantity
+                    existing_pos['quantity'] = new_quantity
+                    existing_pos['entry_price'] = new_entry_price
+                else:
+                    self.positions[symbol] = {'symbol': symbol, 'quantity': quantity, 'entry_price': price}
+                log.info(f"EXECUTE BUY: {quantity:.4f} {symbol} at ${price:,.2f}")
+        
+        elif side == 'SELL':
+            if symbol in self.positions:
+                pos = self.positions.pop(symbol)
+                revenue = pos['quantity'] * price
+                pnl = (price - pos['entry_price']) * pos['quantity']
+                self.capital += revenue
+                self.trade_history.append({'symbol': symbol, 'pnl': pnl})
+                log.info(f"EXECUTE SELL: {pos['quantity']:.4f} {symbol} at ${price:,.2f}, PnL: ${pnl:,.2f}")
 
-def run_backtest(data):
+    def update_positions_price(self, symbol, price):
+        if symbol in self.positions:
+            self.positions[symbol]['current_price'] = price
+
+def run_backtest(watch_list, prices_df, whales_df):
     """Runs the backtesting simulation."""
-    print("\n--- Starting Backtest Simulation ---")
-    capital = INITIAL_CAPITAL
-    position = 0  # Current holdings in the asset (e.g., BTC)
-    trades = 0
+    log.info("\n--- Starting Backtest Simulation ---")
+    trader = MockBinanceTrader(INITIAL_CAPITAL)
 
-    if data.empty:
-        print("No data to backtest.")
-        return
+    for symbol_short in watch_list:
+        symbol = symbol_short if symbol_short.endswith('USDT') else f"{symbol_short}USDT"
+        symbol_prices = prices_df[prices_df['symbol'] == symbol].copy()
+        if len(symbol_prices) < max(SMA_PERIOD, RSI_PERIOD):
+            log.warning(f"Not enough price data for {symbol} to generate signals. Skipping.")
+            continue
 
-    for i, row in data.iterrows():
-        # Simulate the data available at that point in time
-        fng_data = [{'value': row['value'], 'value_classification': row['value_classification']}]
-        whale_data = [{'amount_usd': row['total_usd']}] if row['num_transactions'] > 0 else []
-        market_data = {'current_price': row['price'], 'sma_5': row['price_sma_5']}
+        # Pre-calculate indicators for the whole series
+        symbol_prices['sma'] = symbol_prices['price'].rolling(window=SMA_PERIOD).mean()
         
-        signal_data = generate_comprehensive_signal(fng_data, whale_data, market_data)
-        signal = signal_data.get('signal')
-        
-        current_price = row['price']
+        # RSI calculation needs a list, so we'll do it iteratively
+        price_list = symbol_prices['price'].tolist()
+        rsi_values = [calculate_rsi(price_list[:i+1], RSI_PERIOD) for i in range(len(price_list))]
+        symbol_prices['rsi'] = rsi_values
 
-        # --- Trading Logic ---
-        if signal == 'BUY' and capital >= TRADE_SIZE:
-            # Buy
-            position += TRADE_SIZE / current_price
-            capital -= TRADE_SIZE
-            trades += 1
-            print(f"{row['date']}: BUY signal. Bought {TRADE_SIZE / current_price:.6f} BTC at ${current_price:,.2f}")
-        
-        elif signal == 'SELL' and position > 0:
-            # Sell everything
-            sell_value = position * current_price
-            capital += sell_value
-            position = 0
-            trades += 1
-            print(f"{row['date']}: SELL signal. Sold all BTC for ${sell_value:,.2f}")
+        symbol_prices = symbol_prices.dropna()
 
-    # --- Final Results ---
-    final_portfolio_value = capital + (position * data.iloc[-1]['price'])
-    profit = final_portfolio_value - INITIAL_CAPITAL
-    profit_percent = (profit / INITIAL_CAPITAL) * 100
+        for i, row in symbol_prices.iterrows():
+            current_price = row['price']
+            trader.update_positions_price(symbol, current_price)
 
-    print("\n--- Backtest Results ---")
-    print(f"Initial Capital: ${INITIAL_CAPITAL:,.2f}")
-    print(f"Final Portfolio Value: ${final_portfolio_value:,.2f}")
-    print(f"Total Profit/Loss: ${profit:,.2f} ({profit_percent:.2f}%)")
-    print(f"Total Trades: {trades}")
-    print("------------------------")
+            # --- Stop-Loss / Take-Profit ---
+            open_positions = trader.get_open_positions()
+            for pos in open_positions:
+                if pos['symbol'] == symbol:
+                    pnl_percentage = (current_price - pos['entry_price']) / pos['entry_price']
+                    if pnl_percentage <= -STOP_LOSS_PERCENTAGE:
+                        log.info(f"STOP-LOSS triggered for {symbol}")
+                        trader.place_order(symbol, 'SELL', pos['quantity'], current_price)
+                    elif pnl_percentage >= TAKE_PROFIT_PERCENTAGE:
+                        log.info(f"TAKE-PROFIT triggered for {symbol}")
+                        trader.place_order(symbol, 'SELL', pos['quantity'], current_price)
 
+            # --- Generate Signal ---
+            market_data = {'current_price': current_price, 'sma': row['sma'], 'rsi': row['rsi']}
+            
+            start_time = row['timestamp'] - timedelta(minutes=15)
+            end_time = row['timestamp']
+            relevant_whales = whales_df[(whales_df['timestamp'] >= start_time) & (whales_df['timestamp'] <= end_time)]
+            whale_transactions = relevant_whales.to_dict('records') if not relevant_whales.empty else []
+            
+            signal_data = generate_signal(symbol, whale_transactions, market_data)
+            signal = signal_data.get('signal')
+
+            # --- Trading Logic ---
+            if signal == 'BUY' and len(trader.get_open_positions()) < MAX_CONCURRENT_POSITIONS and symbol not in trader.positions:
+                capital_to_risk = trader.get_account_balance()['total_usd'] * TRADE_RISK_PERCENTAGE
+                quantity_to_buy = capital_to_risk / current_price
+                trader.place_order(symbol, 'BUY', quantity_to_buy, current_price)
+            
+            elif signal == 'SELL' and symbol in trader.positions:
+                trader.place_order(symbol, 'SELL', trader.positions[symbol]['quantity'], current_price)
+
+    print_results(trader)
+
+def print_results(trader):
+    """Prints the final results of the backtest."""
+    final_value = trader.get_account_balance()['total_usd']
+    total_pnl = final_value - INITIAL_CAPITAL
+    total_pnl_percent = (total_pnl / INITIAL_CAPITAL) * 100
+    
+    num_trades = len(trader.trade_history)
+    wins = sum(1 for trade in trader.trade_history if trade['pnl'] > 0)
+    losses = num_trades - wins
+    win_rate = (wins / num_trades * 100) if num_trades > 0 else 0
+
+    log.info("\n--- Backtest Results ---")
+    log.info(f"Initial Capital: ${INITIAL_CAPITAL:,.2f}")
+    log.info(f"Final Portfolio Value: ${final_value:,.2f}")
+    log.info(f"Total Profit/Loss: ${total_pnl:,.2f} ({total_pnl_percent:.2f}%)")
+    log.info(f"Total Trades: {num_trades}")
+    log.info(f"Wins: {wins}, Losses: {losses}")
+    log.info(f"Win Rate: {win_rate:.2f}%")
+    log.info("------------------------")
 
 if __name__ == '__main__':
-    # Ensure pandas is installed
-    try:
-        import pandas
-    except ImportError:
-        print("Pandas is not installed. Please run: pip install pandas")
+    prices_df, whales_df = load_historical_data()
+    if prices_df.empty:
+        log.info("No data found in market_prices table. Exiting backtest.")
     else:
-        historical_data = load_historical_data()
-        run_backtest(historical_data)
+        watch_list = prices_df['symbol'].unique().tolist()
+        run_backtest(watch_list, prices_df, whales_df)

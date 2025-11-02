@@ -2,6 +2,27 @@ from typing import Optional
 import pandas as pd
 from src.logger import log
 
+def calculate_sma(prices: list, period: int = 20) -> Optional[float]:
+    """
+    Calculates the Simple Moving Average (SMA) for a given list of prices.
+    
+    Args:
+        prices (list): A list of historical prices, oldest to newest.
+        period (int): The lookback period for the SMA calculation.
+        
+    Returns:
+        float | None: The calculated SMA value, or None if there is not enough data.
+    """
+    if len(prices) < period:
+        log.warning(f"Not enough data to calculate SMA. Need {period} prices, have {len(prices)}.")
+        return None
+
+    price_series = pd.Series(prices)
+    sma = price_series.rolling(window=period).mean().iloc[-1]
+    
+    log.info(f"Calculated SMA({period}) as: {sma:.2f}")
+    return sma
+
 def calculate_rsi(prices: list, period: int = 14) -> Optional[float]:
     """
     Calculates the Relative Strength Index (RSI) for a given list of prices.

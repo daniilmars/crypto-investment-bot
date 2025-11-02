@@ -1,7 +1,9 @@
 import time
+import sqlite3
+import psycopg2
 from src.logger import log
 from src.config import app_config
-from src.database import get_db_connection, IS_POSTGRES
+from src.database import get_db_connection
 
 def place_order(symbol: str, side: str, quantity: float, price: float, order_type: str = "MARKET") -> dict:
     """
@@ -14,9 +16,10 @@ def place_order(symbol: str, side: str, quantity: float, price: float, order_typ
     order_id = f"PAPER_{symbol}_{side}_{int(time.time())}"
 
     conn = get_db_connection()
+    is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
     cursor = conn.cursor()
 
-    query = 'INSERT INTO trades (symbol, order_id, side, entry_price, quantity, status) VALUES (%s, %s, %s, %s, %s, %s)' if IS_POSTGRES else \
+    query = 'INSERT INTO trades (symbol, order_id, side, entry_price, quantity, status) VALUES (%s, %s, %s, %s, %s, %s)' if is_postgres_conn else \
             'INSERT INTO trades (symbol, order_id, side, entry_price, quantity, status) VALUES (?, ?, ?, ?, ?, ?)'
 
     cursor.execute(query, (symbol, order_id, side, price, quantity, "OPEN"))
@@ -32,14 +35,15 @@ def get_open_positions() -> list:
     Retrieves all currently open paper trading positions from the database.
     """
     conn = get_db_connection()
-    if IS_POSTGRES:
+    is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
+    if is_postgres_conn:
         from psycopg2.extras import RealDictCursor
         cursor = conn.cursor(cursor_factory=RealDictCursor)
     else:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
-    query = 'SELECT * FROM trades WHERE status = %s' if IS_POSTGRES else \
+    query = 'SELECT * FROM trades WHERE status = %s' if is_postgres_conn else \
             'SELECT * FROM trades WHERE status = ?'
     cursor.execute(query, ("OPEN",))
     
@@ -64,7 +68,6 @@ def get_account_balance() -> dict:
 
 if __name__ == '__main__':
     log.info("--- Testing Binance Trader Module (Paper Trading) ---")
-    initialize_trades_table()
     balance = get_account_balance()
     log.info(f"Initial Balance: {balance}")
 
