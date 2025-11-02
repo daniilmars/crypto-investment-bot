@@ -333,3 +333,19 @@ The `src/config.py` module was updated to correctly load and parse these new env
 
 **Reasoning:**
 This decision streamlines the process of updating the monitored currencies by providing a single, version-controlled source of truth. It eliminates the need for manual environment variable updates in the Cloud Console for currency list changes, making the deployment process more automated and less prone to human error. Furthermore, using a structured YAML format allows for future extensibility, enabling the addition of per-currency specific configurations (e.g., trading parameters) without requiring a complete overhaul of the configuration system. This aligns with best practices for managing application configuration in a scalable and maintainable manner.
+
+---
+
+### ADR-022: Resolution of `gcloud run deploy` Environment Variable Parsing Error
+
+**Date:** 2025-11-02
+
+**Decision:**
+The `gcloud run deploy` command consistently failed to parse environment variables containing comma-separated lists (e.g., `WATCH_LIST`, `STABLECOINS_TO_MONITOR`), resulting in a "Bad syntax for dict arg" error. This was due to the shell's interpretation of commas as delimiters for separate environment variables, despite various attempts at quoting and escaping.
+
+To definitively resolve this, the strategy was changed to avoid commas within the environment variable values themselves:
+- The `yq` commands in the CI/CD pipeline (`.github/workflows/google-cloud-run.yml`) were updated to join the currency symbols with a **semicolon (`;`)** instead of a comma.
+- The `src/config.py` module was updated to split the `WATCH_LIST` and `STABLECOINS_TO_MONITOR` environment variables using the semicolon (`;`) as the delimiter.
+
+**Reasoning:**
+This approach bypasses the `gcloud` command's parsing limitations by ensuring that the environment variable values are passed as single, unambiguous strings. By using a character (semicolon) that is not interpreted as a special delimiter by `gcloud`, the deployment process becomes robust and reliable. This ensures that the application correctly receives and parses the currency lists, allowing for seamless updates via the `config/watch_list.yaml` file.
