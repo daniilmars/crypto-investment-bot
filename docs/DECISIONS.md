@@ -370,7 +370,15 @@ This approach bypasses the `gcloud` command's parsing limitations by ensuring th
 
 
 
+
+
+
+
 ### ADR-023: GCP Cost Monitoring and Secure Configuration with Environment Variables
+
+
+
+
 
 
 
@@ -378,20 +386,104 @@ This approach bypasses the `gcloud` command's parsing limitations by ensuring th
 
 
 
+
+
+
+
 **Decision:**
+
+
 
 - **Implemented a `/gcosts` command in the Telegram bot** to provide on-demand summaries of Google Cloud Platform billing and budget information. This feature enhances the bot's operational visibility.
 
+
+
 - **Created a new module (`src/gcp/costs.py`)** to encapsulate the logic for fetching billing data. This module uses the `gcloud` command-line tool, executed via Python's `subprocess` module, to retrieve budget information.
+
+
 
 - **Instituted a role-based access control (RBAC) system** for sensitive commands. The `/gcosts` command is restricted to a list of `authorized_user_ids` defined in the configuration, preventing unauthorized access.
 
+
+
 - **Pivoted to an environment variable-first configuration strategy** for all sensitive data. The `src/config.py` module was refactored to load all API keys, Telegram secrets, and GCP configuration from environment variables, falling back to `settings.yaml` only for local development.
+
+
 
 - **Updated the CI/CD pipeline (`.github/workflows/google-cloud-run.yml`)** to pass all required secrets (e.g., `TELEGRAM_AUTHORIZED_USER_IDS`, `GCP_BILLING_ACCOUNT_ID`) to the Cloud Run service during deployment, sourcing them from GitHub Secrets.
 
 
 
+
+
+
+
 **Reasoning:**
 
+
+
 This set of decisions addresses two key areas: operational cost management and production security. The `/gcosts` command provides a simple, secure way to monitor project expenses without leaving the primary user interface (Telegram). The more critical decision was to move all secrets to environment variables for deployment. This is a security best practice that completely decouples sensitive information from the codebase, preventing accidental exposure. It ensures that the `settings.yaml` file can be used for convenient local development while the production deployment on Cloud Run is configured securely and automatically via the CI/CD pipeline.
+
+
+
+
+
+
+
+---
+
+
+
+
+
+
+
+### ADR-024: Implementation of In-App Database Schema Diagnostics
+
+
+
+
+
+
+
+**Date:** 2025-11-02
+
+
+
+
+
+
+
+**Decision:**
+
+
+
+- **Implemented a new, authorized Telegram command, `/db_schema`,** to allow administrators to inspect the production database schema directly from the bot.
+
+
+
+- **This approach was chosen after multiple failed attempts to reliably inspect the database schema using `gcloud sql connect` and other `gcloud` commands from a local machine.** The interactive nature and inconsistent command-line parsing of `gcloud` made it an unreliable tool for this diagnostic task.
+
+
+
+- **A new function, `get_database_schema`, was added to `src/database.py`.** This function uses the bot's existing, reliable database connection to query the system catalog (`pg_tables` or `sqlite_master`) and retrieve a list of all table names.
+
+
+
+- **The corresponding `/db_schema` command was added to `src/notify/telegram_bot.py`** and secured using the existing `is_authorized` check.
+
+
+
+
+
+
+
+**Reasoning:**
+
+
+
+This decision provides a far more reliable and straightforward method for database diagnostics. By leveraging the application's own active and correctly configured database connection, we bypass the complexities of local shell environments, authentication, and firewall rules. This makes debugging schema-related issues (like the previously encountered missing tables) faster, easier, and less error-prone, improving the overall maintainability of the project.
+
+
+
+

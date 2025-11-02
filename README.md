@@ -126,6 +126,7 @@ Once the bot is running, you can interact with it directly in your configured Te
 -   `/start`: Initializes the bot and confirms it's running. Also provides a brief overview of available commands.
 -   `/status`: The bot will perform a health check and use the Gemini API to generate a detailed summary of market activity and bot health, including the last generated signal.
 -   `/db_stats`: Provides a quick overview of the number of entries in the `whale_transactions`, `market_prices`, `signals`, and `trades` tables.
+-   `/db_schema`: Displays the names of all tables in the database, which is useful for diagnostics.
 
 Additionally, if configured, the bot will send **regular, automated performance reports** to your Telegram chat at a set interval (e.g., hourly), summarizing paper trading activity and PnL.
 
