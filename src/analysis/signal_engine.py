@@ -12,13 +12,12 @@ def generate_signal(symbol, whale_transactions, market_data, high_interest_walle
     baseline_avg = velocity_data.get('baseline_avg', 0.0)
     if current_count > (baseline_avg * velocity_threshold_multiplier):
         reason = f"Transaction velocity anomaly detected: {current_count} txns in last hour vs. baseline of {baseline_avg:.1f} (threshold: {baseline_avg * velocity_threshold_multiplier:.1f})."
-        return {"signal": "VOLATILITY_WARNING", "reason": reason}
+        return {"signal": "VOLATILITY_WARNING", "symbol": symbol, "reason": reason}
 
     # --- 2. Check for High-Priority Stablecoin Inflow ---
     inflow = stablecoin_data.get('stablecoin_inflow_usd', 0)
     if inflow > stablecoin_threshold:
-        reason = f"Massive stablecoin inflow of ${inflow:,.2f} detected to exchanges."
-        return {"signal": "BUY", "reason": "High-priority signal: " + reason}
+        return {"signal": "BUY", "symbol": symbol, "reason": "High-priority signal: " + reason}
 
     # --- 3. Check for High-Priority Signals from Watched Wallets ---
     if whale_transactions:
@@ -35,11 +34,11 @@ def generate_signal(symbol, whale_transactions, market_data, high_interest_walle
 
             if from_owner in high_interest_wallets and to_owner_type == 'exchange':
                 reason = f"High-interest wallet '{from_owner}' sent ${amount_usd:,.2f} of {symbol} to {to_owner}."
-                return {"signal": "SELL", "reason": "High-priority signal: " + reason}
+                return {"signal": "SELL", "symbol": symbol, "reason": "High-priority signal: " + reason}
 
             if to_owner in high_interest_wallets and from_owner_type == 'exchange':
                 reason = f"High-interest wallet '{to_owner}' received ${amount_usd:,.2f} of {symbol} from {from_owner}."
-                return {"signal": "BUY", "reason": "High-priority signal: " + reason}
+                return {"signal": "BUY", "symbol": symbol, "reason": "High-priority signal: " + reason}
 
     # --- 4. Standard Technical and On-Chain Analysis ---
     current_price = market_data.get('current_price')
@@ -47,7 +46,7 @@ def generate_signal(symbol, whale_transactions, market_data, high_interest_walle
     rsi = market_data.get('rsi')
 
     if current_price is None or sma is None or rsi is None:
-        return {"signal": "HOLD", "reason": "Missing market data (price, SMA, or RSI)."}
+        return {"signal": "HOLD", "symbol": symbol, "reason": "Missing market data (price, SMA, or RSI)."}
 
     is_uptrend = current_price > sma
     is_downtrend = current_price < sma
@@ -68,9 +67,9 @@ def generate_signal(symbol, whale_transactions, market_data, high_interest_walle
     reason = f"Price: ${current_price:,.2f}, SMA: ${sma:,.2f}, RSI: {rsi:.2f}, Whale Net Flow: ${net_flow:,.2f}."
 
     if is_uptrend and is_oversold and whale_confirms_buy:
-        return {"signal": "BUY", "reason": "Uptrend, oversold, and whale activity confirms BUY. " + reason}
+        return {"signal": "BUY", "symbol": symbol, "reason": "Uptrend, oversold, and whale activity confirms BUY. " + reason}
     
     if is_downtrend and is_overbought and whale_confirms_sell:
-        return {"signal": "SELL", "reason": "Downtrend, overbought, and whale activity confirms SELL. " + reason}
+        return {"signal": "SELL", "symbol": symbol, "reason": "Downtrend, overbought, and whale activity confirms SELL. " + reason}
 
-    return {"signal": "HOLD", "reason": "No strong signal detected. " + reason}
+    return {"signal": "HOLD", "symbol": symbol, "reason": "No strong signal detected. " + reason}
