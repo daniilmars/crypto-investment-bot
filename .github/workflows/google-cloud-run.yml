@@ -35,9 +35,12 @@ jobs:
         run: |-
           gcloud builds submit --tag ${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.SERVICE }}/${{ env.SERVICE }}:${{ github.sha }}
 
+      - name: 'Install yq'
+        run: sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod a+x /usr/local/bin/yq
+
       - name: 'Deploy to Cloud Run'
         run: |-
-          WATCH_LIST=$(paste -sd, -z config/watch_list.txt)
+          WATCH_LIST=$(yq e '.symbols | join(",")' config/watch_list.yaml)
           gcloud run deploy ${{ env.SERVICE }} \
             --platform managed \
             --region ${{ env.REGION }} \

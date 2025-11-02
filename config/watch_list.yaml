@@ -1,0 +1,15 @@
+# A list of cryptocurrency symbols to monitor.
+# This file is the single source of truth for the watch list.
+# It is read by the CI/CD pipeline and passed to the application as an environment variable.
+
+symbols:
+  - BTC
+  - ETH
+  - SOL
+  - XRP
+  - ADA
+  - AVAX
+  - DOGE
+  - MATIC
+  - BNB
+  - TRX
