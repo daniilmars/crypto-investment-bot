@@ -72,14 +72,14 @@ def load_config():
     # Load watch_list from environment variable, overriding YAML if present
     watch_list_env = os.getenv('WATCH_LIST')
     if watch_list_env:
-        config['settings']['watch_list'] = [symbol.strip() for symbol in watch_list_env.split(',')]
+        config['settings']['watch_list'] = [symbol.strip() for symbol in watch_list_env.split(';')]
     elif 'watch_list' not in config['settings']:
         config['settings']['watch_list'] = ['BTC'] # Default if neither YAML nor env var provides it
 
     # Load stablecoins_to_monitor from environment variable, overriding YAML if present
     stablecoins_env = os.getenv('STABLECOINS_TO_MONITOR')
     if stablecoins_env:
-        config['settings']['stablecoins_to_monitor'] = [symbol.strip() for symbol in stablecoins_env.split(',')]
+        config['settings']['stablecoins_to_monitor'] = [symbol.strip() for symbol in stablecoins_env.split(';')]
     elif 'stablecoins_to_monitor' not in config['settings']:
         config['settings']['stablecoins_to_monitor'] = ['usdt', 'usdc'] # Default if neither YAML nor env var provides it
 
