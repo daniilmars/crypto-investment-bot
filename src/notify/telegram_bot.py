@@ -3,7 +3,7 @@ from telegram import Bot
 from telegram.ext import Application, CommandHandler
 from src.logger import log
 from src.config import app_config
-from src.database import get_whale_transactions_since, get_price_history_since
+from src.database import get_whale_transactions_since, get_price_history_since, get_database_schema
 from src.analysis.gemini_summary import generate_market_summary
 from src.gcp.costs import get_gcp_billing_summary
 
@@ -104,9 +104,32 @@ async def help_command(update, context):
         "`/resume` - Resume trading after a pause.\n\n"
         "*Admin*\n"
         "`/db_stats` - View database table statistics.\n"
+        "`/db_schema` - View the names of all tables in the database.\n"
         "`/gcosts` - Get a summary of GCP billing and budget (authorized users only)."
     )
     await update.message.reply_text(help_text, parse_mode='Markdown')
+
+async def db_schema(update, context):
+    """Handles the /db_schema command."""
+    # --- Authorization Check ---
+    if not is_authorized(update.message.from_user.id):
+        log.warning(f"Unauthorized /db_schema command from user_id: {update.message.from_user.id}")
+        await update.message.reply_text("You are not authorized to use this command.")
+        return
+    
+    await update.message.reply_text("Fetching database schema...")
+    try:
+        tables = get_database_schema()
+        if tables:
+            message = "📋 *Database Schema*\n\nThe following tables exist in the database:\n"
+            for table in tables:
+                message += f"- `{table}`\n"
+        else:
+            message = "Database schema is empty. No tables found."
+        await update.message.reply_text(message, parse_mode='Markdown')
+    except Exception as e:
+        log.error(f"Error fetching DB schema: {e}")
+        await update.message.reply_text("Sorry, there was an error fetching the database schema.")
 
 async def gcosts(update, context):
     """Handles the /gcosts command."""
@@ -307,6 +330,7 @@ async def start_bot() -> Application:
         application.add_handler(CommandHandler("pause", pause))
         application.add_handler(CommandHandler("resume", resume))
         application.add_handler(CommandHandler("gcosts", gcosts))
+        application.add_handler(CommandHandler("db_schema", db_schema))
 
         # Initialize and run the bot in the background
         await application.initialize()

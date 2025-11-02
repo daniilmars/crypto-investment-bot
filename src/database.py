@@ -303,3 +303,23 @@ def get_table_counts() -> dict:
     conn.close()
     log.info(f"Retrieved table counts: {counts}")
     return counts
+
+def get_database_schema() -> list:
+    """Retrieves the names of all tables in the public schema."""
+    conn = get_db_connection()
+    is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
+    tables = []
+
+    with conn.cursor() as cursor:
+        if is_postgres_conn:
+            # Query for PostgreSQL
+            cursor.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
+            tables = [row[0] for row in cursor.fetchall()]
+        else:
+            # Query for SQLite
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            tables = [row[0] for row in cursor.fetchall()]
+            
+    conn.close()
+    log.info(f"Retrieved database schema. Tables: {tables}")
+    return tables
