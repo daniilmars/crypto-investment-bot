@@ -185,8 +185,10 @@ def status_update_loop():
         try:
             log.info("Fetching trade summary for periodic status update...")
             summary = get_trade_summary(hours_ago=interval_hours)
-            # We need to run the async function in a thread-safe way
-            asyncio.run(send_performance_report(summary, interval_hours))
+            # We need to run the async function in a thread-safe way on the main event loop
+            if telegram_app:
+                future = asyncio.run_coroutine_threadsafe(send_performance_report(summary, interval_hours), telegram_app.loop)
+                future.result() # Wait for the coroutine to finish
         except Exception as e:
             log.error(f"Error in status_update_loop: {e}")
         
