@@ -91,18 +91,22 @@ async def start(update, context):
 async def help_command(update, context):
     """Handles the /help command."""
     help_text = (
-        "Available Commands:\n\n"
-        "/start - Check if the bot is running.\n"
-        "/status - Get a detailed AI-generated market and bot health summary.\n"
-        "/positions - View all open paper trades.\n"
-        "/performance - Get a performance report of closed trades.\n"
-        "/db_stats - View database table statistics.\n"
-        "/pause - Temporarily pause new trades.\n"
-        "/resume - Resume trading after a pause.\n"
-        "/gcosts - Get a summary of GCP billing and budget.\n"
-        "/help - Show this help message."
+        "🤖 *Crypto Investment Bot Help*\n\n"
+        "Here are the available commands:\n\n"
+        "*General*\n"
+        "`/start` - Check if the bot is running.\n"
+        "`/status` - Get a detailed AI-generated market and bot health summary.\n"
+        "`/help` - Show this help message.\n\n"
+        "*Paper Trading*\n"
+        "`/positions` - View all open paper trades.\n"
+        "`/performance` - Get a performance report of closed trades.\n"
+        "`/pause` - Temporarily pause new trades.\n"
+        "`/resume` - Resume trading after a pause.\n\n"
+        "*Admin*\n"
+        "`/db_stats` - View database table statistics.\n"
+        "`/gcosts` - Get a summary of GCP billing and budget (authorized users only)."
     )
-    await update.message.reply_text(help_text)
+    await update.message.reply_text(help_text, parse_mode='Markdown')
 
 async def gcosts(update, context):
     """Handles the /gcosts command."""
