@@ -313,3 +313,23 @@ To resolve this, `main.py` was refactored:
 Proper `asyncio` event loop management is crucial in multi-threaded Python applications, especially when integrating libraries like `python-telegram-bot` that rely on `asyncio` for their operations. By giving the Telegram bot its own persistent event loop in a separate thread, we ensure it can continuously listen for and respond to commands without interfering with the main bot's trading logic or the health check server. This change significantly improves the bot's reliability and user interactivity in the production environment.
 
 ---
+
+### ADR-021: Centralized File-Based Currency Configuration
+
+**Date:** 2025-11-02
+
+**Decision:**
+To improve the management and deployment of the cryptocurrency and stablecoin watch lists, the configuration was centralized into a version-controlled YAML file (`config/watch_list.yaml`). This replaces the previous method of relying on `settings.yaml.example` or manually setting environment variables.
+
+The `config/watch_list.yaml` now contains two distinct lists: `symbols` for cryptocurrencies to monitor for trading signals, and `stablecoins` for stablecoins to monitor for exchange inflows.
+
+The CI/CD pipeline (`.github/workflows/google-cloud-run.yml`) was updated to:
+- Install `yq`, a command-line YAML processor.
+- Read both the `symbols` and `stablecoins` lists from `config/watch_list.yaml`.
+- Convert these lists into comma-separated strings.
+- Set these strings as `WATCH_LIST` and `STABLECOINS_TO_MONITOR` environment variables, respectively, for the Cloud Run service during deployment.
+
+The `src/config.py` module was updated to correctly load and parse these new environment variables into the application's configuration.
+
+**Reasoning:**
+This decision streamlines the process of updating the monitored currencies by providing a single, version-controlled source of truth. It eliminates the need for manual environment variable updates in the Cloud Console for currency list changes, making the deployment process more automated and less prone to human error. Furthermore, using a structured YAML format allows for future extensibility, enabling the addition of per-currency specific configurations (e.g., trading parameters) without requiring a complete overhaul of the configuration system. This aligns with best practices for managing application configuration in a scalable and maintainable manner.
