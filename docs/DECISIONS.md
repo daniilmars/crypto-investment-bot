@@ -294,3 +294,22 @@ This feature significantly improves the bot's observability and user-friendlines
 
 **Reasoning:**
 The deployment was failing due to `RemoteDisconnected` errors when trying to connect to the Whale Alert API. This indicated a network-level issue, likely caused by the ephemeral and unpredictable nature of Cloud Run's default outbound IP addresses. By routing outbound traffic through a Cloud NAT gateway, we ensure that all external requests originate from a single, static IP address. This provides a reliable and stable connection to external APIs and is a prerequisite for any services that might require IP address whitelisting in the future. This is a one-time infrastructure setup that significantly improves the reliability of the production deployment.
+
+---
+
+### ADR-020: Resolution of Telegram Bot Unresponsiveness
+
+**Date:** 2025-11-02
+
+**Decision:**
+The Telegram bot was not responding to commands despite appearing to start successfully in the Cloud Run logs. This was traced to an incorrect management of the `asyncio` event loop within the multi-threaded application structure. The `asyncio.run()` call for `start_bot()` in `main.py` was creating and immediately closing an event loop, preventing the bot's polling mechanism from running continuously.
+
+To resolve this, `main.py` was refactored:
+- A new `telegram_main` function was created to encapsulate the Telegram bot's initialization and `asyncio` event loop management.
+- This `telegram_main` function is now run in a dedicated `threading.Thread`, ensuring its `asyncio` event loop remains active and continuously processes updates from Telegram.
+- The `shutdown` logic was updated to gracefully stop this dedicated event loop.
+
+**Reasoning:**
+Proper `asyncio` event loop management is crucial in multi-threaded Python applications, especially when integrating libraries like `python-telegram-bot` that rely on `asyncio` for their operations. By giving the Telegram bot its own persistent event loop in a separate thread, we ensure it can continuously listen for and respond to commands without interfering with the main bot's trading logic or the health check server. This change significantly improves the bot's reliability and user interactivity in the production environment.
+
+---
