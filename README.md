@@ -196,7 +196,8 @@ gcloud services enable \
   artifactregistry.googleapis.com \
   cloudbuild.googleapis.com \
   sqladmin.googleapis.com \
-  sql-component.googleapis.com
+  sql-component.googleapis.com \
+  cloudresourcemanager.googleapis.com
 ```
 
 **Step 3: Create Artifact Registry Repository**

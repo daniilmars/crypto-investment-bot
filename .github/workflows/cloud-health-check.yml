@@ -38,6 +38,7 @@ jobs:
             "artifactregistry.googleapis.com"
             "cloudbuild.googleapis.com"
             "sqladmin.googleapis.com"
+            "cloudresourcemanager.googleapis.com"
           )
           for api in "${REQUIRED_APIS[@]}"; do
             if ! echo "${ENABLED_APIS}" | grep -q "^${api}$"; then
