@@ -1,7 +1,4 @@
-# A list of cryptocurrency symbols to monitor.
-# This file is the single source of truth for the watch list.
-# It is read by the CI/CD pipeline and passed to the application as an environment variable.
-
+# A list of cryptocurrency symbols to monitor for trading signals.
 symbols:
   - BTC
   - ETH
@@ -13,3 +10,13 @@ symbols:
   - MATIC
   - BNB
   - TRX
+
+# A list of stablecoin symbols (lowercase) to monitor for exchange inflows.
+stablecoins:
+  - usdt
+  - usdc
+  - busd
+  - dai
+  - tusd
+  - fdusd
+  - pyusd
