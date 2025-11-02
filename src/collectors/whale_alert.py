@@ -42,7 +42,7 @@ def save_whale_transactions(transactions: list):
     conn.close()
     log.info(f"Processed {len(transactions)} whale transactions for the database.")
 
-def get_whale_transactions(min_value_usd: int = 1000000):
+def get_whale_transactions(min_value_usd: int = 1000000, symbols: list = None):
     """
     Fetches the latest transactions from the Whale Alert API and saves them.
     """
@@ -54,6 +54,9 @@ def get_whale_transactions(min_value_usd: int = 1000000):
     start_timestamp = int(time.time()) - 3600
     headers = {'X-WA-API-KEY': api_key}
     params = {'start': start_timestamp, 'min_value': min_value_usd}
+
+    if symbols:
+        params['currencies'] = ",".join(s.lower() for s in symbols)
 
     try:
         response = requests.get(f"{WHALE_ALERT_API_URL}/transactions", headers=headers, params=params)

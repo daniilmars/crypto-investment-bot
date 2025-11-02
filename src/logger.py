@@ -7,7 +7,7 @@ def setup_logger():
     Configures a centralized logger to output to both the console and a log file.
     """
     logger = logging.getLogger("CryptoBotLogger")
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
 
     # Avoid adding handlers multiple times
     if logger.handlers:

@@ -94,14 +94,8 @@ v                v                                v
     ```
 
 3.  **Configure the bot:**
-    -   Rename `config/settings.yaml.example` to `config/settings.yaml`.
-    -   Open `config/settings.yaml` and add your API keys and Telegram details. Also, review and adjust the new settings for:
-        -   `watch_list`: Expanded list of cryptocurrencies to monitor.
-        -   `stablecoins_to_monitor`: Expanded list of stablecoins for inflow analysis.
-        -   `sma_period`, `rsi_overbought_threshold`, `rsi_oversold_threshold`: Configurable technical indicator parameters.
-        -   `paper_trading`, `paper_trading_initial_capital`: Enable/disable paper trading and set initial capital.
-        -   `trade_risk_percentage`, `stop_loss_percentage`, `take_profit_percentage`, `max_concurrent_positions`: Essential risk management parameters.
-        -   `regular_status_update`: Configure automated performance reports to Telegram.
+    -   **To manage the list of monitored currencies**, edit the `config/watch_list.yaml` file. This is the central source of truth for both the trading symbols and the stablecoins to be monitored.
+    -   **For local development**, rename `config/settings.yaml.example` to `config/settings.yaml` and add your API keys and other specific settings. For production deployments, these settings are managed via environment variables.
 
 ---
 

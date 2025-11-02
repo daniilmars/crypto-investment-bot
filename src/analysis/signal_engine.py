@@ -1,3 +1,6 @@
+import pandas as pd
+from src.logger import log
+
 def generate_signal(symbol, whale_transactions, market_data, high_interest_wallets=None, stablecoin_data=None, stablecoin_threshold=100000000, velocity_data=None, velocity_threshold_multiplier=5.0, rsi_overbought_threshold=70, rsi_oversold_threshold=30):
     """
     Generates a trading signal based on on-chain data and technical indicators.
@@ -45,7 +48,10 @@ def generate_signal(symbol, whale_transactions, market_data, high_interest_walle
     sma = market_data.get('sma')
     rsi = market_data.get('rsi')
 
+    log.debug(f"[{symbol}] Signal Check: Price={current_price}, SMA={sma}, RSI={rsi}")
+
     if current_price is None or sma is None or rsi is None:
+        log.debug(f"[{symbol}] HOLD: Missing market data (price, SMA, or RSI).")
         return {"signal": "HOLD", "symbol": symbol, "reason": "Missing market data (price, SMA, or RSI)."}
 
     is_uptrend = current_price > sma
@@ -55,21 +61,27 @@ def generate_signal(symbol, whale_transactions, market_data, high_interest_walle
 
     net_flow = 0
     # Filter whale transactions for the current symbol before calculating net flow
-    symbol_whale_transactions = [tx for tx in whale_transactions if tx.get('symbol', '').upper() == symbol.upper()]
+    base_symbol = symbol.replace('USDT', '')
+    symbol_whale_transactions = [tx for tx in whale_transactions if tx.get('symbol', '').upper() == base_symbol.upper()]
     if symbol_whale_transactions:
-        exchange_inflow = sum(tx['amount_usd'] for tx in symbol_whale_transactions if "exchange" in tx.get('to', {}).get('owner_type', ''))
-        exchange_outflow = sum(tx['amount_usd'] for tx in symbol_whale_transactions if "exchange" in tx.get('from', {}).get('owner_type', ''))
+        exchange_inflow = sum(tx['amount_usd'] for tx in symbol_whale_transactions if tx.get('to', {}).get('owner_type', '') == 'exchange')
+        exchange_outflow = sum(tx['amount_usd'] for tx in symbol_whale_transactions if tx.get('from', {}).get('owner_type', '') == 'exchange')
         net_flow = exchange_inflow - exchange_outflow
     
+    log.debug(f"[{symbol}] Whale Net Flow: ${net_flow:,.2f}")
+
     whale_confirms_buy = net_flow < 0
     whale_confirms_sell = net_flow > 0
 
     reason = f"Price: ${current_price:,.2f}, SMA: ${sma:,.2f}, RSI: {rsi:.2f}, Whale Net Flow: ${net_flow:,.2f}."
 
     if is_uptrend and is_oversold and whale_confirms_buy:
+        log.info(f"[{symbol}] BUY signal: Uptrend, oversold, and whale activity confirms BUY.")
         return {"signal": "BUY", "symbol": symbol, "reason": "Uptrend, oversold, and whale activity confirms BUY. " + reason}
     
     if is_downtrend and is_overbought and whale_confirms_sell:
+        log.info(f"[{symbol}] SELL signal: Downtrend, overbought, and whale activity confirms SELL.")
         return {"signal": "SELL", "symbol": symbol, "reason": "Downtrend, overbought, and whale activity confirms SELL. " + reason}
 
+    log.debug(f"[{symbol}] HOLD: No strong signal detected. {reason}")
     return {"signal": "HOLD", "symbol": symbol, "reason": "No strong signal detected. " + reason}
