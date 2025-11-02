@@ -352,6 +352,26 @@ gcloud compute routers nats create crypto-bot-nat \
     -   `TELEGRAM_CHAT_ID`: Your Telegram chat ID.
     -   `GEMINI_API_KEY`: Your Gemini API key.
 
+    Below is a comprehensive table of all secrets used in the deployment workflow:
+
+    | Secret Name                       | Description                                                                                             | Example Value                               |
+    | --------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+    | `GCP_PROJECT_ID`                  | Your Google Cloud project ID.                                                                           | `my-crypto-project-12345`                   |
+    | `GCP_SA_KEY`                      | The full JSON content of the service account key file (`key.json`).                                     | `{"type": "service_account", ...}`          |
+    | `DB_INSTANCE_CONNECTION_NAME`     | The full connection name for the Cloud SQL instance.                                                    | `my-crypto-project:us-central1:crypto-db`   |
+    | `DATABASE_URL`                    | The full PostgreSQL connection string for the database.                                                 | `postgresql://postgres:pass@ip/db`          |
+    | `WHALE_ALERT_API_KEY`             | Your API key for the Whale Alert service.                                                               | `a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6`          |
+    | `TELEGRAM_BOT_TOKEN`              | The token for your Telegram bot from @BotFather.                                                        | `1234567890:ABC-DEF1234ghIkl-zyx57W2v1u`     |
+    | `TELEGRAM_CHAT_ID`                | The chat ID where the bot will send messages.                                                           | `-1001234567890`                            |
+    | `TELEGRAM_AUTHORIZED_USER_IDS`    | A comma-separated list of numeric Telegram user IDs allowed to use admin commands.                      | `123456789,987654321`                       |
+    | `GEMINI_API_KEY`                  | Your API key for the Google Gemini service for AI summaries.                                            | `AIzaSy...`                                 |
+    | `BINANCE_API_KEY`                 | Your API key for the Binance exchange.                                                                  | `m...`                                      |
+    | `BINANCE_API_SECRET`              | Your API secret for the Binance exchange.                                                               | `z...`                                      |
+    | `GCP_BILLING_ENABLED`             | Set to `true` to enable the `/gcosts` command.                                                          | `true`                                      |
+    | `GCP_BILLING_ACCOUNT_ID`          | Your Google Cloud Billing Account ID.                                                                   | `012345-ABCDEF-GHIJKL`                      |
+    | `MIN_WHALE_TRANSACTION_USD`       | The minimum transaction value in USD to be considered a whale transaction.                              | `5000000`                                   |
+
+
 ### 4. Automated Deployment
 
 Once the setup is complete, the process is fully automated:

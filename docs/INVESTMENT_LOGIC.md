@@ -55,11 +55,30 @@ If no high-priority signals are generated, the bot proceeds with its standard an
     -   `rsi_oversold_threshold`: The RSI level below which an asset is considered oversold (e.g., 30).
     -   `rsi_overbought_threshold`: The RSI level above which an asset is considered overbought (e.g., 70).
 
-#### c. On-Chain Volume Confirmation
+#### c. Momentum Analysis: Moving Average Convergence Divergence (MACD)
 
--   **Logic:** The technical signals are validated by looking at the net flow of whale transactions for that specific symbol.
-    -   A bullish technical setup (Price > SMA, RSI < 30) is confirmed if there is a net inflow of the asset to private wallets (accumulation).
-    -   A bearish technical setup (Price < SMA, RSI > 70) is confirmed if there is a net inflow of the asset to exchange wallets (potential sell-off).
+-   **Logic:** MACD is a trend-following momentum indicator that shows the relationship between two moving averages of a security’s price.
+    -   A `MACD line` crossing **above** the `Signal line` is a bullish signal.
+    -   A `MACD line` crossing **below** the `Signal line` is a bearish signal.
+-   **Configuration:**
+    -   `macd_fast_period`: The lookback period for the fast Exponential Moving Average (EMA). A common value is 12.
+    -   `macd_slow_period`: The lookback period for the slow EMA. A common value is 26.
+    -   `macd_signal_period`: The lookback period for the signal line EMA. A common value is 9.
+
+#### d. Volatility Analysis: Bollinger Bands
+
+-   **Logic:** Bollinger Bands are a volatility indicator composed of a middle band (an SMA) and two outer bands.
+    -   Prices moving **below** the `Lower Band` may indicate an oversold condition (bullish).
+    -   Prices moving **above** the `Upper Band` may indicate an overbought condition (bearish).
+-   **Configuration:**
+    -   `bollinger_period`: The lookback period for the middle band SMA. A common value is 20.
+    -   `bollinger_std_dev`: The number of standard deviations for the outer bands. A common value is 2.
+
+#### e. On-Chain Volume Confirmation
+
+-   **Logic:** The technical signals are validated by looking at the net flow of whale transactions for that specific symbol. Due to limitations in the free Whale Alert API, the bot now fetches all available transactions and filters them locally by symbol.
+    -   A bullish technical setup (e.g., Price > SMA, RSI < 30, MACD crossover) is confirmed if there is a net inflow of the asset to private wallets (accumulation).
+    -   A bearish technical setup (e.g., Price < SMA, RSI > 70, MACD crossunder) is confirmed if there is a net inflow of the asset to exchange wallets (potential sell-off).
 
 ### 3. Risk Management Filter: Transaction Velocity
 

@@ -52,15 +52,46 @@ def load_config():
     config['api_keys']['whale_alert'] = os.getenv('WHALE_ALERT_API_KEY', config.get('api_keys', {}).get('whale_alert'))
     config['api_keys']['gemini'] = os.getenv('GEMINI_API_KEY', config.get('api_keys', {}).get('gemini'))
     
+    if 'binance' not in config['api_keys']:
+        config['api_keys']['binance'] = {}
+    config['api_keys']['binance']['api_key'] = os.getenv('BINANCE_API_KEY', config.get('api_keys', {}).get('binance', {}).get('api_key'))
+    config['api_keys']['binance']['api_secret'] = os.getenv('BINANCE_API_SECRET', config.get('api_keys', {}).get('binance', {}).get('api_secret'))
+    
+    config['api_keys']['lunarcrush'] = os.getenv('LUNARCRUSH_API_KEY', config.get('api_keys', {}).get('lunarcrush'))
+    config['api_keys']['glassnode'] = os.getenv('GLASSNODE_API_KEY', config.get('api_keys', {}).get('glassnode'))
+    config['api_keys']['newsapi'] = os.getenv('NEWSAPI_ORG_KEY', config.get('api_keys', {}).get('newsapi'))
+
     # Notification Services (Telegram)
     if 'telegram' not in config['notification_services']:
         config['notification_services']['telegram'] = {}
     config['notification_services']['telegram']['token'] = os.getenv('TELEGRAM_BOT_TOKEN', config.get('notification_services', {}).get('telegram', {}).get('token'))
     config['notification_services']['telegram']['chat_id'] = os.getenv('TELEGRAM_CHAT_ID', config.get('notification_services', {}).get('telegram', {}).get('chat_id'))
+    
+    # Authorized User IDs for Telegram (comma-separated string of integers)
+    authorized_users_env = os.getenv('TELEGRAM_AUTHORIZED_USER_IDS')
+    if authorized_users_env:
+        try:
+            config['notification_services']['telegram']['authorized_user_ids'] = [int(uid.strip()) for uid in authorized_users_env.split(',')]
+        except ValueError:
+            log.error("TELEGRAM_AUTHORIZED_USER_IDS environment variable contains non-integer values.")
+            config['notification_services']['telegram']['authorized_user_ids'] = []
+    elif 'authorized_user_ids' not in config['notification_services']['telegram']:
+        config['notification_services']['telegram']['authorized_user_ids'] = [] # Default to empty list
 
     # If the token and chat_id are provided via environment variables, assume the service should be enabled.
     if config['notification_services']['telegram']['token'] and config['notification_services']['telegram']['chat_id']:
         config['notification_services']['telegram']['enabled'] = True
+
+    # GCP Billing Settings
+    if 'gcp_billing' not in config:
+        config['gcp_billing'] = {}
+    gcp_billing_enabled_env = os.getenv('GCP_BILLING_ENABLED')
+    if gcp_billing_enabled_env is not None:
+        config['gcp_billing']['enabled'] = gcp_billing_enabled_env.lower() == 'true'
+    elif 'enabled' not in config['gcp_billing']:
+        config['gcp_billing']['enabled'] = False # Default to disabled
+
+    config['gcp_billing']['billing_account_id'] = os.getenv('GCP_BILLING_ACCOUNT_ID', config.get('gcp_billing', {}).get('billing_account_id'))
 
     # General Settings (example, can be expanded)
     # For settings like watch_list, it's often better to manage them in the yaml,

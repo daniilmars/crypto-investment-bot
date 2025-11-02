@@ -3,12 +3,14 @@ name: Cloud Health Check
 on:
   workflow_dispatch: # Allows manual triggering
   schedule:
-    - cron: '0 9 * * 1' # Runs every Monday at 9:00 AM UTC
+    - cron: '0 * * * *' # Runs every hour
 
 env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
   SERVICE_ACCOUNT_EMAIL: crypto-bot-deployer@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com
   DB_INSTANCE_NAME: crypto-bot-db
+  SERVICE_NAME: crypto-investment-bot
+  REGION: europe-west1
 
 jobs:
   run-health-checks:
@@ -76,6 +78,17 @@ jobs:
             exit 1
           fi
           echo "✅ Cloud SQL instance is RUNNABLE."
+
+      - name: 4. Get Cloud Run Service URL
+        id: get_url
+        run: |
+          URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} --platform managed --region ${{ env.REGION }} --format='value(status.url)')
+          echo "SERVICE_URL=$URL" >> $GITHUB_ENV
+
+      - name: 5. Trigger Hourly Report
+        run: |
+          echo "Triggering hourly status report..."
+          curl -s ${{ env.SERVICE_URL }}/send-report
 
       - name: Health Check Passed
         run: echo "🎉 All cloud health checks passed successfully."

@@ -336,16 +336,62 @@ This decision streamlines the process of updating the monitored currencies by pr
 
 ---
 
+
+
 ### ADR-022: Resolution of `gcloud run deploy` Environment Variable Parsing Error
+
+
 
 **Date:** 2025-11-02
 
+
+
 **Decision:**
+
 The `gcloud run deploy` command consistently failed to parse environment variables containing comma-separated lists (e.g., `WATCH_LIST`, `STABLECOINS_TO_MONITOR`), resulting in a "Bad syntax for dict arg" error. This was due to the shell's interpretation of commas as delimiters for separate environment variables, despite various attempts at quoting and escaping.
 
+
+
 To definitively resolve this, the strategy was changed to avoid commas within the environment variable values themselves:
+
 - The `yq` commands in the CI/CD pipeline (`.github/workflows/google-cloud-run.yml`) were updated to join the currency symbols with a **semicolon (`;`)** instead of a comma.
+
 - The `src/config.py` module was updated to split the `WATCH_LIST` and `STABLECOINS_TO_MONITOR` environment variables using the semicolon (`;`) as the delimiter.
 
+
+
 **Reasoning:**
+
 This approach bypasses the `gcloud` command's parsing limitations by ensuring that the environment variable values are passed as single, unambiguous strings. By using a character (semicolon) that is not interpreted as a special delimiter by `gcloud`, the deployment process becomes robust and reliable. This ensures that the application correctly receives and parses the currency lists, allowing for seamless updates via the `config/watch_list.yaml` file.
+
+
+
+---
+
+
+
+### ADR-023: GCP Cost Monitoring and Secure Configuration with Environment Variables
+
+
+
+**Date:** 2025-11-02
+
+
+
+**Decision:**
+
+- **Implemented a `/gcosts` command in the Telegram bot** to provide on-demand summaries of Google Cloud Platform billing and budget information. This feature enhances the bot's operational visibility.
+
+- **Created a new module (`src/gcp/costs.py`)** to encapsulate the logic for fetching billing data. This module uses the `gcloud` command-line tool, executed via Python's `subprocess` module, to retrieve budget information.
+
+- **Instituted a role-based access control (RBAC) system** for sensitive commands. The `/gcosts` command is restricted to a list of `authorized_user_ids` defined in the configuration, preventing unauthorized access.
+
+- **Pivoted to an environment variable-first configuration strategy** for all sensitive data. The `src/config.py` module was refactored to load all API keys, Telegram secrets, and GCP configuration from environment variables, falling back to `settings.yaml` only for local development.
+
+- **Updated the CI/CD pipeline (`.github/workflows/google-cloud-run.yml`)** to pass all required secrets (e.g., `TELEGRAM_AUTHORIZED_USER_IDS`, `GCP_BILLING_ACCOUNT_ID`) to the Cloud Run service during deployment, sourcing them from GitHub Secrets.
+
+
+
+**Reasoning:**
+
+This set of decisions addresses two key areas: operational cost management and production security. The `/gcosts` command provides a simple, secure way to monitor project expenses without leaving the primary user interface (Telegram). The more critical decision was to move all secrets to environment variables for deployment. This is a security best practice that completely decouples sensitive information from the codebase, preventing accidental exposure. It ensures that the `settings.yaml` file can be used for convenient local development while the production deployment on Cloud Run is configured securely and automatically via the CI/CD pipeline.

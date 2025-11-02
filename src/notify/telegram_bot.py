@@ -5,11 +5,17 @@ from src.logger import log
 from src.config import app_config
 from src.database import get_whale_transactions_since, get_price_history_since
 from src.analysis.gemini_summary import generate_market_summary
+from src.gcp.costs import get_gcp_billing_summary
 
 # --- Bot Initialization ---
 telegram_config = app_config.get('notification_services', {}).get('telegram', {})
 TOKEN = telegram_config.get('token')
 CHAT_ID = telegram_config.get('chat_id')
+AUTHORIZED_USER_IDS = telegram_config.get('authorized_user_ids', [])
+
+def is_authorized(user_id: int) -> bool:
+    """Checks if a user is authorized to perform sensitive actions."""
+    return user_id in AUTHORIZED_USER_IDS
 
 async def send_telegram_alert(signal: dict):
     """
@@ -93,9 +99,22 @@ async def help_command(update, context):
         "/db_stats - View database table statistics.\n"
         "/pause - Temporarily pause new trades.\n"
         "/resume - Resume trading after a pause.\n"
+        "/gcosts - Get a summary of GCP billing and budget.\n"
         "/help - Show this help message."
     )
     await update.message.reply_text(help_text)
+
+async def gcosts(update, context):
+    """Handles the /gcosts command."""
+    # --- Authorization Check ---
+    if not is_authorized(update.message.from_user.id):
+        log.warning(f"Unauthorized /gcosts command from user_id: {update.message.from_user.id}")
+        await update.message.reply_text("You are not authorized to use this command.")
+        return
+    
+    await update.message.reply_text("Fetching GCP billing summary...")
+    summary = get_gcp_billing_summary()
+    await update.message.reply_text(summary, parse_mode='Markdown')
 
 async def positions(update, context):
     """Handles the /positions command."""
@@ -283,6 +302,7 @@ async def start_bot() -> Application:
         application.add_handler(CommandHandler("performance", performance))
         application.add_handler(CommandHandler("pause", pause))
         application.add_handler(CommandHandler("resume", resume))
+        application.add_handler(CommandHandler("gcosts", gcosts))
 
         # Initialize and run the bot in the background
         await application.initialize()

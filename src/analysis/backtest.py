@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..',
 from src.config import app_config
 from src.database import get_db_connection
 from src.analysis.signal_engine import generate_signal
-from src.analysis.technical_indicators import calculate_rsi
+from src.analysis.technical_indicators import calculate_rsi, calculate_macd, calculate_bollinger_bands
 from src.logger import log
 
 # --- Backtesting Configuration ---
@@ -158,14 +158,19 @@ class Backtester:
             relevant_whales = self.whales_df[self.whales_df['timestamp'] <= current_timestamp_dt]
             whale_transactions = relevant_whales.to_dict('records')
 
-            # Calculate SMA and RSI for the current symbol
+            # Calculate technical indicators
+            price_list = historical_prices_df['price'].tolist()
             sma = historical_prices_df['price'].rolling(window=SMA_PERIOD).mean().iloc[-1]
-            rsi = calculate_rsi(historical_prices_df['price'].tolist(), period=RSI_PERIOD)
+            rsi = calculate_rsi(price_list, period=RSI_PERIOD)
+            macd = calculate_macd(price_list)
+            bollinger_bands = calculate_bollinger_bands(price_list)
 
             market_data = {
                 'current_price': current_price,
                 'sma': sma,
-                'rsi': rsi
+                'rsi': rsi,
+                'macd': macd,
+                'bollinger_bands': bollinger_bands
             }
 
             signal_data = generate_signal(symbol, whale_transactions, market_data)

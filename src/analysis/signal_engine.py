@@ -47,8 +47,10 @@ def generate_signal(symbol, whale_transactions, market_data, high_interest_walle
     current_price = market_data.get('current_price')
     sma = market_data.get('sma')
     rsi = market_data.get('rsi')
+    macd = market_data.get('macd', {})
+    bollinger_bands = market_data.get('bollinger_bands', {})
 
-    log.debug(f"[{symbol}] Signal Check: Price={current_price}, SMA={sma}, RSI={rsi}")
+    log.debug(f"[{symbol}] Signal Check: Price={current_price}, SMA={sma}, RSI={rsi}, MACD={macd}, BollingerBands={bollinger_bands}")
 
     if current_price is None or sma is None or rsi is None:
         log.debug(f"[{symbol}] HOLD: Missing market data (price, SMA, or RSI).")
@@ -57,7 +59,18 @@ def generate_signal(symbol, whale_transactions, market_data, high_interest_walle
     is_uptrend = current_price > sma
     is_downtrend = current_price < sma
     is_oversold = rsi < rsi_oversold_threshold
-    is_overbought = rsi > rsi_overbought_threshold
+    is_overbought = rsi > rsi_oversold_threshold
+
+    # MACD and Bollinger Bands signals
+    macd_line = macd.get('macd_line') if macd else None
+    signal_line = macd.get('signal_line') if macd else None
+    lower_band = bollinger_bands.get('lower_band') if bollinger_bands else None
+    upper_band = bollinger_bands.get('upper_band') if bollinger_bands else None
+
+    is_bullish_crossover = macd_line and signal_line and macd_line > signal_line
+    is_bearish_crossover = macd_line and signal_line and macd_line < signal_line
+    is_near_lower_band = lower_band and current_price <= lower_band
+    is_near_upper_band = upper_band and current_price >= upper_band
 
     net_flow = 0
     # Filter whale transactions for the current symbol before calculating net flow
@@ -73,15 +86,15 @@ def generate_signal(symbol, whale_transactions, market_data, high_interest_walle
     whale_confirms_buy = net_flow < 0
     whale_confirms_sell = net_flow > 0
 
-    reason = f"Price: ${current_price:,.2f}, SMA: ${sma:,.2f}, RSI: {rsi:.2f}, Whale Net Flow: ${net_flow:,.2f}."
+    reason = f"Price: ${current_price:,.2f}, SMA: ${sma:,.2f}, RSI: {rsi:.2f}, Whale Net Flow: ${net_flow:,.2f}, MACD: {macd}, Bollinger Bands: {bollinger_bands}."
 
-    if is_uptrend and is_oversold and whale_confirms_buy:
-        log.info(f"[{symbol}] BUY signal: Uptrend, oversold, and whale activity confirms BUY.")
-        return {"signal": "BUY", "symbol": symbol, "reason": "Uptrend, oversold, and whale activity confirms BUY. " + reason}
+    if is_uptrend and is_oversold and is_bullish_crossover and is_near_lower_band and whale_confirms_buy:
+        log.info(f"[{symbol}] BUY signal: Uptrend, oversold, bullish MACD crossover, near lower Bollinger Band, and whale activity confirms BUY.")
+        return {"signal": "BUY", "symbol": symbol, "reason": "Uptrend, oversold, bullish MACD crossover, near lower Bollinger Band, and whale activity confirms BUY. " + reason}
     
-    if is_downtrend and is_overbought and whale_confirms_sell:
-        log.info(f"[{symbol}] SELL signal: Downtrend, overbought, and whale activity confirms SELL.")
-        return {"signal": "SELL", "symbol": symbol, "reason": "Downtrend, overbought, and whale activity confirms SELL. " + reason}
+    if is_downtrend and is_overbought and is_bearish_crossover and is_near_upper_band and whale_confirms_sell:
+        log.info(f"[{symbol}] SELL signal: Downtrend, overbought, bearish MACD crossover, near upper Bollinger Band, and whale activity confirms SELL.")
+        return {"signal": "SELL", "symbol": symbol, "reason": "Downtrend, overbought, bearish MACD crossover, near upper Bollinger Band, and whale activity confirms SELL. " + reason}
 
     log.debug(f"[{symbol}] HOLD: No strong signal detected. {reason}")
     return {"signal": "HOLD", "symbol": symbol, "reason": "No strong signal detected. " + reason}

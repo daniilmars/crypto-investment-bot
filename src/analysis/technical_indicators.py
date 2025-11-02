@@ -101,3 +101,81 @@ def calculate_transaction_velocity(symbol: str, recent_transactions: list, histo
         'baseline_avg': baseline_hourly_avg,
         'is_anomaly': is_anomaly
     }
+
+def calculate_macd(prices: list, fast_period: int = 12, slow_period: int = 26, signal_period: int = 9) -> Optional[dict]:
+    """
+    Calculates the Moving Average Convergence Divergence (MACD) for a given list of prices.
+    
+    Args:
+        prices (list): A list of historical prices, oldest to newest.
+        fast_period (int): The lookback period for the fast EMA.
+        slow_period (int): The lookback period for the slow EMA.
+        signal_period (int): The lookback period for the signal line EMA.
+        
+    Returns:
+        dict | None: A dictionary containing the MACD line, signal line, and histogram, or None if there is not enough data.
+    """
+    if len(prices) < slow_period:
+        log.warning(f"Not enough data to calculate MACD. Need {slow_period} prices, have {len(prices)}.")
+        return None
+
+    price_series = pd.Series(prices)
+    
+    # Calculate the Fast and Slow EMAs
+    ema_fast = price_series.ewm(span=fast_period, adjust=False).mean()
+    ema_slow = price_series.ewm(span=slow_period, adjust=False).mean()
+    
+    # Calculate the MACD line
+    macd_line = ema_fast - ema_slow
+    
+    # Calculate the Signal line
+    signal_line = macd_line.ewm(span=signal_period, adjust=False).mean()
+    
+    # Calculate the Histogram
+    histogram = macd_line - signal_line
+    
+    macd_values = {
+        'macd_line': macd_line.iloc[-1],
+        'signal_line': signal_line.iloc[-1],
+        'histogram': histogram.iloc[-1]
+    }
+    
+    log.info(f"Calculated MACD({fast_period}, {slow_period}, {signal_period}) as: {macd_values}")
+    return macd_values
+
+def calculate_bollinger_bands(prices: list, period: int = 20, std_dev: int = 2) -> Optional[dict]:
+    """
+    Calculates the Bollinger Bands for a given list of prices.
+    
+    Args:
+        prices (list): A list of historical prices, oldest to newest.
+        period (int): The lookback period for the moving average.
+        std_dev (int): The number of standard deviations to use for the bands.
+        
+    Returns:
+        dict | None: A dictionary containing the upper, middle, and lower bands, or None if there is not enough data.
+    """
+    if len(prices) < period:
+        log.warning(f"Not enough data to calculate Bollinger Bands. Need {period} prices, have {len(prices)}.")
+        return None
+
+    price_series = pd.Series(prices)
+    
+    # Calculate the Middle Band (SMA)
+    middle_band = price_series.rolling(window=period).mean()
+    
+    # Calculate the Standard Deviation
+    rolling_std = price_series.rolling(window=period).std()
+    
+    # Calculate the Upper and Lower Bands
+    upper_band = middle_band + (rolling_std * std_dev)
+    lower_band = middle_band - (rolling_std * std_dev)
+    
+    bollinger_bands = {
+        'upper_band': upper_band.iloc[-1],
+        'middle_band': middle_band.iloc[-1],
+        'lower_band': lower_band.iloc[-1]
+    }
+    
+    log.info(f"Calculated Bollinger Bands({period}, {std_dev}) as: {bollinger_bands}")
+    return bollinger_bands

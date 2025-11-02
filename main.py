@@ -23,6 +23,9 @@ from src.config import app_config
 from src.execution.binance_trader import place_order, get_open_positions, get_account_balance
 from src.state import bot_is_running
 
+# Initialize the database at the start of the application
+initialize_database()
+
 def run_bot_cycle():
     """
     Executes one full cycle of the bot's logic.
@@ -168,6 +171,23 @@ def bot_loop():
         log.info(f"Cycle complete. Waiting for {run_interval_minutes} minutes...")
         shutdown_event.wait(run_interval_minutes * 60)
 
+def run_single_status_update():
+    """Fetches and sends a single status update."""
+    status_config = app_config.get('settings', {}).get('regular_status_update', {})
+    interval_hours = status_config.get('interval_hours', 1)
+    
+    from src.database import get_trade_summary
+    from src.notify.telegram_bot import send_performance_report
+
+    try:
+        log.info("Fetching trade summary for status update...")
+        summary = get_trade_summary(hours_ago=interval_hours)
+        if telegram_app:
+            future = asyncio.run_coroutine_threadsafe(send_performance_report(summary, interval_hours), telegram_app.loop)
+            future.result()
+    except Exception as e:
+        log.error(f"Error in run_single_status_update: {e}")
+
 def status_update_loop():
     """
     A separate loop to send periodic status updates.
@@ -180,22 +200,16 @@ def status_update_loop():
     interval_hours = status_config.get('interval_hours', 1)
     log.info(f"Starting regular status update loop. Interval: {interval_hours} hours.")
     
-    from src.database import get_trade_summary
-    from src.notify.telegram_bot import send_performance_report
-
     while not shutdown_event.is_set():
-        try:
-            log.info("Fetching trade summary for periodic status update...")
-            summary = get_trade_summary(hours_ago=interval_hours)
-            # We need to run the async function in a thread-safe way on the main event loop
-            if telegram_app:
-                future = asyncio.run_coroutine_threadsafe(send_performance_report(summary, interval_hours), telegram_app.loop)
-                future.result() # Wait for the coroutine to finish
-        except Exception as e:
-            log.error(f"Error in status_update_loop: {e}")
-        
-        # Wait for the interval, but check for shutdown event periodically
+        run_single_status_update()
         shutdown_event.wait(interval_hours * 3600)
+
+def trigger_status_update():
+    """Triggers a single run of the status update logic in a new thread."""
+    log.info("Manual status update triggered via health check endpoint.")
+    status_thread = threading.Thread(target=run_single_status_update)
+    status_thread.daemon = True
+    status_thread.start()
 
 def start_health_check_server():
     """
@@ -205,10 +219,17 @@ def start_health_check_server():
     
     class HealthCheckHandler(http.server.SimpleHTTPRequestHandler):
         def do_GET(self):
-            self.send_response(200)
-            self.send_header("Content-type", "text/plain")
-            self.end_headers()
-            self.wfile.write(b"OK")
+            if self.path == '/send-report':
+                trigger_status_update()
+                self.send_response(200)
+                self.send_header("Content-type", "text/plain")
+                self.end_headers()
+                self.wfile.write(b"OK - Report triggered")
+            else:
+                self.send_response(200)
+                self.send_header("Content-type", "text/plain")
+                self.end_headers()
+                self.wfile.write(b"OK")
 
     with socketserver.TCPServer(("", port), HealthCheckHandler) as httpd:
         log.info(f"Health check server started on port {port}")
@@ -257,9 +278,6 @@ if __name__ == "__main__":
 
     # --- Main Application ---
     try:
-        # Initialize the database first
-        initialize_database()
-
         # Start the Telegram bot in a separate thread
         telegram_thread = threading.Thread(target=telegram_main)
         telegram_thread.daemon = True

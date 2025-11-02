@@ -55,13 +55,12 @@ def get_whale_transactions(min_value_usd: int = 1000000, symbols: list = None):
     headers = {'X-WA-API-KEY': api_key}
     params = {'start': start_timestamp, 'min_value': min_value_usd}
 
-    if symbols:
-        params['currencies'] = ",".join(s.lower() for s in symbols)
-
     try:
         response = requests.get(f"{WHALE_ALERT_API_URL}/transactions", headers=headers, params=params)
         response.raise_for_status()
         data = response.json()
+        
+        log.debug(f"Whale Alert API Raw Response: {data}")
         
         if data.get('result') == 'success':
             transactions = data.get('transactions', [])

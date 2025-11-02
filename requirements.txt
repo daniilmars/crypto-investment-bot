@@ -3,6 +3,7 @@ requests
 
 # For data analysis and backtesting
 pandas
+pandas-ta
 
 # For connecting to PostgreSQL
 psycopg2-binary
