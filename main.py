@@ -214,6 +214,20 @@ def start_health_check_server():
         log.info(f"Health check server started on port {port}")
         httpd.serve_forever()
 
+def telegram_main():
+    """
+    Initializes and runs the Telegram bot's asyncio event loop.
+    """
+    global telegram_app
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    telegram_app = loop.run_until_complete(start_bot())
+    
+    if telegram_app:
+        # Keep the event loop running to handle Telegram updates
+        loop.run_forever()
+
 if __name__ == "__main__":
     # --- Global Application State ---
     telegram_app = None
@@ -228,6 +242,9 @@ if __name__ == "__main__":
 
             # Stop the Telegram bot
             if telegram_app:
+                # Get the running event loop and stop it
+                loop = asyncio.get_event_loop()
+                loop.call_soon_threadsafe(loop.stop)
                 # Running async stop function from a sync context
                 asyncio.run(stop_bot(telegram_app))
             
@@ -243,9 +260,13 @@ if __name__ == "__main__":
         # Initialize the database first
         initialize_database()
 
-        # Start the Telegram bot and get the application instance
-        from src.notify.telegram_bot import start_bot, stop_bot
-        telegram_app = asyncio.run(start_bot())
+        # Start the Telegram bot in a separate thread
+        telegram_thread = threading.Thread(target=telegram_main)
+        telegram_thread.daemon = True
+        telegram_thread.start()
+
+        # Give the Telegram bot a moment to initialize
+        time.sleep(2)
 
         if telegram_app:
             # Start the main bot cycle in a separate thread
