@@ -128,7 +128,27 @@ def initialize_database():
         cursor.execute(trades_sql)
 
         conn.commit()
-        log.info("Database tables created/verified successfully.")
+    conn.close()
+    log.info("Database tables created/verified successfully.")
+
+def get_db_stats() -> dict:
+    """Retrieves statistics from the database."""
+    stats = {}
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    tables = ["market_prices", "whale_transactions", "signals", "trades"]
+    for table in tables:
+        try:
+            cursor.execute(f"SELECT COUNT(*) FROM {table}")
+            stats[table] = cursor.fetchone()[0]
+        except Exception as e:
+            stats[table] = f"Error: {e}"
+            log.error(f"Could not get stats for table {table}: {e}")
+
+    cursor.close()
+    conn.close()
+    return stats
 
     except (sqlite3.Error, psycopg2.Error) as e:
         log.error(f"Error during database initialization: {e}", exc_info=True)
