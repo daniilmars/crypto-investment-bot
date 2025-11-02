@@ -1,6 +1,6 @@
 import requests
 import json
-from src.database import get_db_connection, IS_POSTGRES
+from src.database import get_db_connection
 from src.logger import log
 
 # Binance API base URL
