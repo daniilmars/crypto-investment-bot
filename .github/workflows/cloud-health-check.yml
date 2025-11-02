@@ -92,3 +92,25 @@ jobs:
 
       - name: Health Check Passed
         run: echo "🎉 All cloud health checks passed successfully."
+
+  analyze-currencies:
+    name: Analyze Currencies in DB
+    runs-on: ubuntu-latest
+    needs: run-health-checks
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run analysis script
+        env:
+          DATABASE_URL_SECRET: ${{ secrets.DATABASE_URL }}
+        run: python3 temporary_script.py
+
