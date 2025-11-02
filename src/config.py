@@ -69,6 +69,13 @@ def load_config():
     if min_usd_str and min_usd_str.isdigit():
         config['settings']['min_whale_transaction_usd'] = int(min_usd_str)
 
+    # Load watch_list from environment variable, overriding YAML if present
+    watch_list_env = os.getenv('WATCH_LIST')
+    if watch_list_env:
+        config['settings']['watch_list'] = [symbol.strip() for symbol in watch_list_env.split(',')]
+    elif 'watch_list' not in config['settings']:
+        config['settings']['watch_list'] = ['BTC'] # Default if neither YAML nor env var provides it
+
     # Database Configuration
     db_url = os.getenv('DATABASE_URL')
     config['DATABASE_URL'] = db_url # Keep the raw URL for fallback

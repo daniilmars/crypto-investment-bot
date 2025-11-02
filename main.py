@@ -31,7 +31,7 @@ def run_bot_cycle():
     settings = app_config.get('settings', {})
     
     # Load all settings
-    watch_list = settings.get('watch_list', ['BTCUSDT'])
+    watch_list = settings.get('watch_list', ['BTC']) # Default to BTC if not configured
     min_whale_value = settings.get('min_whale_transaction_usd', 1000000)
     high_interest_wallets = settings.get('high_interest_wallets', [])
     stablecoins_to_monitor = settings.get('stablecoins_to_monitor', [])
