@@ -58,6 +58,10 @@ def load_config():
     config['notification_services']['telegram']['token'] = os.getenv('TELEGRAM_BOT_TOKEN', config.get('notification_services', {}).get('telegram', {}).get('token'))
     config['notification_services']['telegram']['chat_id'] = os.getenv('TELEGRAM_CHAT_ID', config.get('notification_services', {}).get('telegram', {}).get('chat_id'))
 
+    # If the token and chat_id are provided via environment variables, assume the service should be enabled.
+    if config['notification_services']['telegram']['token'] and config['notification_services']['telegram']['chat_id']:
+        config['notification_services']['telegram']['enabled'] = True
+
     # General Settings (example, can be expanded)
     # For settings like watch_list, it's often better to manage them in the yaml,
     # but this shows how it could be done for simple values.
