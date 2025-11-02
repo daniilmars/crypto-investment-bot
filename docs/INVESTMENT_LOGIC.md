@@ -33,52 +33,40 @@ These signals are designed to react immediately to significant, unambiguous on-c
     -   `stablecoins_to_monitor`: A list of stablecoin symbols to include in the analysis (e.g., `usdt`, `usdc`).
     -   `stablecoin_inflow_threshold_usd`: The total USD value of stablecoin inflows that must be exceeded within a single cycle to trigger a market-wide `BUY` signal.
 
-### 2. Standard Signal Analysis (Technical + On-Chain)
+### 2. Standard Signal Analysis (Scoring-Based)
 
-If no high-priority signals are generated, the bot proceeds with its standard analysis for each symbol in the `watch_list`. A signal is generated based on the confluence of the following factors:
+If no high-priority signals are generated, the bot proceeds with its standard analysis for each symbol in the `watch_list`. Instead of requiring all factors to align perfectly, the bot now uses a scoring system. Each of the following factors contributes a point to either a "buy" or "sell" score.
 
 #### a. Trend Analysis: Simple Moving Average (SMA)
 
--   **Logic:** The bot compares the asset's `current_price` to its Simple Moving Average (SMA).
-    -   `current_price > SMA`: Indicates a bullish trend.
-    -   `current_price < SMA`: Indicates a bearish trend.
+-   **Logic:** Compares the asset's `current_price` to its Simple Moving Average (SMA).
+    -   `current_price > SMA`: Adds 1 to the `buy_score`.
+    -   `current_price < SMA`: Adds 1 to the `sell_score`.
 -   **Configuration:**
-    -   `sma_period`: The lookback period (in number of data points) for calculating the SMA. A common value is 20.
+    -   `sma_period`: The lookback period for the SMA calculation.
 
 #### b. Momentum Analysis: Relative Strength Index (RSI)
 
--   **Logic:** The RSI is a momentum oscillator that measures the speed and change of price movements.
-    -   An RSI value **below** the `rsi_oversold_threshold` indicates the asset may be oversold and due for a price increase (bullish).
-    -   An RSI value **above** the `rsi_overbought_threshold` indicates the asset may be overbought and due for a price correction (bearish).
+-   **Logic:** The RSI measures the speed and change of price movements.
+    -   An RSI value **below** `rsi_oversold_threshold`: Adds 1 to the `buy_score`.
+    -   An RSI value **above** `rsi_overbought_threshold`: Adds 1 to the `sell_score`.
 -   **Configuration:**
-    -   `rsi_period`: The lookback period for calculating the RSI. A common value is 14.
-    -   `rsi_oversold_threshold`: The RSI level below which an asset is considered oversold (e.g., 30).
-    -   `rsi_overbought_threshold`: The RSI level above which an asset is considered overbought (e.g., 70).
+    -   `rsi_oversold_threshold`: The RSI level below which an asset is considered oversold.
+    -   `rsi_overbought_threshold`: The RSI level above which an asset is considered overbought.
 
-#### c. Momentum Analysis: Moving Average Convergence Divergence (MACD)
+#### c. On-Chain Volume Confirmation
 
--   **Logic:** MACD is a trend-following momentum indicator that shows the relationship between two moving averages of a security’s price.
-    -   A `MACD line` crossing **above** the `Signal line` is a bullish signal.
-    -   A `MACD line` crossing **below** the `Signal line` is a bearish signal.
--   **Configuration:**
-    -   `macd_fast_period`: The lookback period for the fast Exponential Moving Average (EMA). A common value is 12.
-    -   `macd_slow_period`: The lookback period for the slow EMA. A common value is 26.
-    -   `macd_signal_period`: The lookback period for the signal line EMA. A common value is 9.
+-   **Logic:** The net flow of whale transactions for the specific symbol is analyzed.
+    -   A net outflow from exchanges (more leaving than entering) suggests accumulation: Adds 1 to the `buy_score`.
+    -   A net inflow to exchanges (more entering than leaving) suggests potential selling pressure: Adds 1 to the `sell_score`.
 
-#### d. Volatility Analysis: Bollinger Bands
+#### Signal Generation
 
--   **Logic:** Bollinger Bands are a volatility indicator composed of a middle band (an SMA) and two outer bands.
-    -   Prices moving **below** the `Lower Band` may indicate an oversold condition (bullish).
-    -   Prices moving **above** the `Upper Band` may indicate an overbought condition (bearish).
--   **Configuration:**
-    -   `bollinger_period`: The lookback period for the middle band SMA. A common value is 20.
-    -   `bollinger_std_dev`: The number of standard deviations for the outer bands. A common value is 2.
+-   A `BUY` signal is generated if the final `buy_score` is **2 or greater**.
+-   A `SELL` signal is generated if the final `sell_score` is **2 or greater**.
+-   If neither threshold is met, a `HOLD` signal is issued.
 
-#### e. On-Chain Volume Confirmation
-
--   **Logic:** The technical signals are validated by looking at the net flow of whale transactions for that specific symbol. Due to limitations in the free Whale Alert API, the bot now fetches all available transactions and filters them locally by symbol.
-    -   A bullish technical setup (e.g., Price > SMA, RSI < 30, MACD crossover) is confirmed if there is a net inflow of the asset to private wallets (accumulation).
-    -   A bearish technical setup (e.g., Price < SMA, RSI > 70, MACD crossunder) is confirmed if there is a net inflow of the asset to exchange wallets (potential sell-off).
+This scoring system is more flexible and robust than a rigid confluence model, as it can generate signals even if not all indicators are in perfect alignment, reflecting more realistic market conditions.
 
 ### 3. Risk Management Filter: Transaction Velocity
 

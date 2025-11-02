@@ -1,10 +1,9 @@
+import os
 import sqlite3
 import psycopg2
-import os
-import time
-from src.logger import log
-from src.config import app_config
 from psycopg2.extras import RealDictCursor
+from src.config import app_config
+from src.logger import log
 
 # --- Database Connection Management ---
 
@@ -24,7 +23,6 @@ def get_db_connection():
         try:
             socket_path = f"/cloudsql/{instance_connection_name}"
             log.info(f"Connecting to Cloud SQL via Unix socket: {socket_path}")
-            
             conn = psycopg2.connect(
                 host=socket_path,
                 user=db_config.get('user'),
@@ -47,7 +45,6 @@ def get_db_connection():
         except psycopg2.OperationalError as e:
             log.error(f"Could not connect to PostgreSQL via DATABASE_URL: {e}", exc_info=True)
             raise
-            
     # Fallback to SQLite for local development without PostgreSQL
     else:
         log.info("No PostgreSQL config found, falling back to SQLite.")
@@ -74,7 +71,6 @@ def initialize_database():
         log.info(f"Connection type detected: {'PostgreSQL' if is_postgres_conn else 'SQLite'}")
 
         # --- Create Tables with dialect-specific SQL ---
-        
         # Market Prices
         market_prices_sql = '''
             CREATE TABLE IF NOT EXISTS market_prices (
@@ -130,9 +126,11 @@ def initialize_database():
         conn.commit()
     except (sqlite3.Error, psycopg2.Error) as e:
         log.error(f"Error during database initialization: {e}", exc_info=True)
-        if conn: conn.rollback()
+        if conn:
+            conn.rollback()
     finally:
-        if conn: conn.close()
+        if conn:
+            conn.close()
     log.info("Database initialization process completed.")
 
 def get_db_stats() -> dict:
@@ -140,7 +138,6 @@ def get_db_stats() -> dict:
     stats = {}
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     tables = ["market_prices", "whale_transactions", "signals", "trades"]
     for table in tables:
         try:
@@ -162,7 +159,6 @@ def save_signal(signal_data: dict):
     is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
     query = 'INSERT INTO signals (symbol, signal_type, reason, price) VALUES (%s, %s, %s, %s)' if is_postgres_conn else \
             'INSERT INTO signals (symbol, signal_type, reason, price) VALUES (?, ?, ?, ?)'
-    
     with conn.cursor() as cursor:
         cursor.execute(query, (
             signal_data.get('symbol'), signal_data.get('signal'),
@@ -177,14 +173,11 @@ def get_last_signal():
     conn = get_db_connection()
     is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
     cursor_factory = RealDictCursor if is_postgres_conn else None
-    
     with conn.cursor(cursor_factory=cursor_factory) as cursor:
         query = 'SELECT symbol, signal_type AS signal, reason, price AS current_price, timestamp FROM signals ORDER BY timestamp DESC LIMIT 1'
         cursor.execute(query)
         last_signal = cursor.fetchone()
-    
     conn.close()
-    
     if last_signal:
         return dict(last_signal)
     return {"signal": "HOLD", "reason": "No signals recorded yet."}
@@ -195,11 +188,9 @@ def get_historical_prices(symbol: str, limit: int = 5):
     is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
     query = 'SELECT price FROM market_prices WHERE symbol = %s ORDER BY timestamp DESC LIMIT %s' if is_postgres_conn else \
             'SELECT price FROM market_prices WHERE symbol = ? ORDER BY timestamp DESC LIMIT ?'
-    
     with conn.cursor() as cursor:
         cursor.execute(query, (symbol, limit))
         prices = [row[0] for row in cursor.fetchall()]
-    
     conn.close()
     prices.reverse()
     return prices
@@ -218,13 +209,11 @@ def get_trade_summary(hours_ago: int = 24) -> dict:
             query = "SELECT * FROM trades WHERE status = 'CLOSED' AND exit_timestamp >= datetime('now', ? || ' hours')"
             cursor.execute(query, (f'-{hours_ago}',))
         closed_trades = [dict(row) for row in cursor.fetchall()]
-    
     conn.close()
 
     total_trades = len(closed_trades)
     wins = sum(1 for trade in closed_trades if trade.get('pnl', 0) > 0)
     total_pnl = sum(trade.get('pnl', 0) for trade in closed_trades)
-    
     return {
         "total_closed": total_trades, "wins": wins, "losses": total_trades - wins,
         "total_pnl": total_pnl, "win_rate": (wins / total_trades * 100) if total_trades > 0 else 0
@@ -244,7 +233,6 @@ def get_whale_transactions_since(hours_ago: int = 24) -> list:
             query = "SELECT * FROM whale_transactions WHERE recorded_at >= datetime('now', ? || ' hours') ORDER BY timestamp DESC"
             cursor.execute(query, (f'-{hours_ago}',))
         transactions = [dict(row) for row in cursor.fetchall()]
-    
     conn.close()
     log.info(f"Retrieved {len(transactions)} whale transactions from the last {hours_ago} hours.")
     return transactions
@@ -263,7 +251,6 @@ def get_price_history_since(hours_ago: int = 24) -> list:
             query = "SELECT * FROM market_prices WHERE timestamp >= datetime('now', ? || ' hours') ORDER BY timestamp ASC"
             cursor.execute(query, (f'-{hours_ago}',))
         prices = [dict(row) for row in cursor.fetchall()]
-    
     conn.close()
     log.info(f"Retrieved {len(prices)} price points from the last {hours_ago} hours.")
     return prices
@@ -281,12 +268,11 @@ def get_transaction_timestamps_since(symbol: str, hours_ago: int) -> list:
             query = "SELECT timestamp FROM whale_transactions WHERE symbol = ? AND recorded_at >= datetime('now', ? || ' hours')"
             cursor.execute(query, (symbol, f'-{hours_ago}'))
         timestamps = [row[0] for row in cursor.fetchall()]
-    
     conn.close()
     return timestamps
 
 def get_table_counts() -> dict:
-    """Retrieves the row count for the main tables in the database."""
+    """Retrierieves the row count for the main tables in the database."""
     conn = get_db_connection()
     tables = ["whale_transactions", "market_prices", "signals", "trades"]
     counts = {}
@@ -299,7 +285,6 @@ def get_table_counts() -> dict:
             except (sqlite3.OperationalError, psycopg2.errors.UndefinedTable):
                 counts[table] = 0
                 log.warning(f"Table '{table}' not found while getting counts.")
-    
     conn.close()
     log.info(f"Retrieved table counts: {counts}")
     return counts
@@ -319,7 +304,6 @@ def get_database_schema() -> list:
             # Query for SQLite
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
             tables = [row[0] for row in cursor.fetchall()]
-            
     conn.close()
     log.info(f"Retrieved database schema. Tables: {tables}")
     return tables

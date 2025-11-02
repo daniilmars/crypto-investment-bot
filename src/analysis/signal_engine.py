@@ -13,20 +13,22 @@ def generate_signal(symbol, whale_transactions, market_data, high_interest_walle
     # --- 1. Check for Transaction Velocity Anomaly ---
     current_count = velocity_data.get('current_count', 0)
     baseline_avg = velocity_data.get('baseline_avg', 0.0)
-    if current_count > (baseline_avg * velocity_threshold_multiplier):
+    if baseline_avg > 0 and current_count > (baseline_avg * velocity_threshold_multiplier):
         reason = f"Transaction velocity anomaly detected: {current_count} txns in last hour vs. baseline of {baseline_avg:.1f} (threshold: {baseline_avg * velocity_threshold_multiplier:.1f})."
         return {"signal": "VOLATILITY_WARNING", "symbol": symbol, "reason": reason}
 
     # --- 2. Check for High-Priority Stablecoin Inflow ---
     inflow = stablecoin_data.get('stablecoin_inflow_usd', 0)
     if inflow > stablecoin_threshold:
+        reason = f"Large stablecoin inflow of ${inflow:,.2f} detected, exceeding threshold of ${stablecoin_threshold:,.2f}."
         return {"signal": "BUY", "symbol": symbol, "reason": "High-priority signal: " + reason}
 
     # --- 3. Check for High-Priority Signals from Watched Wallets ---
+    base_symbol = symbol.replace('USDT', '')
     if whale_transactions:
         for tx in whale_transactions:
-            # Filter transactions for the current symbol
-            if tx.get('symbol', '').upper() != symbol.upper():
+            tx_symbol = tx.get('symbol', '').upper()
+            if tx_symbol != base_symbol:
                 continue
 
             from_owner = tx.get('from', {}).get('owner', 'unknown')
@@ -47,34 +49,31 @@ def generate_signal(symbol, whale_transactions, market_data, high_interest_walle
     current_price = market_data.get('current_price')
     sma = market_data.get('sma')
     rsi = market_data.get('rsi')
-    macd = market_data.get('macd', {})
-    bollinger_bands = market_data.get('bollinger_bands', {})
 
-    log.debug(f"[{symbol}] Signal Check: Price={current_price}, SMA={sma}, RSI={rsi}, MACD={macd}, BollingerBands={bollinger_bands}")
+    log.debug(f"[{symbol}] Signal Check: Price={current_price}, SMA={sma}, RSI={rsi}")
 
     if current_price is None or sma is None or rsi is None:
         log.debug(f"[{symbol}] HOLD: Missing market data (price, SMA, or RSI).")
         return {"signal": "HOLD", "symbol": symbol, "reason": "Missing market data (price, SMA, or RSI)."}
 
-    is_uptrend = current_price > sma
-    is_downtrend = current_price < sma
-    is_oversold = rsi < rsi_oversold_threshold
-    is_overbought = rsi > rsi_oversold_threshold
+    # --- Scoring System ---
+    buy_score = 0
+    sell_score = 0
 
-    # MACD and Bollinger Bands signals
-    macd_line = macd.get('macd_line') if macd else None
-    signal_line = macd.get('signal_line') if macd else None
-    lower_band = bollinger_bands.get('lower_band') if bollinger_bands else None
-    upper_band = bollinger_bands.get('upper_band') if bollinger_bands else None
+    # Indicator 1: Trend (SMA)
+    if current_price > sma:
+        buy_score += 1
+    elif current_price < sma:
+        sell_score += 1
 
-    is_bullish_crossover = macd_line and signal_line and macd_line > signal_line
-    is_bearish_crossover = macd_line and signal_line and macd_line < signal_line
-    is_near_lower_band = lower_band and current_price <= lower_band
-    is_near_upper_band = upper_band and current_price >= upper_band
+    # Indicator 2: Momentum (RSI)
+    if rsi < rsi_oversold_threshold:
+        buy_score += 1
+    elif rsi > rsi_overbought_threshold:
+        sell_score += 1
 
+    # Indicator 3: On-Chain Flow (Whale Transactions)
     net_flow = 0
-    # Filter whale transactions for the current symbol before calculating net flow
-    base_symbol = symbol.replace('USDT', '')
     symbol_whale_transactions = [tx for tx in whale_transactions if tx.get('symbol', '').upper() == base_symbol.upper()]
     if symbol_whale_transactions:
         exchange_inflow = sum(tx['amount_usd'] for tx in symbol_whale_transactions if tx.get('to', {}).get('owner_type', '') == 'exchange')
@@ -83,18 +82,21 @@ def generate_signal(symbol, whale_transactions, market_data, high_interest_walle
     
     log.debug(f"[{symbol}] Whale Net Flow: ${net_flow:,.2f}")
 
-    whale_confirms_buy = net_flow < 0
-    whale_confirms_sell = net_flow > 0
+    if net_flow < 0: # More leaving exchanges than entering
+        buy_score += 1
+    elif net_flow > 0: # More entering exchanges than leaving
+        sell_score += 1
 
-    reason = f"Price: ${current_price:,.2f}, SMA: ${sma:,.2f}, RSI: {rsi:.2f}, Whale Net Flow: ${net_flow:,.2f}, MACD: {macd}, Bollinger Bands: {bollinger_bands}."
+    # --- Signal Generation ---
+    reason = f"Price: ${current_price:,.2f}, SMA: ${sma:,.2f}, RSI: {rsi:.2f}, Whale Net Flow: ${net_flow:,.2f}. Buy Score: {buy_score}, Sell Score: {sell_score}."
 
-    if is_uptrend and is_oversold and is_bullish_crossover and is_near_lower_band and whale_confirms_buy:
-        log.info(f"[{symbol}] BUY signal: Uptrend, oversold, bullish MACD crossover, near lower Bollinger Band, and whale activity confirms BUY.")
-        return {"signal": "BUY", "symbol": symbol, "reason": "Uptrend, oversold, bullish MACD crossover, near lower Bollinger Band, and whale activity confirms BUY. " + reason}
+    if buy_score >= 2:
+        log.info(f"[{symbol}] BUY signal generated. {reason}")
+        return {"signal": "BUY", "symbol": symbol, "reason": reason}
     
-    if is_downtrend and is_overbought and is_bearish_crossover and is_near_upper_band and whale_confirms_sell:
-        log.info(f"[{symbol}] SELL signal: Downtrend, overbought, bearish MACD crossover, near upper Bollinger Band, and whale activity confirms SELL.")
-        return {"signal": "SELL", "symbol": symbol, "reason": "Downtrend, overbought, bearish MACD crossover, near upper Bollinger Band, and whale activity confirms SELL. " + reason}
+    if sell_score >= 2:
+        log.info(f"[{symbol}] SELL signal generated. {reason}")
+        return {"signal": "SELL", "symbol": symbol, "reason": reason}
 
     log.debug(f"[{symbol}] HOLD: No strong signal detected. {reason}")
     return {"signal": "HOLD", "symbol": symbol, "reason": "No strong signal detected. " + reason}

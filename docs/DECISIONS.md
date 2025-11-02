@@ -483,7 +483,3 @@ This set of decisions addresses two key areas: operational cost management and p
 
 
 This decision provides a far more reliable and straightforward method for database diagnostics. By leveraging the application's own active and correctly configured database connection, we bypass the complexities of local shell environments, authentication, and firewall rules. This makes debugging schema-related issues (like the previously encountered missing tables) faster, easier, and less error-prone, improving the overall maintainability of the project.
-
-
-
-
