@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # --- Main Application File ---
 # This script orchestrates the entire bot's workflow.
+# Force redeploy 2025-11-02_v2
 # Force redeploy 2025-11-02
 # Force redeploy 2025-10-16
 
