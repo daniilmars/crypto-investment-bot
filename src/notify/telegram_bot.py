@@ -259,3 +259,53 @@ async def db_stats(update, context):
     except Exception as e:
         log.error(f"Error fetching DB stats: {e}")
         await update.message.reply_text("Sorry, there was an error fetching database statistics.")
+
+# --- Bot Lifecycle Management ---
+async def start_bot() -> Application:
+    """
+    Initializes and starts the Telegram bot application.
+    Returns the application instance.
+    """
+    if not telegram_config.get('enabled') or not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
+        log.warning("Telegram bot is not enabled or configured. Skipping startup.")
+        return None
+
+    try:
+        log.info("Starting Telegram bot...")
+        application = Application.builder().token(TOKEN).build()
+
+        # Register command handlers
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("status", status))
+        application.add_handler(CommandHandler("db_stats", db_stats))
+        application.add_handler(CommandHandler("positions", positions))
+        application.add_handler(CommandHandler("performance", performance))
+        application.add_handler(CommandHandler("pause", pause))
+        application.add_handler(CommandHandler("resume", resume))
+
+        # Initialize and run the bot in the background
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling()
+        
+        log.info("Telegram bot started successfully.")
+        return application
+        
+    except Exception as e:
+        log.error(f"Failed to start Telegram bot: {e}", exc_info=True)
+        return None
+
+async def stop_bot(application: Application):
+    """
+    Gracefully stops the Telegram bot application.
+    """
+    if application:
+        log.info("Stopping Telegram bot...")
+        try:
+            await application.updater.stop()
+            await application.stop()
+            await application.shutdown()
+            log.info("Telegram bot stopped successfully.")
+        except Exception as e:
+            log.error(f"Error stopping Telegram bot: {e}", exc_info=True)

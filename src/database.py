@@ -154,13 +154,6 @@ def get_db_stats() -> dict:
     conn.close()
     return stats
 
-    except (sqlite3.Error, psycopg2.Error) as e:
-        log.error(f"Error during database initialization: {e}", exc_info=True)
-        if conn: conn.rollback()
-    finally:
-        if conn: conn.close()
-    log.info("Database initialization process completed.")
-
 # --- Data Access Functions ---
 
 def save_signal(signal_data: dict):

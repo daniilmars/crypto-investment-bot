@@ -1,5 +1,6 @@
 import requests
 import json
+import psycopg2
 from src.database import get_db_connection
 from src.logger import log
 
@@ -12,9 +13,10 @@ def save_price_data(price_data: dict):
         return
 
     conn = get_db_connection()
+    is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
     cursor = conn.cursor()
     
-    query = 'INSERT INTO market_prices (symbol, price) VALUES (%s, %s)' if IS_POSTGRES else \
+    query = 'INSERT INTO market_prices (symbol, price) VALUES (%s, %s)' if is_postgres_conn else \
             'INSERT INTO market_prices (symbol, price) VALUES (?, ?)'
     
     cursor.execute(query, (price_data['symbol'], price_data['price']))

@@ -4,6 +4,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 from src.collectors.binance_data import get_current_price
 import requests
+import psycopg2
 
 # --- Test Fixtures ---
 
@@ -12,6 +13,8 @@ def mock_db_connection():
     """Fixture to mock the database connection and cursor."""
     with patch('src.collectors.binance_data.get_db_connection') as mock_get_conn:
         mock_conn = MagicMock()
+        # Simulate a PostgreSQL connection for the isinstance check
+        mock_conn.__class__ = psycopg2.extensions.connection
         mock_cursor = MagicMock()
         mock_conn.cursor.return_value = mock_cursor
         mock_get_conn.return_value = mock_conn
@@ -37,17 +40,16 @@ def test_get_current_price_success(mock_requests_get, mock_db_connection):
     # Assert: Check the outcome
     # 1. The API was called correctly
     mock_requests_get.assert_called_once_with(
-        "https://api.binance.com/api/v3/ticker/price",
+        "https://api.binance.us/api/v3/ticker/price",
         params={'symbol': 'BTCUSDT'}
     )
     # 2. The function returned the correct data
     assert result == {'symbol': 'BTCUSDT', 'price': '50000.00'}
-    
     # 3. The database connection was opened and the data was saved
     mock_db_connection.assert_called_once()
     mock_cursor = mock_db_connection.return_value.cursor.return_value
     mock_cursor.execute.assert_called_once_with(
-        'INSERT INTO market_prices (symbol, price) VALUES (?, ?)', ('BTCUSDT', '50000.00')
+        'INSERT INTO market_prices (symbol, price) VALUES (%s, %s)', ('BTCUSDT', '50000.00')
     )
     mock_db_connection.return_value.commit.assert_called_once()
     mock_db_connection.return_value.close.assert_called_once()

@@ -234,7 +234,7 @@ This feature significantly enhances the bot's interactivity and utility. Instead
 
 ### ADR-016: Resolution of Google Cloud Run Deployment Failures
 
-**Date:** 2025-10-17
+**Date:** 2025-11-02
 
 **Decision:**
 A multi-step debugging and resolution process was undertaken to achieve a stable deployment on Google Cloud Run. The initial deployments failed consistently due to the container not passing the health check. The following issues were identified and resolved in sequence:
@@ -242,6 +242,8 @@ A multi-step debugging and resolution process was undertaken to achieve a stable
 2.  **Implemented Graceful Telegram Bot Shutdown:** Resolved a `telegram.error.Conflict` by refactoring the Telegram bot module to explicitly manage its lifecycle, ensuring a clean shutdown and preventing conflicts between polling instances on redeployment.
 3.  **Ensured Container Persistence:** The main application script was modified to run the health check server in the main thread while the core bot logic runs in a background thread. This prevents the container from exiting prematurely.
 4.  **Enabled Outbound Internet Access:** The final blocker was a `telegram.error.TimedOut` error. This was resolved by provisioning a **Cloud NAT gateway** for the projects default VPC network, as Cloud Run services do not have outbound internet access by default.
+5.  **Fixed `SyntaxError` in `src/database.py`:** A misplaced `except` block was causing a `SyntaxError` on application startup, preventing the container from initializing.
+6.  **Added Missing Telegram Bot Lifecycle Functions:** The `start_bot` and `stop_bot` functions were missing from `src/notify/telegram_bot.py`, leading to an `ImportError` in `main.py` and preventing the Telegram bot from initializing correctly.
 
 **Reasoning:**
 Deploying a multi-threaded, networked application to a serverless environment like Cloud Run requires careful management of the applications lifecycle, concurrency, and network configuration. These decisions document the iterative process of hardening the application to make it compatible with the specific requirements of the Cloud Run platform, resulting in a stable and resilient deployment.

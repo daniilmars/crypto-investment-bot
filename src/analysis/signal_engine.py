@@ -8,8 +8,10 @@ def generate_signal(symbol, whale_transactions, market_data, high_interest_walle
     if velocity_data is None: velocity_data = {}
 
     # --- 1. Check for Transaction Velocity Anomaly ---
-    if velocity_data.get('is_anomaly'):
-        reason = f"Transaction velocity anomaly detected: {velocity_data.get('current_count')} txns in last hour vs. baseline of {velocity_data.get('baseline_avg'):.1f}."
+    current_count = velocity_data.get('current_count', 0)
+    baseline_avg = velocity_data.get('baseline_avg', 0.0)
+    if current_count > (baseline_avg * velocity_threshold_multiplier):
+        reason = f"Transaction velocity anomaly detected: {current_count} txns in last hour vs. baseline of {baseline_avg:.1f} (threshold: {baseline_avg * velocity_threshold_multiplier:.1f})."
         return {"signal": "VOLATILITY_WARNING", "reason": reason}
 
     # --- 2. Check for High-Priority Stablecoin Inflow ---
