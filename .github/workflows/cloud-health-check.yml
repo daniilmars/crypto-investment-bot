@@ -10,7 +10,7 @@ env:
   SERVICE_ACCOUNT_EMAIL: crypto-bot-deployer@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com
   DB_INSTANCE_NAME: crypto-bot-db
   SERVICE_NAME: crypto-investment-bot
-  REGION: europe-west1
+  REGION: us-central1
 
 jobs:
   run-health-checks:
