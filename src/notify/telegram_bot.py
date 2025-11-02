@@ -307,7 +307,7 @@ async def start_bot() -> Application:
         # Initialize and run the bot in the background
         await application.initialize()
         await application.start()
-        await application.updater.start_polling()
+        await application.updater.start_polling(drop_pending_updates=True)
         
         log.info("Telegram bot started successfully.")
         return application
