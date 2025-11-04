@@ -241,6 +241,8 @@ async def start_bot() -> Application:
         application.add_handlers(handlers)
         await application.initialize()
         await application.start()
+        log.info("Deleting any existing webhooks...")
+        await application.bot.delete_webhook()
         log.info("Calling application.updater.start_polling...")
         await application.updater.start_polling(drop_pending_updates=True)
         log.info("Telegram bot started successfully and polling initiated.")
