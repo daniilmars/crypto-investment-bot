@@ -221,7 +221,10 @@ async def db_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- Bot Lifecycle Management ---
 async def start_bot() -> Application:
-    """Initializes and starts the Telegram bot."""
+    """
+    Initializes and starts the Telegram bot.
+    """
+    log.info("Entering start_bot function.")
     if not telegram_config.get('enabled') or not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
         log.warning("Telegram bot is not enabled or configured.")
         return None
@@ -238,8 +241,9 @@ async def start_bot() -> Application:
         application.add_handlers(handlers)
         await application.initialize()
         await application.start()
+        log.info("Calling application.updater.start_polling...")
         await application.updater.start_polling(drop_pending_updates=True)
-        log.info("Telegram bot started successfully.")
+        log.info("Telegram bot started successfully and polling initiated.")
         return application
     except Exception as e:
         log.error(f"Failed to start Telegram bot: {e}", exc_info=True)

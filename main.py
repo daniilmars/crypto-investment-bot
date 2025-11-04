@@ -82,14 +82,14 @@ async def run_bot_cycle():
                     # Check for Stop Loss
                     if pnl_percentage <= -stop_loss_percentage:
                         log.info(f"[PAPER TRADE] Stop-loss hit for {symbol}. Closing position.")
-                        place_order(symbol, "SELL", position['quantity'], current_price)
+                        place_order(symbol, "SELL", position['quantity'], current_price, existing_order_id=position['order_id'])
                         await send_telegram_alert({"signal": "SELL", "symbol": symbol, "current_price": current_price, "reason": f"Stop-loss hit ({stop_loss_percentage*100:.2f}% loss)."})
                         continue
 
                     # Check for Take Profit
                     if pnl_percentage >= take_profit_percentage:
                         log.info(f"[PAPER TRADE] Take-profit hit for {symbol}. Closing position.")
-                        place_order(symbol, "SELL", position['quantity'], current_price)
+                        place_order(symbol, "SELL", position['quantity'], current_price, existing_order_id=position['order_id'])
                         await send_telegram_alert({"signal": "SELL", "symbol": symbol, "current_price": current_price, "reason": f"Take-profit hit ({take_profit_percentage*100:.2f}% gain)."})
                         continue
         
@@ -232,10 +232,12 @@ def telegram_main():
     """
     Initializes and runs the Telegram bot's asyncio event loop.
     """
+    log.info("Telegram main thread started.")
     global telegram_app
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     
+    log.info("Calling start_bot() from telegram_main...")
     telegram_app = loop.run_until_complete(start_bot())
     
     if telegram_app:

@@ -5,30 +5,43 @@ from src.logger import log
 from src.config import app_config
 from src.database import get_db_connection
 
-def place_order(symbol: str, side: str, quantity: float, price: float, order_type: str = "MARKET") -> dict:
+def place_order(symbol: str, side: str, quantity: float, price: float, order_type: str = "MARKET", existing_order_id: str = None) -> dict:
     """
     Simulates placing an order for paper trading.
     Records the trade in the database.
     """
-    log.info(f"Simulating {side} order for {quantity} {symbol} at {price} (Type: {order_type})")
-    
-    # Generate a unique order ID for simulation
-    order_id = f"PAPER_{symbol}_{side}_{int(time.time() * 1000)}"
-
     conn = get_db_connection()
     is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
     cursor = conn.cursor()
 
-    query = 'INSERT INTO trades (symbol, order_id, side, entry_price, quantity, status) VALUES (%s, %s, %s, %s, %s, %s)' if is_postgres_conn else \
-            'INSERT INTO trades (symbol, order_id, side, entry_price, quantity, status) VALUES (?, ?, ?, ?, ?, ?)'
+    if side == "BUY":
+        log.info(f"Simulating BUY order for {quantity} {symbol} at {price} (Type: {order_type})")
+        order_id = f"PAPER_{symbol}_BUY_{int(time.time() * 1000)}"
+        query = 'INSERT INTO trades (symbol, order_id, side, entry_price, quantity, status) VALUES (%s, %s, %s, %s, %s, %s)' if is_postgres_conn else \
+                'INSERT INTO trades (symbol, order_id, side, entry_price, quantity, status) VALUES (?, ?, ?, ?, ?, ?)'
+        cursor.execute(query, (symbol, order_id, side, price, quantity, "OPEN"))
+        conn.commit()
+        log.info(f"Paper trade recorded: Order ID {order_id}")
+        cursor.close()
+        conn.close()
+        return {"order_id": order_id, "symbol": symbol, "side": side, "quantity": quantity, "price": price, "status": "FILLED"}
 
-    cursor.execute(query, (symbol, order_id, side, price, quantity, "OPEN"))
-    conn.commit()
+    elif side == "SELL" and existing_order_id:
+        log.info(f"Simulating SELL order for {quantity} {symbol} at {price} (Type: {order_type}) for existing order {existing_order_id}")
+        close_timestamp = int(time.time())
+        query = 'UPDATE trades SET status = %s, exit_price = %s, close_timestamp = %s WHERE order_id = %s' if is_postgres_conn else \
+                'UPDATE trades SET status = ?, exit_price = ?, close_timestamp = ? WHERE order_id = ?'
+        cursor.execute(query, ("CLOSED", price, close_timestamp, existing_order_id))
+        conn.commit()
+        log.info(f"Paper trade {existing_order_id} updated to CLOSED at {price}.")
+        cursor.close()
+        conn.close()
+        return {"order_id": existing_order_id, "symbol": symbol, "side": side, "quantity": quantity, "price": price, "status": "CLOSED", "exit_price": price, "close_timestamp": close_timestamp}
+    
+    log.warning(f"Invalid place_order call: side={side}, existing_order_id={existing_order_id}")
     cursor.close()
     conn.close()
-
-    log.info(f"Paper trade recorded: Order ID {order_id}")
-    return {"order_id": order_id, "symbol": symbol, "side": side, "quantity": quantity, "price": price, "status": "FILLED"}
+    return {"status": "FAILED", "message": "Invalid order parameters"}
 
 def get_open_positions() -> list:
     """
