@@ -154,7 +154,7 @@ async def run_bot_cycle():
                 position_to_close = next((p for p in open_positions if p['symbol'] == symbol and p['status'] == 'OPEN'), None)
                 if position_to_close:
                     log.info(f"Executing paper trade: SELL {position_to_close['quantity']:.4f} {symbol}.")
-                    place_order(symbol, "SELL", position_to_close['quantity'], current_price)
+                    place_order(symbol, "SELL", position_to_close['quantity'], current_price, existing_order_id=position_to_close['order_id'])
                     send_telegram_alert(signal)
                 else:
                     log.info(f"Skipping SELL for {symbol}: No open position found.")
@@ -259,11 +259,8 @@ if __name__ == "__main__":
             log.info(f"Shutdown signal {signum} received. Initiating graceful shutdown...")
             shutdown_event.set() # Signal all loops to exit
 
-            # Stop the Telegram bot
+            # Stop the Telegram bot's event loop
             if telegram_app:
-                # Schedule the stop_bot coroutine on the running event loop
-                telegram_app.loop.call_soon_threadsafe(stop_bot, telegram_app)
-                # Stop the event loop itself
                 telegram_app.loop.call_soon_threadsafe(telegram_app.loop.stop)
             
             log.info("Shutdown complete.")
