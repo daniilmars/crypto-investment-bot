@@ -21,4 +21,8 @@ python-telegram-bot
 # For Gemini API
 google-generativeai
 
+# For FastAPI webhooks
+fastapi
+uvicorn
+
 # Cache buster

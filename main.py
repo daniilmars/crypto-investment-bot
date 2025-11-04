@@ -5,26 +5,38 @@
 # Force redeploy 2025-11-02
 # Force redeploy 2025-10-16
 
-import time
-import pandas as pd
-import http.server
-import socketserver
-import threading
-import os
 import asyncio
-from src.collectors.binance_data import get_current_price
-from src.collectors.whale_alert import get_whale_transactions, get_stablecoin_flows
+import os
+import time
+
+import pandas as pd
+import uvicorn
+from fastapi import FastAPI, Request
+from telegram import Update
+
 from src.analysis.signal_engine import generate_signal
-from src.analysis.technical_indicators import calculate_rsi, calculate_transaction_velocity
-from src.notify.telegram_bot import send_telegram_alert, start_bot, stop_bot
-from src.database import initialize_database, get_historical_prices, get_transaction_timestamps_since, get_table_counts, save_signal
-from src.logger import log
+from src.analysis.technical_indicators import (calculate_rsi,
+                                               calculate_transaction_velocity)
+from src.collectors.binance_data import get_current_price
+from src.collectors.whale_alert import (get_stablecoin_flows,
+                                        get_whale_transactions)
 from src.config import app_config
-from src.execution.binance_trader import place_order, get_open_positions, get_account_balance
+from src.database import (get_historical_prices,
+                          get_transaction_timestamps_since, initialize_database,
+                          save_signal)
+from src.execution.binance_trader import (get_account_balance,
+                                          get_open_positions, place_order)
+from src.logger import log
+from src.notify.telegram_bot import send_telegram_alert, start_bot
 from src.state import bot_is_running
 
 # Initialize the database at the start of the application
 initialize_database()
+
+# --- FastAPI App Initialization ---
+app = FastAPI()
+application = None
+
 
 async def run_bot_cycle():
     """
@@ -32,9 +44,9 @@ async def run_bot_cycle():
     """
     log.info("--- Starting new bot cycle ---")
     settings = app_config.get('settings', {})
-    
+
     # Load all settings
-    watch_list = settings.get('watch_list', ['BTC']) # Default to BTC if not configured
+    watch_list = settings.get('watch_list', ['BTC'])  # Default to BTC if not configured
     min_whale_value = settings.get('min_whale_transaction_usd', 1000000)
     high_interest_wallets = settings.get('high_interest_wallets', [])
     stablecoins_to_monitor = settings.get('stablecoins_to_monitor', [])
@@ -56,22 +68,22 @@ async def run_bot_cycle():
     log.info("Fetching data from all sources...")
     whale_transactions = get_whale_transactions(min_value_usd=min_whale_value)
     stablecoin_data = get_stablecoin_flows(whale_transactions, stablecoins_to_monitor)
-    
+
     # Process each symbol in the watch list
     for symbol in watch_list:
         log.info(f"--- Processing symbol: {symbol} ---")
-        
+
         # Ensure the symbol format is correct for the Binance API (e.g., BTCUSDT)
         api_symbol = symbol if "USDT" in symbol else f"{symbol}USDT"
         price_data = get_current_price(api_symbol)
-        
+
         if not price_data or not price_data.get('price'):
             log.warning(f"Could not fetch current price for {api_symbol}. Skipping analysis.")
             continue
 
         current_price = float(price_data.get('price'))
         log.info(f"Current price for {symbol}: ${current_price:,.2f}")
-        
+
         # --- Position Monitoring (runs regardless of paused state) ---
         if paper_trading:
             open_positions = get_open_positions()
@@ -82,17 +94,21 @@ async def run_bot_cycle():
                     # Check for Stop Loss
                     if pnl_percentage <= -stop_loss_percentage:
                         log.info(f"[PAPER TRADE] Stop-loss hit for {symbol}. Closing position.")
-                        place_order(symbol, "SELL", position['quantity'], current_price, existing_order_id=position['order_id'])
-                        await send_telegram_alert({"signal": "SELL", "symbol": symbol, "current_price": current_price, "reason": f"Stop-loss hit ({stop_loss_percentage*100:.2f}% loss)."})
+                        place_order(symbol, "SELL", position['quantity'], current_price,
+                                    existing_order_id=position['order_id'])
+                        await send_telegram_alert({"signal": "SELL", "symbol": symbol, "current_price": current_price,
+                                                   "reason": f"Stop-loss hit ({stop_loss_percentage * 100:.2f}% loss)."})
                         continue
 
                     # Check for Take Profit
                     if pnl_percentage >= take_profit_percentage:
                         log.info(f"[PAPER TRADE] Take-profit hit for {symbol}. Closing position.")
-                        place_order(symbol, "SELL", position['quantity'], current_price, existing_order_id=position['order_id'])
-                        await send_telegram_alert({"signal": "SELL", "symbol": symbol, "current_price": current_price, "reason": f"Take-profit hit ({take_profit_percentage*100:.2f}% gain)."})
+                        place_order(symbol, "SELL", position['quantity'], current_price,
+                                    existing_order_id=position['order_id'])
+                        await send_telegram_alert({"signal": "SELL", "symbol": symbol, "current_price": current_price,
+                                                   "reason": f"Take-profit hit ({take_profit_percentage * 100:.2f}% gain)."})
                         continue
-        
+
         # --- Pause Check ---
         if not bot_is_running.is_set():
             log.info("Bot is paused. Skipping new signal generation and trading.")
@@ -100,20 +116,21 @@ async def run_bot_cycle():
 
         # 2. Analyze data for a signal
         log.info(f"Analyzing data for {symbol}...")
-        
+
         historical_prices = get_historical_prices(symbol, limit=max(sma_period, rsi_period) + 1)
         historical_timestamps = get_transaction_timestamps_since(symbol.lower(), hours_ago=baseline_hours)
-        
-        market_price_data = { 'current_price': current_price, 'sma': None, 'rsi': None }
+
+        market_price_data = {'current_price': current_price, 'sma': None, 'rsi': None}
         if len(historical_prices) >= sma_period:
             price_series = pd.Series(historical_prices)
             market_price_data['sma'] = price_series.rolling(window=sma_period).mean().iloc[-1]
         market_price_data['rsi'] = calculate_rsi(historical_prices, period=rsi_period)
         log.info(f"Technical Indicators for {symbol}: SMA={market_price_data['sma']}, RSI={market_price_data['rsi']}")
-        
-        transaction_velocity = calculate_transaction_velocity(symbol, whale_transactions, historical_timestamps, baseline_hours)
+
+        transaction_velocity = calculate_transaction_velocity(symbol, whale_transactions, historical_timestamps,
+                                                              baseline_hours)
         log.info(f"Transaction Velocity for {symbol}: {transaction_velocity}")
-        
+
         # 3. Generate a signal
         log.info(f"Generating signal for {symbol}...")
         signal = generate_signal(
@@ -134,12 +151,13 @@ async def run_bot_cycle():
             log.info(f"Processing signal for paper trading...")
             open_positions = get_open_positions()
             current_balance = get_account_balance().get('total_usd', paper_trading_initial_capital)
-            
+
             if signal['signal'] == "BUY":
                 if any(p['symbol'] == symbol and p['status'] == 'OPEN' for p in open_positions):
                     log.info(f"Skipping BUY for {symbol}: Position already open.")
                 elif len(open_positions) >= max_concurrent_positions:
-                    log.info(f"Skipping BUY for {symbol}: Max concurrent positions ({max_concurrent_positions}) reached.")
+                    log.info(
+                        f"Skipping BUY for {symbol}: Max concurrent positions ({max_concurrent_positions}) reached.")
                 else:
                     capital_to_risk = current_balance * trade_risk_percentage
                     quantity_to_buy = capital_to_risk / current_price
@@ -151,41 +169,49 @@ async def run_bot_cycle():
                         await send_telegram_alert(signal)
 
             elif signal['signal'] == "SELL":
-                position_to_close = next((p for p in open_positions if p['symbol'] == symbol and p['status'] == 'OPEN'), None)
+                position_to_close = next(
+                    (p for p in open_positions if p['symbol'] == symbol and p['status'] == 'OPEN'), None)
                 if position_to_close:
                     log.info(f"Executing paper trade: SELL {position_to_close['quantity']:.4f} {symbol}.")
-                    place_order(symbol, "SELL", position_to_close['quantity'], current_price, existing_order_id=position_to_close['order_id'])
-                    send_telegram_alert(signal)
+                    place_order(symbol, "SELL", position_to_close['quantity'], current_price,
+                                existing_order_id=position_to_close['order_id'])
+                    await send_telegram_alert(signal)
                 else:
                     log.info(f"Skipping SELL for {symbol}: No open position found.")
-            else: # HOLD
+            else:  # HOLD
                 log.info(f"Signal is HOLD for {symbol}. No trade action taken.")
+
 
 async def bot_loop():
     """
     The main indefinite loop for the bot.
     """
     run_interval_minutes = app_config.get('settings', {}).get('run_interval_minutes', 15)
-    while not shutdown_event.is_set():
-        await run_bot_cycle()
+    while True:
+        try:
+            await run_bot_cycle()
+        except Exception as e:
+            log.error(f"Error in bot_loop cycle: {e}", exc_info=True)
         log.info(f"Cycle complete. Waiting for {run_interval_minutes} minutes...")
-        shutdown_event.wait(run_interval_minutes * 60)
+        await asyncio.sleep(run_interval_minutes * 60)
+
 
 async def run_single_status_update():
     """Fetches and sends a single status update."""
     status_config = app_config.get('settings', {}).get('regular_status_update', {})
     interval_hours = status_config.get('interval_hours', 1)
-    
+
     from src.database import get_trade_summary
     from src.notify.telegram_bot import send_performance_report
 
     try:
         log.info("Fetching trade summary for status update...")
         summary = get_trade_summary(hours_ago=interval_hours)
-        if telegram_app:
+        if application:
             await send_performance_report(summary, interval_hours)
     except Exception as e:
         log.error(f"Error in run_single_status_update: {e}")
+
 
 async def status_update_loop():
     """
@@ -198,99 +224,84 @@ async def status_update_loop():
 
     interval_hours = status_config.get('interval_hours', 1)
     log.info(f"Starting regular status update loop. Interval: {interval_hours} hours.")
-    
-    while not shutdown_event.is_set():
-        await run_single_status_update()
-        # Use asyncio.sleep for async delay
+
+    while True:
+        try:
+            await run_single_status_update()
+        except Exception as e:
+            log.error(f"Error in status_update_loop: {e}", exc_info=True)
         await asyncio.sleep(interval_hours * 3600)
 
-def trigger_status_update():
-    """Triggers a single run of the status update logic in a new thread."""
-    log.info("Manual status update triggered via health check endpoint.")
-    status_thread = threading.Thread(target=run_single_status_update)
-    status_thread.daemon = True
-    status_thread.start()
 
-def start_health_check_server():
+@app.on_event("startup")
+async def startup_event():
     """
-    Starts a simple HTTP server in a thread to respond to Cloud Run health checks.
+    On startup, initialize the Telegram bot, set the webhook,
+    and start the background tasks.
     """
-    port = int(os.environ.get("PORT", 8080))
-    
-    class HealthCheckHandler(http.server.SimpleHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.send_header("Content-type", "text/plain")
-            self.end_headers()
-            self.wfile.write(b"OK")
+    global application
+    log.info("Starting application...")
 
-    with socketserver.TCPServer(("", port), HealthCheckHandler) as httpd:
-        log.info(f"Health check server started on port {port}")
-        httpd.serve_forever()
+    # Initialize the Telegram application
+    application = await start_bot()
 
-def telegram_main():
+    # Set the webhook. The URL must be passed as an environment variable.
+    # For Google Cloud Run, this is often provided as `GOOGLE_CLOUD_RUN_SERVICE_URL`.
+    service_url = os.environ.get("SERVICE_URL")
+    if not service_url:
+        log.warning("SERVICE_URL environment variable not set. Webhook will not be set.")
+    else:
+        webhook_url = f"{service_url}/webhook"
+        log.info(f"Setting webhook to: {webhook_url}")
+        await application.bot.set_webhook(url=webhook_url)
+
+    # Start background tasks
+    asyncio.create_task(bot_loop())
+    asyncio.create_task(status_update_loop())
+    log.info("Startup complete. Background tasks running.")
+
+
+@app.on_event("shutdown")
+async def shutdown_event_handler():
     """
-    Initializes and runs the Telegram bot's asyncio event loop.
+    On shutdown, gracefully delete the webhook.
     """
-    log.info("Telegram main thread started.")
-    global telegram_app
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
-    log.info("Calling start_bot() from telegram_main...")
-    telegram_app = loop.run_until_complete(start_bot())
-    
-    if telegram_app:
-        # Start the main bot cycle and status update loop as asyncio tasks
-        loop.create_task(bot_loop())
-        loop.create_task(status_update_loop())
-        # Keep the event loop running to handle Telegram updates and other tasks
-        try:
-            loop.run_forever()
-        except KeyboardInterrupt:
-            log.info("Telegram loop interrupted. Initiating graceful shutdown...")
-        finally:
-            if shutdown_event.is_set():
-                log.info("Shutdown event set. Stopping Telegram bot gracefully...")
-                loop.run_until_complete(stop_bot(telegram_app))
-            loop.close()
+    log.info("Shutting down application...")
+    if application:
+        log.info("Deleting webhook...")
+        await application.bot.delete_webhook()
+    log.info("Shutdown complete.")
+
+
+@app.get("/health", status_code=200)
+async def health_check():
+    """
+    Health check endpoint for Cloud Run.
+    """
+    return {"status": "ok"}
+
+
+@app.post("/webhook")
+async def handle_webhook(request: Request):
+    """
+    Handles incoming updates from the Telegram API webhook.
+    """
+    if not application:
+        log.error("Webhook received but application not initialized.")
+        return {"status": "error", "message": "Bot not initialized"}, 500
+
+    try:
+        data = await request.json()
+        update = Update.de_json(data, application.bot)
+        await application.process_update(update)
+        return {"status": "ok"}
+    except Exception as e:
+        log.error(f"Error processing webhook: {e}", exc_info=True)
+        return {"status": "error"}, 500
+
 
 if __name__ == "__main__":
-    # --- Global Application State ---
-    telegram_app = None
-    shutdown_event = threading.Event()
-    
-    # --- Graceful Shutdown Logic ---
-    def shutdown(signum, frame):
-        """Gracefully shuts down all application threads."""
-        if not shutdown_event.is_set():
-            log.info(f"Shutdown signal {signum} received. Initiating graceful shutdown...")
-            shutdown_event.set() # Signal all loops to exit
+    port = int(os.environ.get("PORT", 8080))
+    log.info(f"Starting Uvicorn server on port {port}...")
+    uvicorn.run(app, host="0.0.0.0", port=port)
 
-            # Stop the Telegram bot's event loop
-            if telegram_app:
-                telegram_app.loop.call_soon_threadsafe(telegram_app.loop.stop)
-            
-            log.info("Shutdown complete.")
-    
-    # Register signal handlers
-    import signal
-    signal.signal(signal.SIGINT, shutdown)
-    signal.signal(signal.SIGTERM, shutdown)
-
-    # --- Main Application ---
-    try:
-        # Start the Telegram bot in a separate thread, which now also runs bot_loop and status_update_loop
-        telegram_thread = threading.Thread(target=telegram_main)
-        telegram_thread.daemon = True
-        telegram_thread.start()
-
-        # The health check server runs in the main thread, keeping the process alive.
-        start_health_check_server()
-
-    except (KeyboardInterrupt, SystemExit):
-        log.info("Caught KeyboardInterrupt or SystemExit.")
-        shutdown(None, None)
-    except Exception as e:
-        log.error(f"An unexpected error occurred in the main thread: {e}", exc_info=True)
-        shutdown(None, None)
