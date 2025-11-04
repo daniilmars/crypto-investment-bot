@@ -245,7 +245,15 @@ def telegram_main():
         loop.create_task(bot_loop())
         loop.create_task(status_update_loop())
         # Keep the event loop running to handle Telegram updates and other tasks
-        loop.run_forever()
+        try:
+            loop.run_forever()
+        except KeyboardInterrupt:
+            log.info("Telegram loop interrupted. Initiating graceful shutdown...")
+        finally:
+            if shutdown_event.is_set():
+                log.info("Shutdown event set. Stopping Telegram bot gracefully...")
+                loop.run_until_complete(stop_bot(telegram_app))
+            loop.close()
 
 if __name__ == "__main__":
     # --- Global Application State ---
