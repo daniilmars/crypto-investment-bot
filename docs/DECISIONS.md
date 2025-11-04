@@ -382,33 +382,152 @@ This set of decisions addresses two key areas: operational cost management and p
 This decision provides a far more reliable and straightforward method for database diagnostics. By leveraging the application's own active and correctly configured database connection, we bypass the complexities of local shell environments, authentication, and firewall rules. This makes debugging schema-related issues (like the previously encountered missing tables) faster, easier, and less error-prone, improving the overall maintainability of the project.
 
 
-### ADR-025: Migration to FastAPI for Telegram Webhooks on Cloud Run
+
+
+
+### ADR-026: Acknowledgment of Historical Trade Data Inaccuracy
+
+
+
+
 
 **Date:** 2025-11-04
 
+
+
+
+
 **Decision:**
-- **Refactored `main.py` to use FastAPI** as the web framework for handling Telegram bot updates via webhooks, replacing the previous `http.server` and multi-threading approach.
-- **Removed `http.server`, `socketserver`, and `threading` modules** from `main.py`.
-- **Integrated `FastAPI` and `uvicorn`** for the web server, and `Update` from `telegram` and `Request` from `fastapi` for webhook processing.
-- **Implemented a GET `/health` endpoint** for Cloud Run health checks, returning `{"status": "ok"}`.
-- **Created a POST `/webhook` endpoint** to receive and process Telegram updates using `Update.de_json` and `application.process_update()`.
-- **Refactored the main execution block** to be asynchronous, initializing the `telegram.ext.Application`.
-- **On application startup:**
-    - Set the Telegram webhook URL using `await application.bot.set_webhook()`, deriving the service URL from an environment variable (`SERVICE_URL`).
-    - Started `bot_loop()` and `status_update_loop()` as background `asyncio.create_task()` tasks.
-- **On application shutdown:**
-    - Deleted the Telegram webhook using `await application.bot.delete_webhook()`.
-- **Used `uvicorn.run()`** to start the FastAPI server, binding to the port specified by the `PORT` environment variable (defaulting to 8080).
+
+
+- **Formally acknowledge and document a known data integrity issue** affecting a specific cohort of historical trades.
+
+
+- **Trades opened on 2025-11-03 and closed on 2025-11-04 have inaccurate `exit_timestamp` and `exit_price` values.** The Profit/Loss (PnL) for these trades has been corrected, but the exit timing and price data remain incorrect.
+
+
+
+
 
 **Reasoning:**
+
+
+A series of critical bugs in the main application loop (`main.py`) and the PnL calculation (`src/execution/binance_trader.py`) caused two problems:
+
+
+1.  Stop-loss and take-profit conditions were not acted upon in a timely manner, leading to significant delays in trade execution.
+
+
+2.  The PnL for SELL (short) trades was calculated incorrectly.
+
+
+
+
+
+While the PnL calculation has been fixed and applied retroactively to the affected trades, the incorrect exit timestamps and prices cannot be corrected. A re-simulation was attempted, but it was discovered that the `market_prices` table in the database does not contain the necessary minute-by-minute price history for the period when these trades were open.
+
+
+
+
+
+This ADR serves as a permanent record of this data anomaly. Any future performance analysis, backtesting, or strategy evaluation based on this historical data must exclude or otherwise account for the trades from this period to avoid drawing inaccurate conclusions.
+
+
+
+
+
+---
+
+
+
+
+
+### ADR-025: Migration to FastAPI for Telegram Webhooks on Cloud Run
+
+
+
+
+
+**Date:** 2025-11-04
+
+
+
+
+
+**Decision:**
+
+
+- **Refactored `main.py` to use FastAPI** as the web framework for handling Telegram bot updates via webhooks, replacing the previous `http.server` and multi-threading approach.
+
+
+- **Removed `http.server`, `socketserver`, and `threading` modules** from `main.py`.
+
+
+- **Integrated `FastAPI` and `uvicorn`** for the web server, and `Update` from `telegram` and `Request` from `fastapi` for webhook processing.
+
+
+- **Implemented a GET `/health` endpoint** for Cloud Run health checks, returning `{"status": "ok"}`.
+
+
+- **Created a POST `/webhook` endpoint** to receive and process Telegram updates using `Update.de_json` and `application.process_update()`.
+
+
+- **Refactored the main execution block** to be asynchronous, initializing the `telegram.ext.Application`.
+
+
+- **On application startup:**
+
+
+    - Set the Telegram webhook URL using `await application.bot.set_webhook()`, deriving the service URL from an environment variable (`SERVICE_URL`).
+
+
+    - Started `bot_loop()` and `status_update_loop()` as background `asyncio.create_task()` tasks.
+
+
+- **On application shutdown:**
+
+
+    - Deleted the Telegram webhook using `await application.bot.delete_webhook()`.
+
+
+- **Used `uvicorn.run()`** to start the FastAPI server, binding to the port specified by the `PORT` environment variable (defaulting to 8080).
+
+
+
+
+
+**Reasoning:**
+
+
 The previous long-polling mechanism for the Telegram bot, coupled with a custom `http.server` for health checks, was incompatible with Google Cloud Run's stateless and event-driven architecture. This led to critical runtime errors (`telegram.error.Conflict`, `AttributeError: 'Application' object has no attribute 'loop'`) and inefficient resource utilization.
 
+
+
+
+
 Migrating to FastAPI and webhooks provides a robust, scalable, and idiomatic solution for Cloud Run:
+
+
 - **Statelessness:** Webhooks align perfectly with Cloud Run's stateless nature, as the service only needs to respond to incoming HTTP requests.
+
+
 - **Asynchronous Processing:** FastAPI's asynchronous capabilities allow for efficient handling of web requests and background tasks, improving performance and responsiveness.
+
+
 - **Simplified Deployment:** Using a standard web framework like FastAPI simplifies deployment and integration with cloud services.
+
+
 - **Reliability:** Eliminates conflicts arising from multiple polling instances and ensures graceful shutdown by managing webhook lifecycle.
+
+
+
+
 
 This decision significantly improves the bot's stability, scalability, and adherence to cloud-native best practices, making it a more resilient and maintainable application on Google Cloud Run.
 
+
+
+
+
 ---
+
