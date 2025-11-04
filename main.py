@@ -98,16 +98,14 @@ async def run_bot_cycle():
                                     existing_order_id=position['order_id'])
                         await send_telegram_alert({"signal": "SELL", "symbol": symbol, "current_price": current_price,
                                                    "reason": f"Stop-loss hit ({stop_loss_percentage * 100:.2f}% loss)."})
-                        continue
 
                     # Check for Take Profit
-                    if pnl_percentage >= take_profit_percentage:
+                    elif pnl_percentage >= take_profit_percentage:
                         log.info(f"[PAPER TRADE] Take-profit hit for {symbol}. Closing position.")
                         place_order(symbol, "SELL", position['quantity'], current_price,
                                     existing_order_id=position['order_id'])
                         await send_telegram_alert({"signal": "SELL", "symbol": symbol, "current_price": current_price,
                                                    "reason": f"Take-profit hit ({take_profit_percentage * 100:.2f}% gain)."})
-                        continue
 
         # --- Pause Check ---
         if not bot_is_running.is_set():

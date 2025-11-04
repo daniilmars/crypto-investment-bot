@@ -29,9 +29,9 @@ def place_order(symbol: str, side: str, quantity: float, price: float, order_typ
     elif side == "SELL" and existing_order_id:
         log.info(f"Simulating SELL order for {quantity} {symbol} at {price} (Type: {order_type}) for existing order {existing_order_id}")
         
-        # First, get the entry price to calculate PnL
-        query_entry = 'SELECT entry_price FROM trades WHERE order_id = %s' if is_postgres_conn else \
-                      'SELECT entry_price FROM trades WHERE order_id = ?'
+        # First, get the entry price and side to calculate PnL correctly
+        query_entry = 'SELECT entry_price, side FROM trades WHERE order_id = %s' if is_postgres_conn else \
+                      'SELECT entry_price, side FROM trades WHERE order_id = ?'
         cursor.execute(query_entry, (existing_order_id,))
         result = cursor.fetchone()
         if not result:
@@ -40,9 +40,16 @@ def place_order(symbol: str, side: str, quantity: float, price: float, order_typ
             conn.close()
             return {"status": "FAILED", "message": "Existing order not found"}
         
-        entry_price = result[0]
-        pnl = (price - entry_price) * quantity
+        entry_price, trade_side = result[0], result[1]
         
+        # Apply the correct PnL formula based on the trade side
+        if trade_side == "BUY":
+            pnl = (price - entry_price) * quantity  # PnL for a long position
+        elif trade_side == "SELL":
+            pnl = (entry_price - price) * quantity  # PnL for a short position
+        else:
+            pnl = 0 # Should not happen
+
         # Now, update the trade record
         query_update = 'UPDATE trades SET status = %s, exit_price = %s, exit_timestamp = CURRENT_TIMESTAMP, pnl = %s WHERE order_id = %s' if is_postgres_conn else \
                        'UPDATE trades SET status = ?, exit_price = ?, exit_timestamp = CURRENT_TIMESTAMP, pnl = ? WHERE order_id = ?'
