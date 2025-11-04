@@ -206,7 +206,7 @@ async def run_single_status_update():
         log.info("Fetching trade summary for status update...")
         summary = get_trade_summary(hours_ago=interval_hours)
         if application:
-            await send_performance_report(summary, interval_hours)
+            await send_performance_report(application, summary, interval_hours)
     except Exception as e:
         log.error(f"Error in run_single_status_update: {e}")
 

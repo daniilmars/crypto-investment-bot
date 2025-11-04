@@ -86,11 +86,6 @@ jobs:
           URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} --platform managed --region ${{ env.REGION }} --format='value(status.url)')
           echo "SERVICE_URL=$URL" >> $GITHUB_ENV
 
-      - name: 5. Trigger Hourly Report
-        run: |
-          echo "Triggering hourly status report..."
-          curl -s ${{ env.SERVICE_URL }}/send-report
-
       - name: Health Check Passed
         run: echo "🎉 All cloud health checks passed successfully."
 

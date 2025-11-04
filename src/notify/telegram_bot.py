@@ -60,12 +60,12 @@ async def send_telegram_alert(signal: dict):
     )
     await send_telegram_message(bot, CHAT_ID, message)
 
-async def send_performance_report(summary: dict, interval_hours: int):
+async def send_performance_report(application: Application, summary: dict, interval_hours: int):
     """Formats and sends a performance report."""
     if not telegram_config.get('enabled') or not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
         log.error("Telegram bot is not configured.")
         return
-    bot = Bot(token=TOKEN)
+    
     message = (
         f"📈 *Bot Performance Report ({interval_hours}h)* 📈\n\n"
         f"✅ Bot is running.\n\n"
@@ -78,7 +78,8 @@ async def send_performance_report(summary: dict, interval_hours: int):
         f"- Win Rate: {summary.get('win_rate', 0):.2f}%\n\n"
         f"*This is a paper trading summary.*"
     )
-    await send_telegram_message(bot, CHAT_ID, message)
+    await application.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode='Markdown')
+    log.info("Successfully sent hourly performance report.")
 
 # --- Command Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
