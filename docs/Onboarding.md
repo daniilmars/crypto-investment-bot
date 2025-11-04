@@ -19,8 +19,8 @@ At the beginning of every new session, please perform the following actions to u
     *   **Action:** Read the entire `docs/DECISIONS.md` file.
 
 3.  **Review the Main Entry Point (`main.py`):**
-    *   **Purpose:** To understand the current orchestration of the bot's logic and how the different modules are connected.
-    *   **Action:** Read the entire `main.py` file.
+    *   **Purpose:** To understand the current orchestration of the bot's logic. The application is now built using the **FastAPI** framework, which handles incoming Telegram updates via a webhook. This file contains the main application logic, including the startup and shutdown events, the core `bot_loop`, and the `status_update_loop` which run as asynchronous background tasks.
+    *   **Action:** Read the entire `main.py` file to understand the FastAPI integration and the asynchronous workflow.
 
 4.  **Review Configuration (`config/settings.yaml.example` and `config/watch_list.yaml`):**
     *   **Purpose:** To understand what settings, API keys, parameters are available and required, and which assets are being monitored.

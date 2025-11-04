@@ -336,150 +336,79 @@ This decision streamlines the process of updating the monitored currencies by pr
 
 ---
 
-
-
 ### ADR-022: Resolution of `gcloud run deploy` Environment Variable Parsing Error
-
-
 
 **Date:** 2025-11-02
 
-
-
 **Decision:**
-
 The `gcloud run deploy` command consistently failed to parse environment variables containing comma-separated lists (e.g., `WATCH_LIST`, `STABLECOINS_TO_MONITOR`), resulting in a "Bad syntax for dict arg" error. This was due to the shell's interpretation of commas as delimiters for separate environment variables, despite various attempts at quoting and escaping.
 
-
-
 To definitively resolve this, the strategy was changed to avoid commas within the environment variable values themselves:
-
 - The `yq` commands in the CI/CD pipeline (`.github/workflows/google-cloud-run.yml`) were updated to join the currency symbols with a **semicolon (`;`)** instead of a comma.
-
 - The `src/config.py` module was updated to split the `WATCH_LIST` and `STABLECOINS_TO_MONITOR` environment variables using the semicolon (`;`) as the delimiter.
 
-
-
 **Reasoning:**
-
 This approach bypasses the `gcloud` command's parsing limitations by ensuring that the environment variable values are passed as single, unambiguous strings. By using a character (semicolon) that is not interpreted as a special delimiter by `gcloud`, the deployment process becomes robust and reliable. This ensures that the application correctly receives and parses the currency lists, allowing for seamless updates via the `config/watch_list.yaml` file.
 
-
-
 ---
-
-
-
-
-
-
 
 ### ADR-023: GCP Cost Monitoring and Secure Configuration with Environment Variables
 
-
-
-
-
-
-
 **Date:** 2025-11-02
 
-
-
-
-
-
-
 **Decision:**
-
-
-
 - **Implemented a `/gcosts` command in the Telegram bot** to provide on-demand summaries of Google Cloud Platform billing and budget information. This feature enhances the bot's operational visibility.
-
-
-
 - **Created a new module (`src/gcp/costs.py`)** to encapsulate the logic for fetching billing data. This module uses the `gcloud` command-line tool, executed via Python's `subprocess` module, to retrieve budget information.
-
-
-
 - **Instituted a role-based access control (RBAC) system** for sensitive commands. The `/gcosts` command is restricted to a list of `authorized_user_ids` defined in the configuration, preventing unauthorized access.
-
-
-
 - **Pivoted to an environment variable-first configuration strategy** for all sensitive data. The `src/config.py` module was refactored to load all API keys, Telegram secrets, and GCP configuration from environment variables, falling back to `settings.yaml` only for local development.
-
-
-
 - **Updated the CI/CD pipeline (`.github/workflows/google-cloud-run.yml`)** to pass all required secrets (e.g., `TELEGRAM_AUTHORIZED_USER_IDS`, `GCP_BILLING_ACCOUNT_ID`) to the Cloud Run service during deployment, sourcing them from GitHub Secrets.
 
-
-
-
-
-
-
 **Reasoning:**
-
-
-
 This set of decisions addresses two key areas: operational cost management and production security. The `/gcosts` command provides a simple, secure way to monitor project expenses without leaving the primary user interface (Telegram). The more critical decision was to move all secrets to environment variables for deployment. This is a security best practice that completely decouples sensitive information from the codebase, preventing accidental exposure. It ensures that the `settings.yaml` file can be used for convenient local development while the production deployment on Cloud Run is configured securely and automatically via the CI/CD pipeline.
-
-
-
-
-
-
 
 ---
 
-
-
-
-
-
-
 ### ADR-024: Implementation of In-App Database Schema Diagnostics
-
-
-
-
-
-
 
 **Date:** 2025-11-02
 
-
-
-
-
-
-
 **Decision:**
-
-
-
 - **Implemented a new, authorized Telegram command, `/db_schema`,** to allow administrators to inspect the production database schema directly from the bot.
-
-
-
 - **This approach was chosen after multiple failed attempts to reliably inspect the database schema using `gcloud sql connect` and other `gcloud` commands from a local machine.** The interactive nature and inconsistent command-line parsing of `gcloud` made it an unreliable tool for this diagnostic task.
-
-
-
 - **A new function, `get_database_schema`, was added to `src/database.py`.** This function uses the bot's existing, reliable database connection to query the system catalog (`pg_tables` or `sqlite_master`) and retrieve a list of all table names.
-
-
-
 - **The corresponding `/db_schema` command was added to `src/notify/telegram_bot.py`** and secured using the existing `is_authorized` check.
 
+**Reasoning:**
+This decision provides a far more reliable and straightforward method for database diagnostics. By leveraging the application's own active and correctly configured database connection, we bypass the complexities of local shell environments, authentication, and firewall rules. This makes debugging schema-related issues (like the previously encountered missing tables) faster, easier, and less error-prone, improving the overall maintainability of the project.
 
 
+### ADR-025: Migration to FastAPI for Telegram Webhooks on Cloud Run
 
+**Date:** 2025-11-04
 
-
+**Decision:**
+- **Refactored `main.py` to use FastAPI** as the web framework for handling Telegram bot updates via webhooks, replacing the previous `http.server` and multi-threading approach.
+- **Removed `http.server`, `socketserver`, and `threading` modules** from `main.py`.
+- **Integrated `FastAPI` and `uvicorn`** for the web server, and `Update` from `telegram` and `Request` from `fastapi` for webhook processing.
+- **Implemented a GET `/health` endpoint** for Cloud Run health checks, returning `{"status": "ok"}`.
+- **Created a POST `/webhook` endpoint** to receive and process Telegram updates using `Update.de_json` and `application.process_update()`.
+- **Refactored the main execution block** to be asynchronous, initializing the `telegram.ext.Application`.
+- **On application startup:**
+    - Set the Telegram webhook URL using `await application.bot.set_webhook()`, deriving the service URL from an environment variable (`SERVICE_URL`).
+    - Started `bot_loop()` and `status_update_loop()` as background `asyncio.create_task()` tasks.
+- **On application shutdown:**
+    - Deleted the Telegram webhook using `await application.bot.delete_webhook()`.
+- **Used `uvicorn.run()`** to start the FastAPI server, binding to the port specified by the `PORT` environment variable (defaulting to 8080).
 
 **Reasoning:**
+The previous long-polling mechanism for the Telegram bot, coupled with a custom `http.server` for health checks, was incompatible with Google Cloud Run's stateless and event-driven architecture. This led to critical runtime errors (`telegram.error.Conflict`, `AttributeError: 'Application' object has no attribute 'loop'`) and inefficient resource utilization.
 
+Migrating to FastAPI and webhooks provides a robust, scalable, and idiomatic solution for Cloud Run:
+- **Statelessness:** Webhooks align perfectly with Cloud Run's stateless nature, as the service only needs to respond to incoming HTTP requests.
+- **Asynchronous Processing:** FastAPI's asynchronous capabilities allow for efficient handling of web requests and background tasks, improving performance and responsiveness.
+- **Simplified Deployment:** Using a standard web framework like FastAPI simplifies deployment and integration with cloud services.
+- **Reliability:** Eliminates conflicts arising from multiple polling instances and ensures graceful shutdown by managing webhook lifecycle.
 
+This decision significantly improves the bot's stability, scalability, and adherence to cloud-native best practices, making it a more resilient and maintainable application on Google Cloud Run.
 
-This decision provides a far more reliable and straightforward method for database diagnostics. By leveraging the application's own active and correctly configured database connection, we bypass the complexities of local shell environments, authentication, and firewall rules. This makes debugging schema-related issues (like the previously encountered missing tables) faster, easier, and less error-prone, improving the overall maintainability of the project.
+---

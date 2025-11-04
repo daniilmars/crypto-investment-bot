@@ -56,17 +56,17 @@ settings:
 
   # List of cryptocurrencies to monitor. Use symbols.
   # Example: ["BTC", "ETH", "SOL"]
-    watch_list:
-      - "BTC"
-      - "ETH"
-      - "SOL"
-      - "XRP"
-      - "ADA"
-      - "AVAX"
-      - "DOGE"
-      - "MATIC"
-      - "BNB"
-      - "TRX" 
+  watch_list:
+    - "BTC"
+    - "ETH"
+    - "SOL"
+    - "XRP"
+    - "ADA"
+    - "AVAX"
+    - "DOGE"
+    - "MATIC"
+    - "BNB"
+    - "TRX"
   # How often the bot should run its analysis cycle, in minutes.
   run_interval_minutes: 15
 
@@ -90,14 +90,14 @@ settings:
   stablecoin_inflow_threshold_usd: 100000000
 
   # List of stablecoin symbols (lowercase) to monitor for exchange inflows.
-    stablecoins_to_monitor:
-      - "usdt"
-      - "usdc"
-      - "busd"
-      - "dai"
-      - "tusd"
-      - "fdusd"
-      - "pyusd" 
+  stablecoins_to_monitor:
+    - "usdt"
+    - "usdc"
+    - "busd"
+    - "dai"
+    - "tusd"
+    - "fdusd"
+    - "pyusd"
   # -- Volatility & Anomaly Detection --
   # The number of hours to look back to establish a baseline for transaction frequency.
   transaction_velocity_baseline_hours: 24
