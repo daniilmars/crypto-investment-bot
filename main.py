@@ -16,7 +16,7 @@ from src.collectors.binance_data import get_current_price
 from src.collectors.whale_alert import get_whale_transactions, get_stablecoin_flows
 from src.analysis.signal_engine import generate_signal
 from src.analysis.technical_indicators import calculate_rsi, calculate_transaction_velocity
-from src.notify.telegram_bot import send_telegram_alert, start_bot
+from src.notify.telegram_bot import send_telegram_alert, start_bot, stop_bot
 from src.database import initialize_database, get_historical_prices, get_transaction_timestamps_since, get_table_counts, save_signal
 from src.logger import log
 from src.config import app_config
@@ -219,17 +219,10 @@ def start_health_check_server():
     
     class HealthCheckHandler(http.server.SimpleHTTPRequestHandler):
         def do_GET(self):
-            if self.path == '/send-report':
-                trigger_status_update()
-                self.send_response(200)
-                self.send_header("Content-type", "text/plain")
-                self.end_headers()
-                self.wfile.write(b"OK - Report triggered")
-            else:
-                self.send_response(200)
-                self.send_header("Content-type", "text/plain")
-                self.end_headers()
-                self.wfile.write(b"OK")
+            self.send_response(200)
+            self.send_header("Content-type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"OK")
 
     with socketserver.TCPServer(("", port), HealthCheckHandler) as httpd:
         log.info(f"Health check server started on port {port}")
