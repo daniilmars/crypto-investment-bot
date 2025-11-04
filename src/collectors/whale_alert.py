@@ -51,6 +51,7 @@ def get_whale_transactions(min_value_usd: int = 1000000, symbols: list = None):
         log.error("Whale Alert API key is not configured.")
         return None
 
+    start_timestamp = int(time.time()) - 3600
     log.info(f"Fetching whale transactions from Whale Alert API. Start Timestamp: {start_timestamp}, Min Value USD: {min_value_usd}")
     log.debug(f"Whale Alert API Request URL: {WHALE_ALERT_API_URL}/transactions?start={start_timestamp}&min_value={min_value_usd}")
     headers = {'X-WA-API-KEY': api_key}

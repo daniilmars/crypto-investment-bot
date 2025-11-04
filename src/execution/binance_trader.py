@@ -13,7 +13,7 @@ def place_order(symbol: str, side: str, quantity: float, price: float, order_typ
     log.info(f"Simulating {side} order for {quantity} {symbol} at {price} (Type: {order_type})")
     
     # Generate a unique order ID for simulation
-    order_id = f"PAPER_{symbol}_{side}_{int(time.time())}"
+    order_id = f"PAPER_{symbol}_{side}_{int(time.time() * 1000)}"
 
     conn = get_db_connection()
     is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)

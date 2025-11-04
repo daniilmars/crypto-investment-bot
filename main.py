@@ -26,7 +26,7 @@ from src.state import bot_is_running
 # Initialize the database at the start of the application
 initialize_database()
 
-def run_bot_cycle():
+async def run_bot_cycle():
     """
     Executes one full cycle of the bot's logic.
     """
@@ -83,14 +83,14 @@ def run_bot_cycle():
                     if pnl_percentage <= -stop_loss_percentage:
                         log.info(f"[PAPER TRADE] Stop-loss hit for {symbol}. Closing position.")
                         place_order(symbol, "SELL", position['quantity'], current_price)
-                        send_telegram_alert({"signal": "SELL", "symbol": symbol, "current_price": current_price, "reason": f"Stop-loss hit ({stop_loss_percentage*100:.2f}% loss)."})
+                        await send_telegram_alert({"signal": "SELL", "symbol": symbol, "current_price": current_price, "reason": f"Stop-loss hit ({stop_loss_percentage*100:.2f}% loss)."})
                         continue
 
                     # Check for Take Profit
                     if pnl_percentage >= take_profit_percentage:
                         log.info(f"[PAPER TRADE] Take-profit hit for {symbol}. Closing position.")
                         place_order(symbol, "SELL", position['quantity'], current_price)
-                        send_telegram_alert({"signal": "SELL", "symbol": symbol, "current_price": current_price, "reason": f"Take-profit hit ({take_profit_percentage*100:.2f}% gain)."})
+                        await send_telegram_alert({"signal": "SELL", "symbol": symbol, "current_price": current_price, "reason": f"Take-profit hit ({take_profit_percentage*100:.2f}% gain)."})
                         continue
         
         # --- Pause Check ---
@@ -148,7 +148,7 @@ def run_bot_cycle():
                     else:
                         log.info(f"Executing paper trade: BUY {quantity_to_buy:.4f} {symbol}.")
                         place_order(symbol, "BUY", quantity_to_buy, current_price)
-                        send_telegram_alert(signal)
+                        await send_telegram_alert(signal)
 
             elif signal['signal'] == "SELL":
                 position_to_close = next((p for p in open_positions if p['symbol'] == symbol and p['status'] == 'OPEN'), None)
@@ -161,17 +161,17 @@ def run_bot_cycle():
             else: # HOLD
                 log.info(f"Signal is HOLD for {symbol}. No trade action taken.")
 
-def bot_loop():
+async def bot_loop():
     """
     The main indefinite loop for the bot.
     """
     run_interval_minutes = app_config.get('settings', {}).get('run_interval_minutes', 15)
     while not shutdown_event.is_set():
-        run_bot_cycle()
+        await run_bot_cycle()
         log.info(f"Cycle complete. Waiting for {run_interval_minutes} minutes...")
         shutdown_event.wait(run_interval_minutes * 60)
 
-def run_single_status_update():
+async def run_single_status_update():
     """Fetches and sends a single status update."""
     status_config = app_config.get('settings', {}).get('regular_status_update', {})
     interval_hours = status_config.get('interval_hours', 1)
@@ -183,12 +183,11 @@ def run_single_status_update():
         log.info("Fetching trade summary for status update...")
         summary = get_trade_summary(hours_ago=interval_hours)
         if telegram_app:
-            future = asyncio.run_coroutine_threadsafe(send_performance_report(summary, interval_hours), telegram_app.loop)
-            future.result()
+            await send_performance_report(summary, interval_hours)
     except Exception as e:
         log.error(f"Error in run_single_status_update: {e}")
 
-def status_update_loop():
+async def status_update_loop():
     """
     A separate loop to send periodic status updates.
     """
@@ -201,8 +200,9 @@ def status_update_loop():
     log.info(f"Starting regular status update loop. Interval: {interval_hours} hours.")
     
     while not shutdown_event.is_set():
-        run_single_status_update()
-        shutdown_event.wait(interval_hours * 3600)
+        await run_single_status_update()
+        # Use asyncio.sleep for async delay
+        await asyncio.sleep(interval_hours * 3600)
 
 def trigger_status_update():
     """Triggers a single run of the status update logic in a new thread."""
@@ -239,7 +239,10 @@ def telegram_main():
     telegram_app = loop.run_until_complete(start_bot())
     
     if telegram_app:
-        # Keep the event loop running to handle Telegram updates
+        # Start the main bot cycle and status update loop as asyncio tasks
+        loop.create_task(bot_loop())
+        loop.create_task(status_update_loop())
+        # Keep the event loop running to handle Telegram updates and other tasks
         loop.run_forever()
 
 if __name__ == "__main__":
@@ -256,11 +259,10 @@ if __name__ == "__main__":
 
             # Stop the Telegram bot
             if telegram_app:
-                # Get the running event loop and stop it
-                loop = asyncio.get_event_loop()
-                loop.call_soon_threadsafe(loop.stop)
-                # Running async stop function from a sync context
-                asyncio.run(stop_bot(telegram_app))
+                # Schedule the stop_bot coroutine on the running event loop
+                telegram_app.loop.call_soon_threadsafe(stop_bot, telegram_app)
+                # Stop the event loop itself
+                telegram_app.loop.call_soon_threadsafe(telegram_app.loop.stop)
             
             log.info("Shutdown complete.")
     
@@ -271,30 +273,12 @@ if __name__ == "__main__":
 
     # --- Main Application ---
     try:
-        # Start the Telegram bot in a separate thread
+        # Start the Telegram bot in a separate thread, which now also runs bot_loop and status_update_loop
         telegram_thread = threading.Thread(target=telegram_main)
         telegram_thread.daemon = True
         telegram_thread.start()
 
-        # Give the Telegram bot a moment to initialize
-        time.sleep(2)
-
-        if telegram_app:
-            # Start the main bot cycle in a separate thread
-            main_bot_thread = threading.Thread(target=bot_loop)
-            main_bot_thread.daemon = True
-            main_bot_thread.start()
-
-            # Start the periodic status update loop in a separate thread
-            status_update_thread = threading.Thread(target=status_update_loop)
-            status_update_thread.daemon = True
-            status_update_thread.start()
-        else:
-            log.error("Failed to initialize Telegram bot. Application will not start.")
-            shutdown(None, None)
-
-        # Start the health check server in the main thread
-        # This is crucial for Cloud Run to keep the instance alive.
+        # The health check server runs in the main thread, keeping the process alive.
         start_health_check_server()
 
     except (KeyboardInterrupt, SystemExit):
