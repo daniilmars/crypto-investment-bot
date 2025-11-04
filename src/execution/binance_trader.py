@@ -28,15 +28,31 @@ def place_order(symbol: str, side: str, quantity: float, price: float, order_typ
 
     elif side == "SELL" and existing_order_id:
         log.info(f"Simulating SELL order for {quantity} {symbol} at {price} (Type: {order_type}) for existing order {existing_order_id}")
-        close_timestamp = int(time.time())
-        query = 'UPDATE trades SET status = %s, exit_price = %s, close_timestamp = %s WHERE order_id = %s' if is_postgres_conn else \
-                'UPDATE trades SET status = ?, exit_price = ?, close_timestamp = ? WHERE order_id = ?'
-        cursor.execute(query, ("CLOSED", price, close_timestamp, existing_order_id))
+        
+        # First, get the entry price to calculate PnL
+        query_entry = 'SELECT entry_price FROM trades WHERE order_id = %s' if is_postgres_conn else \
+                      'SELECT entry_price FROM trades WHERE order_id = ?'
+        cursor.execute(query_entry, (existing_order_id,))
+        result = cursor.fetchone()
+        if not result:
+            log.error(f"Could not find existing order {existing_order_id} to calculate PnL.")
+            cursor.close()
+            conn.close()
+            return {"status": "FAILED", "message": "Existing order not found"}
+        
+        entry_price = result[0]
+        pnl = (price - entry_price) * quantity
+        
+        # Now, update the trade record
+        query_update = 'UPDATE trades SET status = %s, exit_price = %s, exit_timestamp = CURRENT_TIMESTAMP, pnl = %s WHERE order_id = %s' if is_postgres_conn else \
+                       'UPDATE trades SET status = ?, exit_price = ?, exit_timestamp = CURRENT_TIMESTAMP, pnl = ? WHERE order_id = ?'
+        cursor.execute(query_update, ("CLOSED", price, pnl, existing_order_id))
         conn.commit()
-        log.info(f"Paper trade {existing_order_id} updated to CLOSED at {price}.")
+        
+        log.info(f"Paper trade {existing_order_id} updated to CLOSED at {price}. PnL: ${pnl:.2f}")
         cursor.close()
         conn.close()
-        return {"order_id": existing_order_id, "symbol": symbol, "side": side, "quantity": quantity, "price": price, "status": "CLOSED", "exit_price": price, "close_timestamp": close_timestamp}
+        return {"order_id": existing_order_id, "status": "CLOSED", "pnl": pnl}
     
     log.warning(f"Invalid place_order call: side={side}, existing_order_id={existing_order_id}")
     cursor.close()

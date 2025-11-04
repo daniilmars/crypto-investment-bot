@@ -1,22 +1,36 @@
 import os
 import sqlite3
 import psycopg2
+import pandas as pd
 from psycopg2.extras import RealDictCursor
 from src.config import app_config
 from src.logger import log
 
 # --- Database Connection Management ---
 
-def get_db_connection():
+def get_db_connection(db_url=None):
     """
     Establishes a connection to the database.
+    - If a db_url is provided, it connects directly to that PostgreSQL instance.
     - In Google Cloud Run, connects to PostgreSQL via a Unix socket.
-    - Locally, connects to PostgreSQL using the DATABASE_URL.
-    - Falls back to SQLite if no DATABASE_URL is provided.
+    - Locally, connects to PostgreSQL using the DATABASE_URL from config.
+    - Falls back to SQLite if no PostgreSQL configuration is found.
     """
+    # If a specific URL is provided, use it first.
+    if db_url:
+        try:
+            log.info("Connecting to PostgreSQL using provided DATABASE_URL.")
+            conn = psycopg2.connect(db_url)
+            log.info("Successfully connected to PostgreSQL.")
+            return conn
+        except psycopg2.OperationalError as e:
+            log.error(f"Could not connect to PostgreSQL via provided DATABASE_URL: {e}", exc_info=True)
+            raise
+
+    # --- Standard connection logic ---
     instance_connection_name = app_config.get('DB_INSTANCE_CONNECTION_NAME')
     db_config = app_config.get('db', {})
-    db_url = app_config.get('DATABASE_URL')
+    config_db_url = app_config.get('DATABASE_URL')
 
     # Prioritize Unix socket connection for Cloud Run
     if instance_connection_name and db_config.get('user'):
@@ -35,15 +49,15 @@ def get_db_connection():
             log.error(f"Could not connect to PostgreSQL via socket: {e}", exc_info=True)
             raise
 
-    # Fallback to DATABASE_URL for local PostgreSQL
-    elif db_url:
+    # Fallback to DATABASE_URL from config for local PostgreSQL
+    elif config_db_url:
         try:
-            log.info("Connecting to PostgreSQL using DATABASE_URL.")
-            conn = psycopg2.connect(db_url)
+            log.info("Connecting to PostgreSQL using DATABASE_URL from config.")
+            conn = psycopg2.connect(config_db_url)
             log.info("Successfully connected to PostgreSQL.")
             return conn
         except psycopg2.OperationalError as e:
-            log.error(f"Could not connect to PostgreSQL via DATABASE_URL: {e}", exc_info=True)
+            log.error(f"Could not connect to PostgreSQL via DATABASE_URL from config: {e}", exc_info=True)
             raise
     # Fallback to SQLite for local development without PostgreSQL
     else:
@@ -55,7 +69,7 @@ def get_db_connection():
         conn.row_factory = sqlite3.Row
         return conn
 
-def initialize_database():
+def initialize_database(db_url=None):
     """
     Creates the necessary database tables if they don't already exist.
     Dynamically uses PostgreSQL or SQLite syntax based on the connection type.
@@ -63,7 +77,7 @@ def initialize_database():
     log.info("Initializing database...")
     conn = None
     try:
-        conn = get_db_connection()
+        conn = get_db_connection(db_url)
         cursor = conn.cursor()
 
         # Runtime detection of the database type
@@ -155,18 +169,26 @@ def get_db_stats() -> dict:
 
 def save_signal(signal_data: dict):
     """Saves a generated signal to the database."""
-    conn = get_db_connection()
-    is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
-    query = 'INSERT INTO signals (symbol, signal_type, reason, price) VALUES (%s, %s, %s, %s)' if is_postgres_conn else \
-            'INSERT INTO signals (symbol, signal_type, reason, price) VALUES (?, ?, ?, ?)'
-    with conn.cursor() as cursor:
-        cursor.execute(query, (
-            signal_data.get('symbol'), signal_data.get('signal'),
-            signal_data.get('reason'), signal_data.get('current_price')
-        ))
-    conn.commit()
-    conn.close()
-    log.info(f"Saved signal for {signal_data.get('symbol')}: {signal_data.get('signal')}")
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
+        query = 'INSERT INTO signals (symbol, signal_type, reason, price) VALUES (%s, %s, %s, %s)' if is_postgres_conn else \
+                'INSERT INTO signals (symbol, signal_type, reason, price) VALUES (?, ?, ?, ?)'
+        with conn.cursor() as cursor:
+            cursor.execute(query, (
+                signal_data.get('symbol'), signal_data.get('signal'),
+                signal_data.get('reason'), signal_data.get('current_price')
+            ))
+        conn.commit()
+        log.info(f"Saved signal for {signal_data.get('symbol')}: {signal_data.get('signal')}")
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in save_signal: {e}", exc_info=True)
+    except Exception as e:
+        log.error(f"An unexpected error occurred in save_signal: {e}", exc_info=True)
+    finally:
+        if conn:
+            conn.close()
 
 def get_last_signal():
     """Retrieves the last generated signal from the database."""
@@ -307,3 +329,47 @@ def get_database_schema() -> list:
     conn.close()
     log.info(f"Retrieved database schema. Tables: {tables}")
     return tables
+
+import pandas as pd
+
+def get_all_trades(db_url=None) -> pd.DataFrame:
+    """
+    Retrieves all trade records from the database and returns them as a pandas DataFrame.
+    """
+    conn = None
+    try:
+        conn = get_db_connection(db_url)
+        # The SQL query is simple and works for both PostgreSQL and SQLite
+        query = "SELECT * FROM trades ORDER BY entry_timestamp DESC"
+        df = pd.read_sql_query(query, conn)
+        log.info(f"Successfully retrieved {len(df)} trades from the database.")
+        return df
+    except Exception as e:
+        log.error(f"Error retrieving all trades: {e}", exc_info=True)
+        return pd.DataFrame()  # Return an empty DataFrame on error
+    finally:
+        if conn:
+            conn.close()
+
+def get_stop_loss_signals(db_url=None) -> list:
+    """
+    Retrieves all 'Stop-loss hit' signals from the database.
+    """
+    conn = None
+    try:
+        conn = get_db_connection(db_url)
+        is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
+        cursor_factory = RealDictCursor if is_postgres_conn else None
+        
+        with conn.cursor(cursor_factory=cursor_factory) as cursor:
+            query = "SELECT * FROM signals WHERE reason LIKE 'Stop-loss hit%%' ORDER BY timestamp DESC"
+            cursor.execute(query)
+            signals = [dict(row) for row in cursor.fetchall()]
+        log.info(f"Retrieved {len(signals)} stop-loss signals.")
+        return signals
+    except Exception as e:
+        log.error(f"Error retrieving stop-loss signals: {e}", exc_info=True)
+        return []
+    finally:
+        if conn:
+            conn.close()
