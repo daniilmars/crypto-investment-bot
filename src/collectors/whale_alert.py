@@ -42,7 +42,7 @@ def save_whale_transactions(transactions: list):
     conn.close()
     log.info(f"Processed {len(transactions)} whale transactions for the database.")
 
-def get_whale_transactions(min_value_usd: int = 1000000, symbols: list = None):
+def get_whale_transactions(min_value_usd: int = 500000, symbols: list = None):
     """
     Fetches the latest transactions from the Whale Alert API and saves them.
     """

@@ -5,6 +5,7 @@
 # Force redeploy 2025-11-02
 # Force redeploy 2025-10-16
 
+import argparse
 import asyncio
 import os
 import time
@@ -66,7 +67,16 @@ async def run_bot_cycle():
 
     # 1. Collect data
     log.info("Fetching data from all sources...")
-    whale_transactions = get_whale_transactions(min_value_usd=min_whale_value)
+    # Collect all transactions above a low threshold to ensure a rich dataset
+    all_whale_transactions = get_whale_transactions(min_value_usd=500000)
+
+    # Filter transactions in memory for signal analysis based on the higher, configured threshold
+    whale_transactions = [
+        tx for tx in all_whale_transactions
+        if tx['amount_usd'] >= min_whale_value
+    ] if all_whale_transactions else []
+    log.info(f"Found {len(whale_transactions)} transactions above analysis threshold of ${min_whale_value:,.2f}")
+
     stablecoin_data = get_stablecoin_flows(whale_transactions, stablecoins_to_monitor)
 
     # Process each symbol in the watch list
@@ -299,7 +309,23 @@ async def handle_webhook(request: Request):
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    log.info(f"Starting Uvicorn server on port {port}...")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    parser = argparse.ArgumentParser(description="Run the crypto trading bot.")
+    parser.add_argument('--collect-only', action='store_true',
+                        help='Run in data collection mode only.')
+    args = parser.parse_args()
+
+    if args.collect_only:
+        async def collect_data():
+            log.info("--- 📊 Collecting Market Data (Collect-only mode) ---")
+            # We don't need to collect binance data here as it's done in the backfill script
+            
+            log.info("--- 🐋 Collecting Whale Alert Data (Collect-only mode) ---")
+            whale_transactions = get_whale_transactions(min_value_usd=app_config.get('settings', {}).get('min_whale_transaction_usd', 1000000))
+            log.info(f"Fetched {len(whale_transactions)} whale transactions.")
+
+        asyncio.run(collect_data())
+    else:
+        port = int(os.environ.get("PORT", 8080))
+        log.info(f"Starting Uvicorn server on port {port}...")
+        uvicorn.run(app, host="0.0.0.0", port=port)
 
