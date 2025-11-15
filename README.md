@@ -12,6 +12,14 @@ All collected data, along with simulated trades and generated signals, is stored
 
 ---
 
+## 🧪 Backtesting and Strategy Optimization
+
+The project includes a powerful backtesting framework that allows you to test and optimize your trading strategy against historical data. This is a critical step in developing a profitable model.
+
+For detailed instructions on how to set up and use the backtesting tools, please see the **[Backtesting and Strategy Optimization Guide](docs/BACKTESTING.md)**.
+
+---
+
 ## 🧠 Core Features
 
 -   📊 **Multi-Source Data Collection:**

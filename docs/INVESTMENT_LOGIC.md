@@ -95,3 +95,10 @@ When `paper_trading` is enabled, the bot will simulate trades based on the gener
 -   `stop_loss_percentage`: The percentage drop from the entry price that will trigger a stop-loss (e.g., `0.02` for 2%).
 -   `take_profit_percentage`: The percentage gain from the entry price that will trigger a take-profit (e.g., `0.05` for 5%).
 -   `max_concurrent_positions`: The maximum number of trades that can be open at the same time.
+
+---
+
+## Implementation Notes
+
+-   **Data Frequency:** Backtesting has shown that this strategy is **highly sensitive to the frequency of the market price data**. For the technical indicators (SMA and RSI) to be effective, price data should be collected at a high frequency (e.g., every 5-10 minutes).
+-   **RSI Threshold:** The `rsi_oversold_threshold` is a critical parameter for generating `BUY` signals. Backtesting has shown that a value of `35` is more effective at generating signals with the available historical data than the default of `30`.

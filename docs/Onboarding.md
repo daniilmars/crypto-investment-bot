@@ -34,11 +34,15 @@ At the beginning of every new session, please perform the following actions to u
     *   **Purpose:** To understand the detailed investment and trading strategy, including technical indicators and on-chain data analysis.
     *   **Action:** Read the entire `docs/INVESTMENT_LOGIC.md` file.
 
-7.  **Review Cloud and Networking Documentation (`docs/CLOUD_HEALTH_CHECKS.md` and `docs/NETWORKING.md`):**
+7.  **Review the Backtesting Framework (`docs/BACKTESTING.md`):**
+    *   **Purpose:** To understand the tools and workflow for backtesting and optimizing the trading strategy.
+    *   **Action:** Read the entire `docs/BACKTESTING.md` file.
+
+8.  **Review Cloud and Networking Documentation (`docs/CLOUD_HEALTH_CHECKS.md` and `docs/NETWORKING.md`):**
     *   **Purpose:** To understand deployment, infrastructure, and networking considerations.
     *   **Action:** Read both `docs/CLOUD_HEALTH_CHECKS.md` and `docs/NETWORKING.md` files.
 
-8.  **Review Project Structure (`src/` and `tests/` directories):**
+9.  **Review Project Structure (`src/` and `tests/` directories):**
     *   **Purpose:** To understand the codebase organization, module responsibilities, and testing conventions.
     *   **Action:** Perform a recursive listing of the `src/` and `tests/` directories to get an overview of their contents.
 

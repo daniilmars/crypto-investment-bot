@@ -137,6 +137,44 @@ def initialize_database(db_url=None):
             )'''
         cursor.execute(trades_sql)
 
+        # Optimization Results
+        optimization_results_sql = '''
+            CREATE TABLE IF NOT EXISTS optimization_results (
+                id SERIAL PRIMARY KEY, sma_period INTEGER, stop_loss_percentage REAL,
+                take_profit_percentage REAL, pnl REAL,
+                timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )''' if is_postgres_conn else '''
+            CREATE TABLE IF NOT EXISTS optimization_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, sma_period INTEGER, stop_loss_percentage REAL,
+                take_profit_percentage REAL, pnl REAL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )'''
+        cursor.execute(optimization_results_sql)
+
+        # News Sentiment
+        news_sentiment_sql = '''
+            CREATE TABLE IF NOT EXISTS news_sentiment (
+                timestamp TIMESTAMPTZ NOT NULL,
+                symbol TEXT NOT NULL,
+                avg_sentiment_score REAL,
+                news_volume INTEGER,
+                sentiment_volatility REAL,
+                positive_buzz_ratio REAL,
+                negative_buzz_ratio REAL,
+                PRIMARY KEY (timestamp, symbol)
+            )''' if is_postgres_conn else '''
+            CREATE TABLE IF NOT EXISTS news_sentiment (
+                timestamp DATETIME NOT NULL,
+                symbol TEXT NOT NULL,
+                avg_sentiment_score REAL,
+                news_volume INTEGER,
+                sentiment_volatility REAL,
+                positive_buzz_ratio REAL,
+                negative_buzz_ratio REAL,
+                PRIMARY KEY (timestamp, symbol)
+            )'''
+        cursor.execute(news_sentiment_sql)
+
         conn.commit()
     except (sqlite3.Error, psycopg2.Error) as e:
         log.error(f"Error during database initialization: {e}", exc_info=True)
@@ -146,6 +184,38 @@ def initialize_database(db_url=None):
         if conn:
             conn.close()
     log.info("Database initialization process completed.")
+
+def save_optimization_result(params: dict, pnl: float):
+    """Saves the result of a backtest optimization run to the database."""
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
+        query = '''
+            INSERT INTO optimization_results (sma_period, stop_loss_percentage, take_profit_percentage, pnl)
+            VALUES (%s, %s, %s, %s)
+        ''' if is_postgres_conn else '''
+            INSERT INTO optimization_results (sma_period, stop_loss_percentage, take_profit_percentage, pnl)
+            VALUES (?, ?, ?, ?)
+        '''
+        
+        cursor = conn.cursor()
+        cursor.execute(query, (
+            params.get('--sma-period'),
+            params.get('--stop-loss-percentage'),
+            params.get('--take-profit-percentage'),
+            pnl
+        ))
+        conn.commit()
+        log.info(f"Saved optimization result: PnL={pnl:.2f}, Params={params}")
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in save_optimization_result: {e}", exc_info=True)
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 def get_db_stats() -> dict:
     """Retrieves statistics from the database."""
@@ -369,6 +439,34 @@ def get_stop_loss_signals(db_url=None) -> list:
         return signals
     except Exception as e:
         log.error(f"Error retrieving stop-loss signals: {e}", exc_info=True)
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+def get_price_history_for_trade(symbol: str, start_time, db_url=None) -> list:
+    """
+    Retrieves all price history for a symbol from a specific start time.
+    """
+    conn = None
+    try:
+        conn = get_db_connection(db_url)
+        is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
+        cursor_factory = RealDictCursor if is_postgres_conn else None
+
+        with conn.cursor(cursor_factory=cursor_factory) as cursor:
+            if is_postgres_conn:
+                query = "SELECT price, timestamp FROM market_prices WHERE symbol = %s AND timestamp >= %s ORDER BY timestamp ASC"
+                cursor.execute(query, (symbol, start_time))
+            else:
+                # SQLite version for compatibility
+                query = "SELECT price, timestamp FROM market_prices WHERE symbol = ? AND timestamp >= ? ORDER BY timestamp ASC"
+                cursor.execute(query, (symbol, start_time))
+            
+            prices = [dict(row) for row in cursor.fetchall()]
+        return prices
+    except Exception as e:
+        log.error(f"Error retrieving price history for trade: {e}", exc_info=True)
         return []
     finally:
         if conn:

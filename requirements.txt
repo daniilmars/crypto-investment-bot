@@ -25,4 +25,7 @@ google-generativeai
 fastapi
 uvicorn
 
+# For LSTM Model
+tensorflow
+
 # Cache buster
