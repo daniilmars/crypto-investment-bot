@@ -29,6 +29,9 @@ def _load_api_keys(base_config):
     binance['api_key'] = _get_env('BINANCE_API_KEY', binance.get('api_key'))
     binance['api_secret'] = _get_env('BINANCE_API_SECRET', binance.get('api_secret'))
     keys['binance'] = binance
+    keys['alpha_vantage'] = _get_env('ALPHA_VANTAGE_API_KEY', keys.get('alpha_vantage'))
+    keys['anthropic'] = _get_env('ANTHROPIC_API_KEY', keys.get('anthropic'))
+    keys['newsapi'] = _get_env('NEWSAPI_ORG_KEY', keys.get('newsapi'))
     return keys
 
 def _load_notifications(base_config):
@@ -75,7 +78,13 @@ def _load_settings(base_config):
     stablecoins_env = _get_env('STABLECOINS_TO_MONITOR')
     if stablecoins_env:
         settings['stablecoins_to_monitor'] = [symbol.strip() for symbol in stablecoins_env.split(';')]
-        
+
+    stock_watch_list_env = _get_env('STOCK_WATCH_LIST')
+    if stock_watch_list_env:
+        stock_trading = settings.get('stock_trading', {})
+        stock_trading['watch_list'] = [symbol.strip() for symbol in stock_watch_list_env.split(';')]
+        settings['stock_trading'] = stock_trading
+
     return settings
 
 def _load_database_config(config):

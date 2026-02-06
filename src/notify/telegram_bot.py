@@ -52,12 +52,42 @@ async def send_telegram_alert(signal: dict):
     symbol = signal.get('symbol', 'N/A').upper()
     price = signal.get('current_price', 0)
     reason = signal.get('reason', 'No reason provided.')
+    asset_type = signal.get('asset_type', 'crypto')
+    alert_header = "Stock Alert" if asset_type == "stock" else "Crypto Alert"
     message = (
-        f"🚨 *Crypto Alert* 🚨\n\n"
+        f"🚨 *{alert_header}* 🚨\n\n"
         f"*{signal_type} Signal for {symbol}*\n\n"
         f"*Price:* ${price:,.2f}\n"
         f"*Reason:* {reason}"
     )
+    await send_telegram_message(bot, CHAT_ID, message)
+
+async def send_news_alert(triggered_symbols, claude_assessments, sentiment_data):
+    """Sends a breaking news alert when news volume spikes or sentiment shifts."""
+    if not telegram_config.get('enabled') or not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
+        log.warning("Telegram bot is not configured. Skipping news alert.")
+        return
+    bot = Bot(token=TOKEN)
+
+    lines = ["*Breaking News Alert*\n"]
+    for symbol in triggered_symbols:
+        sym_data = sentiment_data.get(symbol, {})
+        avg_score = sym_data.get('avg_sentiment_score', 0)
+        volume = sym_data.get('news_volume', 0)
+        lines.append(f"*{symbol}:* {volume} articles, sentiment {avg_score:+.3f}")
+
+        if claude_assessments:
+            assessment = claude_assessments.get('symbol_assessments', {}).get(symbol)
+            if assessment:
+                direction = assessment.get('direction', 'neutral')
+                confidence = assessment.get('confidence', 0)
+                reasoning = assessment.get('reasoning', '')
+                lines.append(f"  Claude: {direction} ({confidence:.0%}) - {reasoning}")
+
+    if claude_assessments and claude_assessments.get('market_mood'):
+        lines.append(f"\n*Market Mood:* {claude_assessments['market_mood']}")
+
+    message = "\n".join(lines)
     await send_telegram_message(bot, CHAT_ID, message)
 
 async def send_performance_report(application: Application, summary: dict, interval_hours: int):
@@ -121,6 +151,21 @@ async def gcosts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     summary = get_gcp_billing_summary()
     await update.message.reply_text(summary, parse_mode='Markdown')
 
+def _is_stock_symbol(symbol):
+    """Checks if a symbol is a stock (present in stock_trading watch_list)."""
+    stock_watch_list = app_config.get('settings', {}).get('stock_trading', {}).get('watch_list', [])
+    return symbol in stock_watch_list
+
+def _get_position_price(symbol):
+    """Gets current price for a position, using the appropriate data source."""
+    if _is_stock_symbol(symbol):
+        from src.collectors.alpha_vantage_data import get_stock_price
+        price_data = get_stock_price(symbol)
+        return price_data.get('price', 0) if price_data else 0
+    else:
+        price_data = get_current_price(f"{symbol}USDT")
+        return float(price_data.get('price', 0)) if price_data else 0
+
 async def positions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /positions command."""
     try:
@@ -134,8 +179,7 @@ async def positions(update: Update, context: ContextTypes.DEFAULT_TYPE):
             symbol = pos.get('symbol')
             quantity = pos.get('quantity', 0)
             entry_price = pos.get('entry_price', 0)
-            price_data = get_current_price(f"{symbol}USDT")
-            current_price = float(price_data.get('price', 0)) if price_data else entry_price
+            current_price = _get_position_price(symbol) or entry_price
             pnl = (current_price - entry_price) * quantity
             pnl_percentage = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
             total_pnl += pnl
@@ -172,6 +216,7 @@ async def performance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log.error(f"Error fetching performance summary: {e}")
         await update.message.reply_text("Error fetching performance summary.")
 
+@authorized
 async def pause(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /pause command."""
     if bot_is_running.is_set():
@@ -181,6 +226,7 @@ async def pause(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("Bot is already paused.")
 
+@authorized
 async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /resume command."""
     if not bot_is_running.is_set():

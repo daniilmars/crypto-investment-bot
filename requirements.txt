@@ -1,31 +1,35 @@
 # For making HTTP requests to APIs
-requests
+requests==2.32.4
 
 # For data analysis and backtesting
-pandas
-pandas-ta
+pandas==2.3.3
+pandas-ta==0.3.14b1
 
 # For connecting to PostgreSQL
-psycopg2-binary
+psycopg2-binary==2.9.11
 
 # For testing
-pytest
-pytest-mock
+pytest==8.4.1
+pytest-mock==3.15.1
 
 # For reading YAML configuration
-PyYAML
+PyYAML==6.0.3
 
 # For telegram bot
-python-telegram-bot
+python-telegram-bot==22.5
 
 # For Gemini API
-google-generativeai
+google-generativeai==0.8.4
 
 # For FastAPI webhooks
-fastapi
-uvicorn
+fastapi==0.116.1
+uvicorn==0.35.0
 
 # For LSTM Model
-tensorflow
+tensorflow==2.16.2
 
-# Cache buster
+# For news sentiment analysis
+anthropic>=0.40.0
+vaderSentiment>=3.3.2
+newsapi-python>=0.2.7
+feedparser>=6.0.0

@@ -45,10 +45,12 @@ api_keys:
     api_key: "YOUR_BINANCE_API_KEY"
     api_secret: "YOUR_BINANCE_API_SECRET"
   gemini: "YOUR_GEMINI_API_KEY"
+  alpha_vantage: "YOUR_ALPHA_VANTAGE_API_KEY"
   lunarcrush: "YOUR_LUNARCRUSH_API_KEY"
   glassnode: "YOUR_GLASSNODE_API_KEY"
   newsapi: "YOUR_NEWSAPI_ORG_KEY"
   news_api: "YOUR_NEWS_API_KEY"
+  anthropic: "YOUR_ANTHROPIC_API_KEY"
 
 # -- General Bot Settings --
 settings:
@@ -131,3 +133,36 @@ settings:
   regular_status_update:
     enabled: true
     interval_hours: 1
+
+  # -- News Analysis Settings --
+  news_analysis:
+    enabled: true
+    # Volume spike: trigger Claude if current_volume > previous_volume * multiplier
+    volume_spike_multiplier: 3.0
+    # Sentiment shift: trigger Claude if abs(current - previous) >= threshold
+    sentiment_shift_threshold: 0.3
+    # VADER sentiment thresholds for signal scoring
+    sentiment_buy_threshold: 0.15
+    sentiment_sell_threshold: -0.15
+    # Minimum Claude confidence to override VADER
+    min_claude_confidence: 0.6
+
+  # -- Stock Trading Settings --
+  stock_trading:
+    enabled: false
+    watch_list:
+      - "AAPL"
+      - "MSFT"
+      - "GOOGL"
+      - "AMZN"
+      - "NVDA"
+      - "META"
+      - "TSLA"
+    sma_period: 20
+    rsi_period: 14
+    rsi_overbought_threshold: 70
+    rsi_oversold_threshold: 30
+    pe_ratio_buy_threshold: 25
+    pe_ratio_sell_threshold: 40
+    earnings_growth_sell_threshold: -10
+    volume_spike_multiplier: 1.5

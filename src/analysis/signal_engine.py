@@ -1,7 +1,7 @@
 import pandas as pd
 from src.logger import log
 
-def generate_signal(symbol, whale_transactions, market_data, high_interest_wallets=None, stablecoin_data=None, stablecoin_threshold=100000000, velocity_data=None, velocity_threshold_multiplier=5.0, rsi_overbought_threshold=70, rsi_oversold_threshold=30):
+def generate_signal(symbol, whale_transactions, market_data, high_interest_wallets=None, stablecoin_data=None, stablecoin_threshold=100000000, velocity_data=None, velocity_threshold_multiplier=5.0, rsi_overbought_threshold=70, rsi_oversold_threshold=30, news_sentiment_data=None):
     """
     Generates a trading signal based on on-chain data and technical indicators.
     Prioritizes anomalies and high-priority events.
@@ -87,8 +87,33 @@ def generate_signal(symbol, whale_transactions, market_data, high_interest_walle
     elif net_flow > 0: # More entering exchanges than leaving
         sell_score += 1
 
+    # Indicator 4: News Sentiment
+    news_reason = ""
+    if news_sentiment_data:
+        claude_assessment = news_sentiment_data.get('claude_assessment')
+        min_confidence = news_sentiment_data.get('min_claude_confidence', 0.6)
+
+        if claude_assessment and claude_assessment.get('confidence', 0) >= min_confidence:
+            direction = claude_assessment.get('direction', 'neutral')
+            if direction == 'bullish':
+                buy_score += 1
+                news_reason = f", News: Claude bullish ({claude_assessment.get('confidence', 0):.1f})"
+            elif direction == 'bearish':
+                sell_score += 1
+                news_reason = f", News: Claude bearish ({claude_assessment.get('confidence', 0):.1f})"
+        else:
+            avg_sentiment = news_sentiment_data.get('avg_sentiment_score', 0)
+            buy_threshold = news_sentiment_data.get('sentiment_buy_threshold', 0.15)
+            sell_threshold = news_sentiment_data.get('sentiment_sell_threshold', -0.15)
+            if avg_sentiment > buy_threshold:
+                buy_score += 1
+                news_reason = f", News: VADER bullish ({avg_sentiment:.3f})"
+            elif avg_sentiment < sell_threshold:
+                sell_score += 1
+                news_reason = f", News: VADER bearish ({avg_sentiment:.3f})"
+
     # --- Signal Generation ---
-    reason = f"Price: ${current_price:,.2f}, SMA: ${sma:,.2f}, RSI: {rsi:.2f}, Whale Net Flow: ${net_flow:,.2f}. Buy Score: {buy_score}, Sell Score: {sell_score}."
+    reason = f"Price: ${current_price:,.2f}, SMA: ${sma:,.2f}, RSI: {rsi:.2f}, Whale Net Flow: ${net_flow:,.2f}{news_reason}. Buy Score: {buy_score}, Sell Score: {sell_score}."
 
     if buy_score >= 2:
         log.info(f"[{symbol}] BUY signal generated. {reason}")

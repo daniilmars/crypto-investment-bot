@@ -15,10 +15,16 @@ import uvicorn
 from fastapi import FastAPI, Request
 from telegram import Update
 
+from src.analysis.news_impact_analyzer import analyze_news_impact
 from src.analysis.signal_engine import generate_signal
-from src.analysis.technical_indicators import (calculate_rsi,
+from src.analysis.stock_signal_engine import generate_stock_signal
+from src.analysis.technical_indicators import (calculate_rsi, calculate_sma,
                                                calculate_transaction_velocity)
+from src.collectors.alpha_vantage_data import (get_company_overview,
+                                               get_daily_prices,
+                                               get_stock_price)
 from src.collectors.binance_data import get_current_price
+from src.collectors.news_data import collect_news_sentiment
 from src.collectors.whale_alert import (get_stablecoin_flows,
                                         get_whale_transactions)
 from src.config import app_config
@@ -28,15 +34,21 @@ from src.database import (get_historical_prices,
 from src.execution.binance_trader import (get_account_balance,
                                           get_open_positions, place_order)
 from src.logger import log
-from src.notify.telegram_bot import send_telegram_alert, start_bot
+from src.notify.telegram_bot import (send_news_alert, send_telegram_alert,
+                                     start_bot)
 from src.state import bot_is_running
 
 # Initialize the database at the start of the application
-initialize_database()
+try:
+    initialize_database()
+except Exception as e:
+    log.error(f"Failed to initialize database: {e}", exc_info=True)
+    log.warning("Continuing startup — database may be unavailable.")
 
 # --- FastAPI App Initialization ---
 app = FastAPI()
 application = None
+_background_tasks = []
 
 
 async def run_bot_cycle():
@@ -78,6 +90,32 @@ async def run_bot_cycle():
     log.info(f"Found {len(whale_transactions)} transactions above analysis threshold of ${min_whale_value:,.2f}")
 
     stablecoin_data = get_stablecoin_flows(whale_transactions, stablecoins_to_monitor)
+
+    # Collect news for all symbols (crypto + stock combined)
+    stock_settings = settings.get('stock_trading', {})
+    stock_watch_list = stock_settings.get('watch_list', []) if stock_settings.get('enabled', False) else []
+    all_symbols = list(set(watch_list + stock_watch_list))
+
+    news_result = collect_news_sentiment(all_symbols)
+    news_per_symbol = news_result.get('per_symbol', {})
+    triggered_symbols = news_result.get('triggered_symbols', [])
+
+    # If triggers fire, call Claude for deep analysis
+    news_config = settings.get('news_analysis', {})
+    claude_assessments = None
+    if triggered_symbols and news_config.get('enabled', False):
+        headlines_by_symbol = {
+            sym: news_per_symbol[sym]['headlines']
+            for sym in triggered_symbols if sym in news_per_symbol
+        }
+        current_prices = {}
+        for sym in triggered_symbols:
+            api_sym = sym if "USDT" in sym else f"{sym}USDT"
+            pd_ = get_current_price(api_sym)
+            if pd_ and pd_.get('price'):
+                current_prices[sym] = float(pd_['price'])
+        claude_assessments = analyze_news_impact(headlines_by_symbol, current_prices)
+        await send_news_alert(triggered_symbols, claude_assessments, news_per_symbol)
 
     # Process each symbol in the watch list
     for symbol in watch_list:
@@ -141,6 +179,22 @@ async def run_bot_cycle():
 
         # 3. Generate a signal
         log.info(f"Generating signal for {symbol}...")
+
+        # Build per-symbol news sentiment data for the signal engine
+        symbol_news_data = None
+        sym_news = news_per_symbol.get(symbol)
+        if sym_news:
+            symbol_news_data = {
+                'avg_sentiment_score': sym_news.get('avg_sentiment_score', 0),
+                'sentiment_buy_threshold': news_config.get('sentiment_buy_threshold', 0.15),
+                'sentiment_sell_threshold': news_config.get('sentiment_sell_threshold', -0.15),
+                'min_claude_confidence': news_config.get('min_claude_confidence', 0.6),
+            }
+            if claude_assessments:
+                assessment = claude_assessments.get('symbol_assessments', {}).get(symbol)
+                if assessment:
+                    symbol_news_data['claude_assessment'] = assessment
+
         signal = generate_signal(
             symbol=symbol,
             whale_transactions=whale_transactions,
@@ -149,7 +203,8 @@ async def run_bot_cycle():
             stablecoin_data=stablecoin_data,
             velocity_data=transaction_velocity,
             rsi_overbought_threshold=rsi_overbought_threshold,
-            rsi_oversold_threshold=rsi_oversold_threshold
+            rsi_oversold_threshold=rsi_oversold_threshold,
+            news_sentiment_data=symbol_news_data
         )
         log.info(f"Generated Signal for {symbol}: {signal}")
         save_signal(signal)
@@ -186,8 +241,194 @@ async def run_bot_cycle():
                     await send_telegram_alert(signal)
                 else:
                     log.info(f"Skipping SELL for {symbol}: No open position found.")
+            elif signal['signal'] == "VOLATILITY_WARNING":
+                log.info(f"VOLATILITY_WARNING for {symbol}. Suppressing new trades.")
+                await send_telegram_alert(signal)
             else:  # HOLD
                 log.info(f"Signal is HOLD for {symbol}. No trade action taken.")
+
+    # --- Run Stock Trading Cycle ---
+    await run_stock_cycle(settings, news_per_symbol=news_per_symbol,
+                          claude_assessments=claude_assessments, news_config=news_config)
+
+
+async def run_stock_cycle(settings, news_per_symbol=None, claude_assessments=None, news_config=None):
+    """
+    Executes one cycle of stock trading analysis for all configured stock symbols.
+    """
+    if news_per_symbol is None:
+        news_per_symbol = {}
+    if news_config is None:
+        news_config = {}
+    stock_settings = settings.get('stock_trading', {})
+    if not stock_settings.get('enabled', False):
+        log.info("Stock trading is disabled. Skipping stock cycle.")
+        return
+
+    watch_list = stock_settings.get('watch_list', [])
+    if not watch_list:
+        log.info("Stock watch list is empty. Skipping stock cycle.")
+        return
+
+    log.info(f"--- Starting stock trading cycle for {len(watch_list)} symbols ---")
+
+    # Load stock-specific settings with fallbacks to shared settings
+    sma_period = stock_settings.get('sma_period', settings.get('sma_period', 20))
+    rsi_period = stock_settings.get('rsi_period', settings.get('rsi_period', 14))
+    rsi_overbought = stock_settings.get('rsi_overbought_threshold', settings.get('rsi_overbought_threshold', 70))
+    rsi_oversold = stock_settings.get('rsi_oversold_threshold', settings.get('rsi_oversold_threshold', 30))
+    pe_buy = stock_settings.get('pe_ratio_buy_threshold', 25)
+    pe_sell = stock_settings.get('pe_ratio_sell_threshold', 40)
+    earnings_sell = stock_settings.get('earnings_growth_sell_threshold', -10)
+    vol_multiplier = stock_settings.get('volume_spike_multiplier', 1.5)
+
+    # Shared risk management settings
+    paper_trading = settings.get('paper_trading', True)
+    stop_loss_percentage = settings.get('stop_loss_percentage', 0.02)
+    take_profit_percentage = settings.get('take_profit_percentage', 0.05)
+    trade_risk_percentage = settings.get('trade_risk_percentage', 0.01)
+    max_concurrent_positions = settings.get('max_concurrent_positions', 3)
+    paper_trading_initial_capital = settings.get('paper_trading_initial_capital', 10000.0)
+
+    for symbol in watch_list:
+        log.info(f"--- Processing stock: {symbol} ---")
+
+        # Fetch current stock price
+        price_data = get_stock_price(symbol)
+        if not price_data or not price_data.get('price'):
+            log.warning(f"Could not fetch current price for stock {symbol}. Skipping.")
+            continue
+
+        current_price = price_data['price']
+        log.info(f"Current stock price for {symbol}: ${current_price:,.2f}")
+
+        # --- Position Monitoring (runs regardless of paused state) ---
+        if paper_trading:
+            open_positions = get_open_positions()
+            for position in open_positions:
+                if position['symbol'] == symbol and position['status'] == 'OPEN':
+                    pnl_percentage = (current_price - position['entry_price']) / position['entry_price']
+
+                    if pnl_percentage <= -stop_loss_percentage:
+                        log.info(f"[PAPER TRADE] Stop-loss hit for stock {symbol}. Closing position.")
+                        place_order(symbol, "SELL", position['quantity'], current_price,
+                                    existing_order_id=position['order_id'])
+                        await send_telegram_alert({"signal": "SELL", "symbol": symbol,
+                                                   "current_price": current_price, "asset_type": "stock",
+                                                   "reason": f"Stop-loss hit ({stop_loss_percentage * 100:.2f}% loss)."})
+                    elif pnl_percentage >= take_profit_percentage:
+                        log.info(f"[PAPER TRADE] Take-profit hit for stock {symbol}. Closing position.")
+                        place_order(symbol, "SELL", position['quantity'], current_price,
+                                    existing_order_id=position['order_id'])
+                        await send_telegram_alert({"signal": "SELL", "symbol": symbol,
+                                                   "current_price": current_price, "asset_type": "stock",
+                                                   "reason": f"Take-profit hit ({take_profit_percentage * 100:.2f}% gain)."})
+
+        # --- Pause Check ---
+        if not bot_is_running.is_set():
+            log.info("Bot is paused. Skipping new stock signal generation.")
+            continue
+
+        # Fetch daily prices for technical analysis
+        daily_data = get_daily_prices(symbol)
+        if not daily_data or not daily_data.get('prices'):
+            log.warning(f"Could not fetch daily prices for {symbol}. Skipping analysis.")
+            continue
+
+        prices = daily_data['prices']
+        volumes = daily_data.get('volumes', [])
+
+        # Calculate technical indicators locally
+        sma_value = calculate_sma(prices, period=sma_period)
+        rsi_value = calculate_rsi(prices, period=rsi_period)
+
+        market_data = {
+            'current_price': current_price,
+            'sma': sma_value,
+            'rsi': rsi_value
+        }
+
+        # Prepare volume data
+        volume_data = {}
+        if volumes:
+            current_volume = volumes[-1] if volumes else None
+            avg_volume = sum(volumes) / len(volumes) if volumes else None
+            volume_data = {
+                'current_volume': current_volume,
+                'avg_volume': avg_volume,
+                'price_change_percent': price_data.get('change_percent', 0)
+            }
+
+        # Fetch fundamental data
+        fundamental_data = get_company_overview(symbol) or {}
+
+        # Build per-symbol news sentiment data for the stock signal engine
+        stock_news_data = None
+        sym_news = news_per_symbol.get(symbol)
+        if sym_news:
+            stock_news_data = {
+                'avg_sentiment_score': sym_news.get('avg_sentiment_score', 0),
+                'sentiment_buy_threshold': news_config.get('sentiment_buy_threshold', 0.15),
+                'sentiment_sell_threshold': news_config.get('sentiment_sell_threshold', -0.15),
+                'min_claude_confidence': news_config.get('min_claude_confidence', 0.6),
+            }
+            if claude_assessments:
+                assessment = claude_assessments.get('symbol_assessments', {}).get(symbol)
+                if assessment:
+                    stock_news_data['claude_assessment'] = assessment
+
+        # Generate stock signal
+        signal = generate_stock_signal(
+            symbol=symbol,
+            market_data=market_data,
+            volume_data=volume_data,
+            fundamental_data=fundamental_data,
+            rsi_overbought_threshold=rsi_overbought,
+            rsi_oversold_threshold=rsi_oversold,
+            pe_ratio_buy_threshold=pe_buy,
+            pe_ratio_sell_threshold=pe_sell,
+            earnings_growth_sell_threshold=earnings_sell,
+            volume_spike_multiplier=vol_multiplier,
+            news_sentiment_data=stock_news_data
+        )
+        signal['asset_type'] = 'stock'
+        log.info(f"Generated Stock Signal for {symbol}: {signal}")
+        save_signal(signal)
+
+        # --- Paper Trading Logic ---
+        if paper_trading:
+            open_positions = get_open_positions()
+            current_balance = get_account_balance().get('total_usd', paper_trading_initial_capital)
+
+            if signal['signal'] == "BUY":
+                if any(p['symbol'] == symbol and p['status'] == 'OPEN' for p in open_positions):
+                    log.info(f"Skipping BUY for stock {symbol}: Position already open.")
+                elif len(open_positions) >= max_concurrent_positions:
+                    log.info(f"Skipping BUY for stock {symbol}: Max concurrent positions reached.")
+                else:
+                    capital_to_risk = current_balance * trade_risk_percentage
+                    quantity_to_buy = capital_to_risk / current_price
+                    if quantity_to_buy * current_price > current_balance:
+                        log.warning(f"Skipping BUY for stock {symbol}: Insufficient balance.")
+                    else:
+                        log.info(f"Executing paper trade: BUY {quantity_to_buy:.4f} {symbol}.")
+                        place_order(symbol, "BUY", quantity_to_buy, current_price)
+                        await send_telegram_alert(signal)
+
+            elif signal['signal'] == "SELL":
+                position_to_close = next(
+                    (p for p in open_positions if p['symbol'] == symbol and p['status'] == 'OPEN'), None)
+                if position_to_close:
+                    log.info(f"Executing paper trade: SELL {position_to_close['quantity']:.4f} {symbol}.")
+                    place_order(symbol, "SELL", position_to_close['quantity'], current_price,
+                                existing_order_id=position_to_close['order_id'])
+                    await send_telegram_alert(signal)
+                else:
+                    log.info(f"Skipping SELL for stock {symbol}: No open position found.")
+            else:
+                log.info(f"Signal is HOLD for stock {symbol}. No trade action taken.")
+
+    log.info("--- Stock trading cycle complete ---")
 
 
 async def bot_loop():
@@ -264,20 +505,36 @@ async def startup_event():
         await application.bot.set_webhook(url=webhook_url)
 
     # Start background tasks
-    asyncio.create_task(bot_loop())
-    asyncio.create_task(status_update_loop())
+    _background_tasks.append(asyncio.create_task(bot_loop()))
+    _background_tasks.append(asyncio.create_task(status_update_loop()))
     log.info("Startup complete. Background tasks running.")
 
 
 @app.on_event("shutdown")
 async def shutdown_event_handler():
     """
-    On shutdown, gracefully delete the webhook.
+    On shutdown, cancel background tasks and gracefully clean up.
     """
     log.info("Shutting down application...")
+
+    # Cancel background tasks
+    for task in _background_tasks:
+        task.cancel()
+    for task in _background_tasks:
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+    _background_tasks.clear()
+
+    # Stop Telegram bot
     if application:
-        log.info("Deleting webhook...")
-        await application.bot.delete_webhook()
+        try:
+            from src.notify.telegram_bot import stop_bot
+            await stop_bot(application)
+        except Exception as e:
+            log.error(f"Error stopping Telegram bot during shutdown: {e}", exc_info=True)
+
     log.info("Shutdown complete.")
 
 
