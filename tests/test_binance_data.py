@@ -11,7 +11,8 @@ import psycopg2
 @pytest.fixture
 def mock_db_connection():
     """Fixture to mock the database connection and cursor."""
-    with patch('src.collectors.binance_data.get_db_connection') as mock_get_conn:
+    with patch('src.collectors.binance_data.get_db_connection') as mock_get_conn, \
+         patch('src.collectors.binance_data.release_db_connection'):
         mock_conn = MagicMock()
         # Simulate a PostgreSQL connection for the isinstance check
         mock_conn.__class__ = psycopg2.extensions.connection
@@ -38,10 +39,11 @@ def test_get_current_price_success(mock_requests_get, mock_db_connection):
     result = get_current_price('BTCUSDT')
 
     # Assert: Check the outcome
-    # 1. The API was called correctly
+    # 1. The API was called correctly (with timeout)
     mock_requests_get.assert_called_once_with(
         "https://api.binance.us/api/v3/ticker/price",
-        params={'symbol': 'BTCUSDT'}
+        params={'symbol': 'BTCUSDT'},
+        timeout=30
     )
     # 2. The function returned the correct data
     assert result == {'symbol': 'BTCUSDT', 'price': '50000.00'}
@@ -52,7 +54,6 @@ def test_get_current_price_success(mock_requests_get, mock_db_connection):
         'INSERT INTO market_prices (symbol, price) VALUES (%s, %s)', ('BTCUSDT', '50000.00')
     )
     mock_db_connection.return_value.commit.assert_called_once()
-    mock_db_connection.return_value.close.assert_called_once()
 
 
 @patch('src.collectors.binance_data.requests.get')
@@ -63,7 +64,9 @@ def test_get_current_price_invalid_symbol(mock_requests_get, mock_db_connection)
     # Arrange: Configure the mock API response for an error
     mock_response = MagicMock()
     mock_response.status_code = 400
-    mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError("400 Client Error")
+    http_error = requests.exceptions.HTTPError("400 Client Error")
+    http_error.response = mock_response
+    mock_response.raise_for_status.side_effect = http_error
     mock_requests_get.return_value = mock_response
 
     # Act: Call the function
@@ -76,10 +79,12 @@ def test_get_current_price_invalid_symbol(mock_requests_get, mock_db_connection)
     mock_db_connection.assert_not_called()
 
 
+@patch('src.collectors.binance_data.time.sleep')
 @patch('src.collectors.binance_data.requests.get')
-def test_get_current_price_network_error(mock_requests_get, mock_db_connection):
+def test_get_current_price_network_error(mock_requests_get, mock_sleep, mock_db_connection):
     """
     Tests how the function handles a network-level error (e.g., timeout).
+    Verifies retry behavior with exponential backoff.
     """
     # Arrange: Configure the mock to raise a network exception
     mock_requests_get.side_effect = requests.exceptions.RequestException("Connection error")
@@ -88,7 +93,11 @@ def test_get_current_price_network_error(mock_requests_get, mock_db_connection):
     result = get_current_price('BTCUSDT')
 
     # Assert: Check the outcome
-    # 1. The function should return None
+    # 1. The function should return None after all retries
     assert result is None
-    # 2. The database should NOT be called
+    # 2. Should have been called MAX_RETRIES times
+    assert mock_requests_get.call_count == 3
+    # 3. Should have slept between retries (backoff)
+    assert mock_sleep.call_count == 2
+    # 4. The database should NOT be called
     mock_db_connection.assert_not_called()

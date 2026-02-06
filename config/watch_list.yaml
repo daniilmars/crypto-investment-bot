@@ -20,3 +20,13 @@ stablecoins:
   - tusd
   - fdusd
   - pyusd
+
+# A list of stock ticker symbols to monitor for trading signals.
+stocks:
+  - AAPL
+  - MSFT
+  - GOOGL
+  - AMZN
+  - NVDA
+  - META
+  - TSLA

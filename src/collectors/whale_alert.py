@@ -1,10 +1,13 @@
 import requests
 import os
 import time
-from src.database import get_db_connection
+from src.database import get_db_connection, release_db_connection
 from src.config import app_config
 from src.logger import log
 import psycopg2
+
+MAX_RETRIES = 3
+RETRY_BACKOFF_BASE = 2
 
 # Whale Alert API base URL
 WHALE_ALERT_API_URL = "https://api.whale-alert.io/v1"
@@ -14,33 +17,39 @@ def save_whale_transactions(transactions: list):
     if not transactions:
         return
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    # Determine if the connection is PostgreSQL or SQLite at runtime
-    is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
 
-    query = '''
-        INSERT INTO whale_transactions (id, symbol, timestamp, amount_usd, from_owner, from_owner_type, to_owner, to_owner_type)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (id) DO NOTHING
-    ''' if is_postgres_conn else '''
-        INSERT OR IGNORE INTO whale_transactions (id, symbol, timestamp, amount_usd, from_owner, from_owner_type, to_owner, to_owner_type)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    '''
-    
-    for tx in transactions:
-        params = (
-            tx['id'], tx['symbol'], tx['timestamp'], tx['amount_usd'],
-            tx['from'].get('owner'), tx['from'].get('owner_type'),
-            tx['to'].get('owner'), tx['to'].get('owner_type')
-        )
-        cursor.execute(query, params)
-    
-    conn.commit()
-    cursor.close()
-    conn.close()
-    log.info(f"Processed {len(transactions)} whale transactions for the database.")
+        is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
+
+        query = '''
+            INSERT INTO whale_transactions (id, symbol, timestamp, amount_usd, from_owner, from_owner_type, to_owner, to_owner_type)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO NOTHING
+        ''' if is_postgres_conn else '''
+            INSERT OR IGNORE INTO whale_transactions (id, symbol, timestamp, amount_usd, from_owner, from_owner_type, to_owner, to_owner_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        '''
+
+        for tx in transactions:
+            params = (
+                tx['id'], tx['symbol'], tx['timestamp'], tx['amount_usd'],
+                tx['from'].get('owner'), tx['from'].get('owner_type'),
+                tx['to'].get('owner'), tx['to'].get('owner_type')
+            )
+            cursor.execute(query, params)
+
+        conn.commit()
+        log.info(f"Processed {len(transactions)} whale transactions for the database.")
+    except Exception as e:
+        log.error(f"Error saving whale transactions: {e}", exc_info=True)
+    finally:
+        if cursor:
+            cursor.close()
+        release_db_connection(conn)
 
 def get_whale_transactions(min_value_usd: int = 500000, symbols: list = None):
     """
@@ -57,25 +66,32 @@ def get_whale_transactions(min_value_usd: int = 500000, symbols: list = None):
     headers = {'X-WA-API-KEY': api_key}
     params = {'start': start_timestamp, 'min_value': min_value_usd}
 
-    try:
-        response = requests.get(f"{WHALE_ALERT_API_URL}/transactions", headers=headers, params=params)
-        response.raise_for_status()
-        data = response.json()
-        
-        log.debug(f"Whale Alert API Raw Response: {data}")
-        
-        if data.get('result') == 'success':
-            transactions = data.get('transactions', [])
-            log.info(f"Successfully fetched {len(transactions)} whale transactions.")
-            save_whale_transactions(transactions)
-            log.info(f"Saved {len(transactions)} whale transactions to the database.")
-            return transactions
-        else:
-            log.warning(f"Whale Alert API error: {data.get('message')}")
-            return None
-    except requests.exceptions.RequestException as e:
-        log.error(f"Error fetching from Whale Alert API: {e}")
-        return None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = requests.get(f"{WHALE_ALERT_API_URL}/transactions", headers=headers, params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+
+            log.debug(f"Whale Alert API Raw Response: {data}")
+
+            if data.get('result') == 'success':
+                transactions = data.get('transactions', [])
+                log.info(f"Successfully fetched {len(transactions)} whale transactions.")
+                save_whale_transactions(transactions)
+                log.info(f"Saved {len(transactions)} whale transactions to the database.")
+                return transactions
+            else:
+                log.warning(f"Whale Alert API error: {data.get('message')}")
+                return None  # API returned an error response, don't retry
+        except requests.exceptions.RequestException as e:
+            log.error(f"Error fetching from Whale Alert API (attempt {attempt}/{MAX_RETRIES}): {e}")
+            if attempt < MAX_RETRIES:
+                backoff = RETRY_BACKOFF_BASE ** attempt
+                log.info(f"Retrying in {backoff}s...")
+                time.sleep(backoff)
+
+    log.error(f"Failed to fetch whale transactions after {MAX_RETRIES} attempts.")
+    return None
 
 def get_stablecoin_flows(transactions: list, stablecoins: list):
     """

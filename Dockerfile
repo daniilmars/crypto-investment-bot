@@ -10,8 +10,12 @@ COPY requirements.txt .
 # Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Create a non-root user and switch to it
+RUN adduser --disabled-password --gecos "" appuser
+USER appuser
+
 # Copy the entire project context into the container
-COPY . .
+COPY --chown=appuser:appuser . .
 
 # Set up the entrypoint script
 CMD ["python3", "main.py"]

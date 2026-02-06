@@ -8,16 +8,17 @@ import requests
 # --- Test Cases for get_whale_transactions ---
 
 @patch('src.collectors.whale_alert.requests.get')
+@patch('src.collectors.whale_alert.release_db_connection')
 @patch('src.collectors.whale_alert.get_db_connection')
 @patch('src.collectors.whale_alert.app_config')
-def test_get_whale_transactions_success(mock_app_config, mock_get_db_connection, mock_requests_get):
+def test_get_whale_transactions_success(mock_app_config, mock_get_db_connection, mock_release_db_connection, mock_requests_get):
     """
     Tests the successful fetching and saving of whale transactions.
     """
     # Arrange
     # 1. Mock the config
     mock_app_config.get.return_value.get.return_value = 'test_api_key'
-    
+
     # 2. Mock the API response
     mock_api_data = {
         'result': 'success',
@@ -67,11 +68,12 @@ def test_get_whale_transactions_api_error(mock_app_config, mock_requests_get):
     # Assert
     assert result is None
 
+@patch('src.collectors.whale_alert.time.sleep')
 @patch('src.collectors.whale_alert.requests.get')
 @patch('src.collectors.whale_alert.app_config')
-def test_get_whale_transactions_network_error(mock_app_config, mock_requests_get):
+def test_get_whale_transactions_network_error(mock_app_config, mock_requests_get, mock_sleep):
     """
-    Tests how the function handles a network-level error.
+    Tests how the function handles a network-level error with retries.
     """
     # Arrange
     mock_app_config.get.return_value.get.return_value = 'test_api_key'
@@ -82,6 +84,8 @@ def test_get_whale_transactions_network_error(mock_app_config, mock_requests_get
 
     # Assert
     assert result is None
+    assert mock_requests_get.call_count == 3  # MAX_RETRIES
+    assert mock_sleep.call_count == 2  # Backoff between retries
 
 @patch('src.collectors.whale_alert.app_config')
 def test_get_whale_transactions_no_api_key(mock_app_config):
