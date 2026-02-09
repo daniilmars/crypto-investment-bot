@@ -1,0 +1,20 @@
+services:
+  crypto-bot:
+    build: .
+    container_name: crypto-bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - GOOGLE_GENAI_USE_VERTEXAI=true
+    volumes:
+      - ./config/settings.yaml:/app/config/settings.yaml:ro
+      - bot-data:/app/data
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import requests; requests.get('http://localhost:8080/health', timeout=5)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  bot-data:

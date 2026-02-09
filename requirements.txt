@@ -3,7 +3,6 @@ requests==2.32.4
 
 # For data analysis and backtesting
 pandas==2.3.3
-pandas-ta==0.3.14b1
 
 # For connecting to PostgreSQL
 psycopg2-binary==2.9.11
@@ -18,8 +17,11 @@ PyYAML==6.0.3
 # For telegram bot
 python-telegram-bot==22.5
 
-# For Gemini API
-google-generativeai==0.8.4
+# For Gemini API (Vertex AI)
+google-cloud-aiplatform>=1.38.0
+
+# For Gemini with Google Search grounding (new unified SDK)
+google-genai>=1.0.0
 
 # For FastAPI webhooks
 fastapi==0.116.1
@@ -29,7 +31,6 @@ uvicorn==0.35.0
 tensorflow==2.16.2
 
 # For news sentiment analysis
-anthropic>=0.40.0
 vaderSentiment>=3.3.2
 newsapi-python>=0.2.7
 feedparser>=6.0.0

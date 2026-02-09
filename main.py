@@ -15,7 +15,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 from telegram import Update
 
-from src.analysis.news_impact_analyzer import analyze_news_impact
+from src.analysis.gemini_news_analyzer import analyze_news_impact, analyze_news_with_search
 from src.analysis.signal_engine import generate_signal
 from src.analysis.stock_signal_engine import generate_stock_signal
 from src.analysis.technical_indicators import (calculate_rsi, calculate_sma,
@@ -96,26 +96,39 @@ async def run_bot_cycle():
     stock_watch_list = stock_settings.get('watch_list', []) if stock_settings.get('enabled', False) else []
     all_symbols = list(set(watch_list + stock_watch_list))
 
-    news_result = collect_news_sentiment(all_symbols)
-    news_per_symbol = news_result.get('per_symbol', {})
-    triggered_symbols = news_result.get('triggered_symbols', [])
-
-    # If triggers fire, call Claude for deep analysis
     news_config = settings.get('news_analysis', {})
-    claude_assessments = None
-    if triggered_symbols and news_config.get('enabled', False):
-        headlines_by_symbol = {
-            sym: news_per_symbol[sym]['headlines']
-            for sym in triggered_symbols if sym in news_per_symbol
-        }
-        current_prices = {}
-        for sym in triggered_symbols:
+    gemini_assessments = None
+    news_per_symbol = {}
+
+    # --- Primary path: Gemini with Google Search grounding ---
+    if news_config.get('enabled', False):
+        # Build current prices dict from Binance for crypto symbols
+        current_prices_dict = {}
+        for sym in all_symbols:
             api_sym = sym if "USDT" in sym else f"{sym}USDT"
-            pd_ = get_current_price(api_sym)
-            if pd_ and pd_.get('price'):
-                current_prices[sym] = float(pd_['price'])
-        claude_assessments = analyze_news_impact(headlines_by_symbol, current_prices)
-        await send_news_alert(triggered_symbols, claude_assessments, news_per_symbol)
+            pd = get_current_price(api_sym)
+            if pd and pd.get('price'):
+                current_prices_dict[sym] = float(pd['price'])
+
+        gemini_assessments = analyze_news_with_search(all_symbols, current_prices_dict)
+
+    # --- Fallback: RSS + VADER + old Gemini pipeline ---
+    if gemini_assessments is None:
+        log.info("Grounded news analysis unavailable — falling back to RSS+VADER pipeline.")
+        news_result = collect_news_sentiment(all_symbols)
+        news_per_symbol = news_result.get('per_symbol', {})
+        triggered_symbols = news_result.get('triggered_symbols', [])
+
+        if triggered_symbols and news_config.get('enabled', False):
+            headlines_by_symbol = {}
+            current_prices_for_news = {}
+            for sym in triggered_symbols:
+                sym_data = news_per_symbol.get(sym, {})
+                headlines_by_symbol[sym] = sym_data.get('headlines', [])
+                current_prices_for_news[sym] = sym_data.get('current_price', 0)
+
+            gemini_assessments = analyze_news_impact(headlines_by_symbol, current_prices_for_news)
+            await send_news_alert(triggered_symbols, news_per_symbol, gemini_assessments=gemini_assessments)
 
     # Process each symbol in the watch list
     for symbol in watch_list:
@@ -182,18 +195,19 @@ async def run_bot_cycle():
 
         # Build per-symbol news sentiment data for the signal engine
         symbol_news_data = None
+        ga = gemini_assessments.get('symbol_assessments', {}).get(symbol) if gemini_assessments else None
         sym_news = news_per_symbol.get(symbol)
-        if sym_news:
+
+        if ga or sym_news:
             symbol_news_data = {
-                'avg_sentiment_score': sym_news.get('avg_sentiment_score', 0),
+                'avg_sentiment_score': sym_news.get('avg_sentiment_score', 0) if sym_news else 0,
                 'sentiment_buy_threshold': news_config.get('sentiment_buy_threshold', 0.15),
                 'sentiment_sell_threshold': news_config.get('sentiment_sell_threshold', -0.15),
-                'min_claude_confidence': news_config.get('min_claude_confidence', 0.6),
+                'min_gemini_confidence': news_config.get('min_gemini_confidence',
+                                                         news_config.get('min_claude_confidence', 0.6)),
             }
-            if claude_assessments:
-                assessment = claude_assessments.get('symbol_assessments', {}).get(symbol)
-                if assessment:
-                    symbol_news_data['claude_assessment'] = assessment
+            if ga:
+                symbol_news_data['gemini_assessment'] = ga
 
         signal = generate_signal(
             symbol=symbol,
@@ -204,7 +218,8 @@ async def run_bot_cycle():
             velocity_data=transaction_velocity,
             rsi_overbought_threshold=rsi_overbought_threshold,
             rsi_oversold_threshold=rsi_oversold_threshold,
-            news_sentiment_data=symbol_news_data
+            news_sentiment_data=symbol_news_data,
+            historical_prices=historical_prices
         )
         log.info(f"Generated Signal for {symbol}: {signal}")
         save_signal(signal)
@@ -249,10 +264,11 @@ async def run_bot_cycle():
 
     # --- Run Stock Trading Cycle ---
     await run_stock_cycle(settings, news_per_symbol=news_per_symbol,
-                          claude_assessments=claude_assessments, news_config=news_config)
+                          news_config=news_config,
+                          gemini_assessments=gemini_assessments)
 
 
-async def run_stock_cycle(settings, news_per_symbol=None, claude_assessments=None, news_config=None):
+async def run_stock_cycle(settings, news_per_symbol=None, news_config=None, gemini_assessments=None):
     """
     Executes one cycle of stock trading analysis for all configured stock symbols.
     """
@@ -364,18 +380,19 @@ async def run_stock_cycle(settings, news_per_symbol=None, claude_assessments=Non
 
         # Build per-symbol news sentiment data for the stock signal engine
         stock_news_data = None
+        ga = gemini_assessments.get('symbol_assessments', {}).get(symbol) if gemini_assessments else None
         sym_news = news_per_symbol.get(symbol)
-        if sym_news:
+
+        if ga or sym_news:
             stock_news_data = {
-                'avg_sentiment_score': sym_news.get('avg_sentiment_score', 0),
+                'avg_sentiment_score': sym_news.get('avg_sentiment_score', 0) if sym_news else 0,
                 'sentiment_buy_threshold': news_config.get('sentiment_buy_threshold', 0.15),
                 'sentiment_sell_threshold': news_config.get('sentiment_sell_threshold', -0.15),
-                'min_claude_confidence': news_config.get('min_claude_confidence', 0.6),
+                'min_gemini_confidence': news_config.get('min_gemini_confidence',
+                                                         news_config.get('min_claude_confidence', 0.6)),
             }
-            if claude_assessments:
-                assessment = claude_assessments.get('symbol_assessments', {}).get(symbol)
-                if assessment:
-                    stock_news_data['claude_assessment'] = assessment
+            if ga:
+                stock_news_data['gemini_assessment'] = ga
 
         # Generate stock signal
         signal = generate_stock_signal(
@@ -389,7 +406,8 @@ async def run_stock_cycle(settings, news_per_symbol=None, claude_assessments=Non
             pe_ratio_sell_threshold=pe_sell,
             earnings_growth_sell_threshold=earnings_sell,
             volume_spike_multiplier=vol_multiplier,
-            news_sentiment_data=stock_news_data
+            news_sentiment_data=stock_news_data,
+            historical_prices=prices
         )
         signal['asset_type'] = 'stock'
         log.info(f"Generated Stock Signal for {symbol}: {signal}")
