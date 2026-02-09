@@ -10,8 +10,9 @@ COPY requirements.txt .
 # Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Create a non-root user and switch to it
-RUN adduser --disabled-password --gecos "" appuser
+# Create a non-root user and the SQLite data directory
+RUN adduser --disabled-password --gecos "" appuser \
+    && mkdir -p /app/data && chown appuser:appuser /app/data
 USER appuser
 
 # Copy the entire project context into the container

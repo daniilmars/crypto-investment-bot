@@ -1,4 +1,5 @@
 from src.logger import log
+from src.analysis.technical_indicators import calculate_macd, calculate_bollinger_bands
 
 
 def generate_stock_signal(symbol, market_data, volume_data=None, fundamental_data=None,
@@ -6,7 +7,8 @@ def generate_stock_signal(symbol, market_data, volume_data=None, fundamental_dat
                           pe_ratio_buy_threshold=25, pe_ratio_sell_threshold=40,
                           earnings_growth_sell_threshold=-10,
                           volume_spike_multiplier=1.5,
-                          news_sentiment_data=None):
+                          news_sentiment_data=None,
+                          historical_prices=None):
     """
     Generates a BUY/SELL/HOLD signal for a stock using a 4-indicator scoring system.
     Requires 2+ indicators to agree for a BUY or SELL signal.
@@ -88,20 +90,25 @@ def generate_stock_signal(symbol, market_data, volume_data=None, fundamental_dat
             buy_score += 1
             reasons.append(f"P/E {pe_ratio:.1f} < {pe_ratio_buy_threshold} with positive earnings growth {earnings_growth:.1f}%")
 
-    # --- Indicator 5: News Sentiment ---
+    # --- Indicator 5: News Sentiment (Gemini preferred, VADER fallback) ---
     if news_sentiment_data:
-        claude_assessment = news_sentiment_data.get('claude_assessment')
-        min_confidence = news_sentiment_data.get('min_claude_confidence', 0.6)
+        gemini = news_sentiment_data.get('gemini_assessment')
+        min_conf = news_sentiment_data.get('min_gemini_confidence', 0.6)
+        used_gemini = False
 
-        if claude_assessment and claude_assessment.get('confidence', 0) >= min_confidence:
-            direction = claude_assessment.get('direction', 'neutral')
+        if gemini and gemini.get('confidence', 0) >= min_conf:
+            direction = gemini.get('direction', 'neutral')
+            confidence = gemini.get('confidence', 0)
             if direction == 'bullish':
                 buy_score += 1
-                reasons.append(f"News: Claude bullish ({claude_assessment.get('confidence', 0):.1f})")
+                reasons.append(f"News: Gemini bullish ({confidence:.2f})")
+                used_gemini = True
             elif direction == 'bearish':
                 sell_score += 1
-                reasons.append(f"News: Claude bearish ({claude_assessment.get('confidence', 0):.1f})")
-        else:
+                reasons.append(f"News: Gemini bearish ({confidence:.2f})")
+                used_gemini = True
+
+        if not used_gemini:
             avg_sentiment = news_sentiment_data.get('avg_sentiment_score', 0)
             buy_threshold = news_sentiment_data.get('sentiment_buy_threshold', 0.15)
             sell_threshold = news_sentiment_data.get('sentiment_sell_threshold', -0.15)
@@ -111,6 +118,29 @@ def generate_stock_signal(symbol, market_data, volume_data=None, fundamental_dat
             elif avg_sentiment < sell_threshold:
                 sell_score += 1
                 reasons.append(f"News: VADER bearish ({avg_sentiment:.3f})")
+
+    # --- Indicator 6: MACD Momentum ---
+    if historical_prices and len(historical_prices) >= 26:
+        macd = calculate_macd(historical_prices)
+        if macd:
+            histogram = macd['histogram']
+            if histogram > 0:
+                buy_score += 1
+                reasons.append(f"MACD bullish (hist {histogram:.4f})")
+            elif histogram < 0:
+                sell_score += 1
+                reasons.append(f"MACD bearish (hist {histogram:.4f})")
+
+    # --- Indicator 7: Bollinger Position ---
+    if historical_prices and len(historical_prices) >= 20:
+        bb = calculate_bollinger_bands(historical_prices)
+        if bb and current_price is not None:
+            if current_price < bb['lower_band']:
+                buy_score += 1
+                reasons.append(f"BB oversold (price < {bb['lower_band']:,.2f})")
+            elif current_price > bb['upper_band']:
+                sell_score += 1
+                reasons.append(f"BB overbought (price > {bb['upper_band']:,.2f})")
 
     # --- Signal Generation ---
     reason_str = "; ".join(reasons) if reasons else "No indicators triggered"

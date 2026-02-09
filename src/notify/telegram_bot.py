@@ -62,7 +62,7 @@ async def send_telegram_alert(signal: dict):
     )
     await send_telegram_message(bot, CHAT_ID, message)
 
-async def send_news_alert(triggered_symbols, claude_assessments, sentiment_data):
+async def send_news_alert(triggered_symbols, sentiment_data, gemini_assessments=None):
     """Sends a breaking news alert when news volume spikes or sentiment shifts."""
     if not telegram_config.get('enabled') or not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
         log.warning("Telegram bot is not configured. Skipping news alert.")
@@ -74,18 +74,19 @@ async def send_news_alert(triggered_symbols, claude_assessments, sentiment_data)
         sym_data = sentiment_data.get(symbol, {})
         avg_score = sym_data.get('avg_sentiment_score', 0)
         volume = sym_data.get('news_volume', 0)
-        lines.append(f"*{symbol}:* {volume} articles, sentiment {avg_score:+.3f}")
+        lines.append(f"*{symbol}:* {volume} articles, VADER sentiment {avg_score:+.3f}")
 
-        if claude_assessments:
-            assessment = claude_assessments.get('symbol_assessments', {}).get(symbol)
-            if assessment:
-                direction = assessment.get('direction', 'neutral')
-                confidence = assessment.get('confidence', 0)
-                reasoning = assessment.get('reasoning', '')
-                lines.append(f"  Claude: {direction} ({confidence:.0%}) - {reasoning}")
+        # Add Gemini assessment if available
+        if gemini_assessments:
+            ga = gemini_assessments.get('symbol_assessments', {}).get(symbol)
+            if ga:
+                direction = ga.get('direction', 'neutral')
+                confidence = ga.get('confidence', 0)
+                reasoning = ga.get('reasoning', '')
+                lines.append(f"  Gemini: {direction} (conf {confidence:.2f}) — {reasoning}")
 
-    if claude_assessments and claude_assessments.get('market_mood'):
-        lines.append(f"\n*Market Mood:* {claude_assessments['market_mood']}")
+    if gemini_assessments and gemini_assessments.get('market_mood'):
+        lines.append(f"\n*Market Mood:* {gemini_assessments['market_mood']}")
 
     message = "\n".join(lines)
     await send_telegram_message(bot, CHAT_ID, message)

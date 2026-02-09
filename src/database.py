@@ -1,11 +1,24 @@
 import os
 import sqlite3
+from contextlib import contextmanager
+
 import psycopg2
 import psycopg2.pool
 import pandas as pd
 from psycopg2.extras import RealDictCursor
 from src.config import app_config
 from src.logger import log
+
+
+@contextmanager
+def _cursor(conn):
+    """Returns a context-manager-compatible cursor for both PostgreSQL and SQLite."""
+    is_pg = isinstance(conn, psycopg2.extensions.connection)
+    cursor = conn.cursor(cursor_factory=RealDictCursor) if is_pg else conn.cursor()
+    try:
+        yield cursor
+    finally:
+        cursor.close()
 
 # --- Connection Pool (for PostgreSQL) ---
 _pg_pool = None
@@ -287,7 +300,7 @@ def save_signal(signal_data: dict):
         is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
         query = 'INSERT INTO signals (symbol, signal_type, reason, price) VALUES (%s, %s, %s, %s)' if is_postgres_conn else \
                 'INSERT INTO signals (symbol, signal_type, reason, price) VALUES (?, ?, ?, ?)'
-        with conn.cursor() as cursor:
+        with _cursor(conn) as cursor:
             cursor.execute(query, (
                 signal_data.get('symbol'), signal_data.get('signal'),
                 signal_data.get('reason'), signal_data.get('current_price')
@@ -307,8 +320,7 @@ def get_last_signal():
     try:
         conn = get_db_connection()
         is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
-        cursor_factory = RealDictCursor if is_postgres_conn else None
-        with conn.cursor(cursor_factory=cursor_factory) as cursor:
+        with _cursor(conn) as cursor:
             query = 'SELECT symbol, signal_type AS signal, reason, price AS current_price, timestamp FROM signals ORDER BY timestamp DESC LIMIT 1'
             cursor.execute(query)
             last_signal = cursor.fetchone()
@@ -329,7 +341,7 @@ def get_historical_prices(symbol: str, limit: int = 5):
         is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
         query = 'SELECT price FROM market_prices WHERE symbol = %s ORDER BY timestamp DESC LIMIT %s' if is_postgres_conn else \
                 'SELECT price FROM market_prices WHERE symbol = ? ORDER BY timestamp DESC LIMIT ?'
-        with conn.cursor() as cursor:
+        with _cursor(conn) as cursor:
             cursor.execute(query, (symbol, limit))
             prices = [row[0] for row in cursor.fetchall()]
         prices.reverse()
@@ -346,9 +358,7 @@ def get_trade_summary(hours_ago: int = 24) -> dict:
     try:
         conn = get_db_connection()
         is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
-        cursor_factory = RealDictCursor if is_postgres_conn else None
-
-        with conn.cursor(cursor_factory=cursor_factory) as cursor:
+        with _cursor(conn) as cursor:
             if is_postgres_conn:
                 query = "SELECT * FROM trades WHERE status = 'CLOSED' AND exit_timestamp >= NOW() - INTERVAL '%s hours'"
                 cursor.execute(query, (hours_ago,))
@@ -376,9 +386,7 @@ def get_whale_transactions_since(hours_ago: int = 24) -> list:
     try:
         conn = get_db_connection()
         is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
-        cursor_factory = RealDictCursor if is_postgres_conn else None
-
-        with conn.cursor(cursor_factory=cursor_factory) as cursor:
+        with _cursor(conn) as cursor:
             if is_postgres_conn:
                 query = "SELECT * FROM whale_transactions WHERE recorded_at >= NOW() - INTERVAL '%s hours' ORDER BY timestamp DESC"
                 cursor.execute(query, (hours_ago,))
@@ -400,9 +408,7 @@ def get_price_history_since(hours_ago: int = 24) -> list:
     try:
         conn = get_db_connection()
         is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
-        cursor_factory = RealDictCursor if is_postgres_conn else None
-
-        with conn.cursor(cursor_factory=cursor_factory) as cursor:
+        with _cursor(conn) as cursor:
             if is_postgres_conn:
                 query = "SELECT * FROM market_prices WHERE timestamp >= NOW() - INTERVAL '%s hours' ORDER BY timestamp ASC"
                 cursor.execute(query, (hours_ago,))
@@ -425,7 +431,7 @@ def get_transaction_timestamps_since(symbol: str, hours_ago: int) -> list:
         conn = get_db_connection()
         is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
 
-        with conn.cursor() as cursor:
+        with _cursor(conn) as cursor:
             if is_postgres_conn:
                 query = "SELECT timestamp FROM whale_transactions WHERE symbol = %s AND recorded_at >= NOW() - INTERVAL '%s hours'"
                 cursor.execute(query, (symbol, hours_ago))
@@ -447,7 +453,7 @@ def get_table_counts() -> dict:
     counts = {}
     try:
         conn = get_db_connection()
-        with conn.cursor() as cursor:
+        with _cursor(conn) as cursor:
             for table in tables:
                 if table not in ALLOWED_TABLES:
                     continue
@@ -472,7 +478,7 @@ def get_database_schema() -> list:
         conn = get_db_connection()
         is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
 
-        with conn.cursor() as cursor:
+        with _cursor(conn) as cursor:
             if is_postgres_conn:
                 cursor.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
                 tables = [row[0] for row in cursor.fetchall()]
@@ -512,9 +518,7 @@ def get_stop_loss_signals(db_url=None) -> list:
     try:
         conn = get_db_connection(db_url)
         is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
-        cursor_factory = RealDictCursor if is_postgres_conn else None
-        
-        with conn.cursor(cursor_factory=cursor_factory) as cursor:
+        with _cursor(conn) as cursor:
             query = "SELECT * FROM signals WHERE reason LIKE 'Stop-loss hit%%' ORDER BY timestamp DESC"
             cursor.execute(query)
             signals = [dict(row) for row in cursor.fetchall()]
@@ -534,9 +538,7 @@ def get_price_history_for_trade(symbol: str, start_time, db_url=None) -> list:
     try:
         conn = get_db_connection(db_url)
         is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
-        cursor_factory = RealDictCursor if is_postgres_conn else None
-
-        with conn.cursor(cursor_factory=cursor_factory) as cursor:
+        with _cursor(conn) as cursor:
             if is_postgres_conn:
                 query = "SELECT price, timestamp FROM market_prices WHERE symbol = %s AND timestamp >= %s ORDER BY timestamp ASC"
                 cursor.execute(query, (symbol, start_time))
@@ -561,7 +563,7 @@ def save_news_sentiment_batch(rows: list):
     try:
         conn = get_db_connection()
         is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
-        with conn.cursor() as cursor:
+        with _cursor(conn) as cursor:
             for row in rows:
                 if is_postgres_conn:
                     query = '''
@@ -595,35 +597,45 @@ def save_news_sentiment_batch(rows: list):
         release_db_connection(conn)
 
 def get_latest_news_sentiment(symbols: list) -> dict:
-    """Retrieves the most recent news sentiment record per symbol."""
+    """Retrieves the most recent news sentiment record per symbol in a single query."""
     if not symbols:
         return {}
     conn = None
     try:
         conn = get_db_connection()
         is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
-        cursor_factory = RealDictCursor if is_postgres_conn else None
         result = {}
-        with conn.cursor(cursor_factory=cursor_factory) as cursor:
-            for symbol in symbols:
-                if is_postgres_conn:
-                    query = '''
-                        SELECT symbol, avg_sentiment_score, news_volume, sentiment_volatility,
-                            positive_buzz_ratio, negative_buzz_ratio, timestamp
-                        FROM news_sentiment WHERE symbol = %s
-                        ORDER BY timestamp DESC LIMIT 1
-                    '''
-                else:
-                    query = '''
-                        SELECT symbol, avg_sentiment_score, news_volume, sentiment_volatility,
-                            positive_buzz_ratio, negative_buzz_ratio, timestamp
-                        FROM news_sentiment WHERE symbol = ?
-                        ORDER BY timestamp DESC LIMIT 1
-                    '''
-                cursor.execute(query, (symbol,))
-                row = cursor.fetchone()
-                if row:
-                    result[symbol] = dict(row)
+        with _cursor(conn) as cursor:
+            if is_postgres_conn:
+                query = '''
+                    SELECT DISTINCT ON (symbol)
+                        symbol, avg_sentiment_score, news_volume, sentiment_volatility,
+                        positive_buzz_ratio, negative_buzz_ratio, timestamp
+                    FROM news_sentiment
+                    WHERE symbol = ANY(%s)
+                    ORDER BY symbol, timestamp DESC
+                '''
+                cursor.execute(query, (symbols,))
+            else:
+                placeholders = ','.join('?' for _ in symbols)
+                query = f'''
+                    SELECT ns.symbol, ns.avg_sentiment_score, ns.news_volume,
+                        ns.sentiment_volatility, ns.positive_buzz_ratio,
+                        ns.negative_buzz_ratio, ns.timestamp
+                    FROM news_sentiment ns
+                    INNER JOIN (
+                        SELECT symbol, MAX(timestamp) AS max_ts
+                        FROM news_sentiment
+                        WHERE symbol IN ({placeholders})
+                        GROUP BY symbol
+                    ) latest ON ns.symbol = latest.symbol AND ns.timestamp = latest.max_ts
+                '''
+                cursor.execute(query, symbols)
+
+            for row in cursor.fetchall():
+                row_dict = dict(row)
+                result[row_dict['symbol']] = row_dict
+
         log.info(f"Retrieved latest news sentiment for {len(result)} symbols.")
         return result
     except (sqlite3.Error, psycopg2.Error) as e:

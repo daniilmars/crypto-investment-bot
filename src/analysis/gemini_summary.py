@@ -1,31 +1,32 @@
-import google.generativeai as genai
+import os
+import vertexai
+from vertexai.generative_models import GenerativeModel
 from src.config import app_config
 from src.logger import log
 import pandas as pd
 
 def generate_market_summary(whale_transactions: list, price_history: list, last_signal: dict) -> str:
     """
-    Generates a market summary using the Gemini API based on the last 24 hours of data,
+    Generates a market summary using Vertex AI Gemini based on the last 24 hours of data,
     including the bot's last generated signal.
     """
-    log.info("Generating market summary with Gemini API...")
-    
-    api_key = app_config.get('api_keys', {}).get('gemini')
-    if not api_key or api_key == "YOUR_GEMINI_API_KEY":
-        log.error("Gemini API key is not configured.")
-        return "Error: Gemini API key not configured. Please add it to your settings."
+    log.info("Generating market summary with Vertex AI Gemini...")
+
+    project_id = os.environ.get('GCP_PROJECT_ID')
+    location = os.environ.get('GCP_LOCATION', 'us-central1')
+
+    if not project_id:
+        log.error("GCP_PROJECT_ID is not configured.")
+        return "Error: GCP_PROJECT_ID not configured. Please set it in your environment."
 
     try:
-        genai.configure(api_key=api_key)
-        # Use the model confirmed to be available from the list
-        model = genai.GenerativeModel('models/gemini-pro-latest')
+        vertexai.init(project=project_id, location=location)
+        model = GenerativeModel('gemini-2.0-flash')
 
         # --- Data Preparation ---
-        # Convert to DataFrame for easier analysis
         whale_df = pd.DataFrame(whale_transactions)
         price_df = pd.DataFrame(price_history)
 
-        # Format last signal for the prompt
         last_signal_str = (
             f"Signal: {last_signal.get('signal', 'N/A')}\n"
             f"Symbol: {last_signal.get('symbol', 'N/A')}\n"
@@ -57,8 +58,8 @@ def generate_market_summary(whale_transactions: list, price_history: list, last_
         )
 
         response = model.generate_content(prompt)
-        
-        log.info("Successfully generated market summary from Gemini API.")
+
+        log.info("Successfully generated market summary from Vertex AI Gemini.")
         return response.text
 
     except Exception as e:

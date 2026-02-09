@@ -43,20 +43,32 @@ class Portfolio:
     def get_total_value(self, current_prices):
         total_value = self.cash
         for symbol, pos in self.positions.items():
-            total_value += pos['quantity'] * current_prices.get(symbol, pos['entry_price'])
+            cp = current_prices.get(symbol, pos['entry_price'])
+            if pos['side'] == 'LONG':
+                total_value += pos['quantity'] * cp
+            else:  # SHORT
+                total_value += pos['margin'] + (pos['entry_price'] - cp) * pos['quantity']
         return total_value
 
     def place_order(self, symbol, side, quantity, price, timestamp):
         fee = quantity * price * FEE_RATE
         if side == 'BUY' and self.cash >= quantity * price + fee:
             self.cash -= (quantity * price + fee)
-            self.positions[symbol] = {'quantity': quantity, 'entry_price': price, 'entry_timestamp': timestamp}
-        elif side == 'SELL' and symbol in self.positions:
+            self.positions[symbol] = {'side': 'LONG', 'quantity': quantity, 'entry_price': price, 'entry_timestamp': timestamp}
+        elif side == 'SHORT' and self.cash >= quantity * price + fee:
+            margin = quantity * price
+            self.cash -= (margin + fee)
+            self.positions[symbol] = {'side': 'SHORT', 'quantity': quantity, 'entry_price': price, 'margin': margin, 'entry_timestamp': timestamp}
+        elif side == 'CLOSE' and symbol in self.positions:
             pos = self.positions.pop(symbol)
-            revenue = pos['quantity'] * price
-            pnl = (price - pos['entry_price']) * pos['quantity'] - fee
-            self.cash += (revenue - fee)
-            self.trade_history.append({'symbol': symbol, 'pnl': pnl})
+            if pos['side'] == 'LONG':
+                revenue = pos['quantity'] * price
+                pnl = (price - pos['entry_price']) * pos['quantity'] - fee
+                self.cash += (revenue - fee)
+            else:  # close SHORT
+                pnl = (pos['entry_price'] - price) * pos['quantity'] - fee
+                self.cash += (pos['margin'] + pnl)
+            self.trade_history.append({'symbol': symbol, 'side': pos['side'], 'pnl': pnl})
 
     def record_equity(self, timestamp, current_prices):
         self.equity_curve.append({'timestamp': timestamp, 'value': self.get_total_value(current_prices)})
@@ -86,7 +98,8 @@ class Strategy:
             velocity_data=velocity_data,
             velocity_threshold_multiplier=self.params.transaction_velocity_threshold_multiplier,
             rsi_overbought_threshold=self.params.rsi_overbought_threshold,
-            rsi_oversold_threshold=self.params.rsi_oversold_threshold
+            rsi_oversold_threshold=self.params.rsi_oversold_threshold,
+            historical_prices=price_list
         )
 
 class Backtester:
@@ -120,10 +133,13 @@ class Backtester:
             pos = self.portfolio.positions[symbol]
             current_price = current_prices.get(symbol)
             if current_price is None: continue
-            pnl_percentage = (current_price - pos['entry_price']) / pos['entry_price']
+            if pos['side'] == 'LONG':
+                pnl_percentage = (current_price - pos['entry_price']) / pos['entry_price']
+            else:  # SHORT
+                pnl_percentage = (pos['entry_price'] - current_price) / pos['entry_price']
             if pnl_percentage <= -self.params.stop_loss_percentage or pnl_percentage >= self.params.take_profit_percentage:
-                log.info(f"[{timestamp}] EXIT '{symbol}': PnL% {pnl_percentage:.2%} triggered exit.")
-                self.portfolio.place_order(symbol, 'SELL', pos['quantity'], current_price, timestamp)
+                log.info(f"[{timestamp}] EXIT '{symbol}' ({pos['side']}): PnL% {pnl_percentage:.2%} triggered exit.")
+                self.portfolio.place_order(symbol, 'CLOSE', pos['quantity'], current_price, timestamp)
 
     def check_for_entries(self, current_prices, timestamp):
         # --- Calculate point-in-time on-chain metrics ---
@@ -158,13 +174,17 @@ class Backtester:
             
             signal_data = self.strategy.generate_signals(symbol, historical_prices, recent_whales, current_price, stablecoin_data, velocity_data)
             
-            if signal_data.get('signal') == 'BUY':
-                log.info(f"[{timestamp}] ENTRY '{symbol}': BUY signal received. Reason: {signal_data.get('reason')}")
+            signal = signal_data.get('signal')
+            if signal == 'BUY':
+                log.info(f"[{timestamp}] ENTRY '{symbol}' LONG: {signal_data.get('reason')}")
                 capital_to_risk = self.portfolio.cash * self.params.trade_risk_percentage
                 quantity_to_buy = capital_to_risk / current_price
                 self.portfolio.place_order(symbol, 'BUY', quantity_to_buy, current_price, timestamp)
-            elif signal_data.get('signal') not in ['HOLD', 'VOLATILITY_WARNING']:
-                 log.debug(f"[{timestamp}] '{symbol}': {signal_data.get('signal')} signal received. Reason: {signal_data.get('reason')}")
+            elif signal == 'SELL':
+                log.info(f"[{timestamp}] ENTRY '{symbol}' SHORT: {signal_data.get('reason')}")
+                capital_to_risk = self.portfolio.cash * self.params.trade_risk_percentage
+                quantity_to_short = capital_to_risk / current_price
+                self.portfolio.place_order(symbol, 'SHORT', quantity_to_short, current_price, timestamp)
 
     def print_results(self):
         log.info("\n--- Backtest Results ---")

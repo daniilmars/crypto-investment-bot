@@ -1,9 +1,11 @@
 import time
 import sqlite3
+from decimal import Decimal, ROUND_HALF_UP
+
 import psycopg2
 from src.logger import log
 from src.config import app_config
-from src.database import get_db_connection, release_db_connection
+from src.database import get_db_connection, release_db_connection, _cursor
 
 def place_order(symbol: str, side: str, quantity: float, price: float, order_type: str = "MARKET", existing_order_id: str = None) -> dict:
     """
@@ -40,20 +42,26 @@ def place_order(symbol: str, side: str, quantity: float, price: float, order_typ
 
             entry_price, trade_side = result[0], result[1]
 
+            d_price = Decimal(str(price))
+            d_entry = Decimal(str(entry_price))
+            d_qty = Decimal(str(quantity))
+
             if trade_side == "BUY":
-                pnl = (price - entry_price) * quantity
+                pnl = (d_price - d_entry) * d_qty
             elif trade_side == "SELL":
-                pnl = (entry_price - price) * quantity
+                pnl = (d_entry - d_price) * d_qty
             else:
-                pnl = 0
+                pnl = Decimal("0")
+
+            pnl_float = float(pnl.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
             query_update = 'UPDATE trades SET status = %s, exit_price = %s, exit_timestamp = CURRENT_TIMESTAMP, pnl = %s WHERE order_id = %s' if is_postgres_conn else \
                            'UPDATE trades SET status = ?, exit_price = ?, exit_timestamp = CURRENT_TIMESTAMP, pnl = ? WHERE order_id = ?'
-            cursor.execute(query_update, ("CLOSED", price, pnl, existing_order_id))
+            cursor.execute(query_update, ("CLOSED", price, pnl_float, existing_order_id))
             conn.commit()
 
-            log.info(f"Paper trade {existing_order_id} updated to CLOSED at {price}. PnL: ${pnl:.2f}")
-            return {"order_id": existing_order_id, "status": "CLOSED", "pnl": pnl}
+            log.info(f"Paper trade {existing_order_id} updated to CLOSED at {price}. PnL: ${pnl_float:.2f}")
+            return {"order_id": existing_order_id, "status": "CLOSED", "pnl": pnl_float}
 
         log.warning(f"Invalid place_order call: side={side}, existing_order_id={existing_order_id}")
         return {"status": "FAILED", "message": "Invalid order parameters"}
@@ -103,31 +111,34 @@ def get_account_balance() -> dict:
     """
     Calculates the current paper trading balance based on initial capital and closed trade PnL.
     """
-    initial_capital = app_config.get('settings', {}).get('paper_trading_initial_capital', 10000.0)
+    initial_capital = Decimal(str(app_config.get('settings', {}).get('paper_trading_initial_capital', 10000.0)))
     conn = None
     try:
         conn = get_db_connection()
         is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
-        with conn.cursor() as cursor:
+        with _cursor(conn) as cursor:
             # Sum PnL from all closed trades
             query_pnl = 'SELECT COALESCE(SUM(pnl), 0) FROM trades WHERE status = %s' if is_postgres_conn else \
                         'SELECT COALESCE(SUM(pnl), 0) FROM trades WHERE status = ?'
             cursor.execute(query_pnl, ("CLOSED",))
-            total_pnl = cursor.fetchone()[0]
+            total_pnl = Decimal(str(cursor.fetchone()[0]))
 
             # Sum capital locked in open positions
             query_open = 'SELECT COALESCE(SUM(entry_price * quantity), 0) FROM trades WHERE status = %s' if is_postgres_conn else \
                          'SELECT COALESCE(SUM(entry_price * quantity), 0) FROM trades WHERE status = ?'
             cursor.execute(query_open, ("OPEN",))
-            locked_capital = cursor.fetchone()[0]
+            locked_capital = Decimal(str(cursor.fetchone()[0]))
 
         available = initial_capital + total_pnl - locked_capital
         total = initial_capital + total_pnl
-        log.info(f"Paper trading balance: available=${available:.2f}, total=${total:.2f} (PnL=${total_pnl:.2f}, locked=${locked_capital:.2f})")
-        return {"USDT": available, "total_usd": available}
+        available_f = float(available.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+        total_f = float(total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+        log.info(f"Paper trading balance: available=${available_f:.2f}, total=${total_f:.2f} (PnL=${float(total_pnl):.2f}, locked=${float(locked_capital):.2f})")
+        return {"USDT": available_f, "total_usd": available_f}
     except (sqlite3.Error, psycopg2.Error) as e:
         log.error(f"Database error in get_account_balance: {e}", exc_info=True)
-        return {"USDT": initial_capital, "total_usd": initial_capital}
+        fallback = float(initial_capital)
+        return {"USDT": fallback, "total_usd": fallback}
     finally:
         release_db_connection(conn)
 

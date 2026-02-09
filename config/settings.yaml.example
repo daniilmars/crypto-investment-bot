@@ -50,7 +50,6 @@ api_keys:
   glassnode: "YOUR_GLASSNODE_API_KEY"
   newsapi: "YOUR_NEWSAPI_ORG_KEY"
   news_api: "YOUR_NEWS_API_KEY"
-  anthropic: "YOUR_ANTHROPIC_API_KEY"
 
 # -- General Bot Settings --
 settings:
@@ -137,15 +136,15 @@ settings:
   # -- News Analysis Settings --
   news_analysis:
     enabled: true
-    # Volume spike: trigger Claude if current_volume > previous_volume * multiplier
+    # Volume spike: trigger Gemini if current_volume > previous_volume * multiplier
     volume_spike_multiplier: 3.0
-    # Sentiment shift: trigger Claude if abs(current - previous) >= threshold
+    # Sentiment shift: trigger Gemini if abs(current - previous) >= threshold
     sentiment_shift_threshold: 0.3
     # VADER sentiment thresholds for signal scoring
     sentiment_buy_threshold: 0.15
     sentiment_sell_threshold: -0.15
-    # Minimum Claude confidence to override VADER
-    min_claude_confidence: 0.6
+    # Minimum Gemini confidence to override VADER
+    min_gemini_confidence: 0.6
 
   # -- Stock Trading Settings --
   stock_trading:

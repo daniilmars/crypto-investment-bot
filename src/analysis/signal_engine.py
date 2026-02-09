@@ -1,7 +1,8 @@
 import pandas as pd
 from src.logger import log
+from src.analysis.technical_indicators import calculate_macd, calculate_bollinger_bands
 
-def generate_signal(symbol, whale_transactions, market_data, high_interest_wallets=None, stablecoin_data=None, stablecoin_threshold=100000000, velocity_data=None, velocity_threshold_multiplier=5.0, rsi_overbought_threshold=70, rsi_oversold_threshold=30, news_sentiment_data=None):
+def generate_signal(symbol, whale_transactions, market_data, high_interest_wallets=None, stablecoin_data=None, stablecoin_threshold=100000000, velocity_data=None, velocity_threshold_multiplier=5.0, rsi_overbought_threshold=70, rsi_oversold_threshold=30, news_sentiment_data=None, historical_prices=None):
     """
     Generates a trading signal based on on-chain data and technical indicators.
     Prioritizes anomalies and high-priority events.
@@ -87,21 +88,26 @@ def generate_signal(symbol, whale_transactions, market_data, high_interest_walle
     elif net_flow > 0: # More entering exchanges than leaving
         sell_score += 1
 
-    # Indicator 4: News Sentiment
+    # Indicator 4: News Sentiment (Gemini preferred, VADER fallback)
     news_reason = ""
     if news_sentiment_data:
-        claude_assessment = news_sentiment_data.get('claude_assessment')
-        min_confidence = news_sentiment_data.get('min_claude_confidence', 0.6)
+        gemini = news_sentiment_data.get('gemini_assessment')
+        min_conf = news_sentiment_data.get('min_gemini_confidence', 0.6)
+        used_gemini = False
 
-        if claude_assessment and claude_assessment.get('confidence', 0) >= min_confidence:
-            direction = claude_assessment.get('direction', 'neutral')
+        if gemini and gemini.get('confidence', 0) >= min_conf:
+            direction = gemini.get('direction', 'neutral')
+            confidence = gemini.get('confidence', 0)
             if direction == 'bullish':
                 buy_score += 1
-                news_reason = f", News: Claude bullish ({claude_assessment.get('confidence', 0):.1f})"
+                news_reason = f", News: Gemini bullish ({confidence:.2f})"
+                used_gemini = True
             elif direction == 'bearish':
                 sell_score += 1
-                news_reason = f", News: Claude bearish ({claude_assessment.get('confidence', 0):.1f})"
-        else:
+                news_reason = f", News: Gemini bearish ({confidence:.2f})"
+                used_gemini = True
+
+        if not used_gemini:
             avg_sentiment = news_sentiment_data.get('avg_sentiment_score', 0)
             buy_threshold = news_sentiment_data.get('sentiment_buy_threshold', 0.15)
             sell_threshold = news_sentiment_data.get('sentiment_sell_threshold', -0.15)
@@ -112,16 +118,41 @@ def generate_signal(symbol, whale_transactions, market_data, high_interest_walle
                 sell_score += 1
                 news_reason = f", News: VADER bearish ({avg_sentiment:.3f})"
 
-    # --- Signal Generation ---
-    reason = f"Price: ${current_price:,.2f}, SMA: ${sma:,.2f}, RSI: {rsi:.2f}, Whale Net Flow: ${net_flow:,.2f}{news_reason}. Buy Score: {buy_score}, Sell Score: {sell_score}."
+    # Indicator 5: MACD Momentum
+    macd_reason = ""
+    if historical_prices and len(historical_prices) >= 26:
+        macd = calculate_macd(historical_prices)
+        if macd:
+            histogram = macd['histogram']
+            if histogram > 0:
+                buy_score += 1
+                macd_reason = f", MACD: bullish (hist {histogram:.4f})"
+            elif histogram < 0:
+                sell_score += 1
+                macd_reason = f", MACD: bearish (hist {histogram:.4f})"
 
-    if buy_score >= 2:
+    # Indicator 6: Bollinger Position
+    bollinger_reason = ""
+    if historical_prices and len(historical_prices) >= 20:
+        bb = calculate_bollinger_bands(historical_prices)
+        if bb:
+            if current_price < bb['lower_band']:
+                buy_score += 1
+                bollinger_reason = f", BB: oversold (price < {bb['lower_band']:,.2f})"
+            elif current_price > bb['upper_band']:
+                sell_score += 1
+                bollinger_reason = f", BB: overbought (price > {bb['upper_band']:,.2f})"
+
+    # --- Signal Generation ---
+    reason = f"Price: ${current_price:,.2f}, SMA: ${sma:,.2f}, RSI: {rsi:.2f}, Whale Net Flow: ${net_flow:,.2f}{news_reason}{macd_reason}{bollinger_reason}. Buy Score: {buy_score}, Sell Score: {sell_score}."
+
+    if buy_score >= 2 and buy_score > sell_score:
         log.info(f"[{symbol}] BUY signal generated. {reason}")
-        return {"signal": "BUY", "symbol": symbol, "reason": reason}
-    
-    if sell_score >= 2:
+        return {"signal": "BUY", "symbol": symbol, "reason": reason, "current_price": current_price}
+
+    if sell_score >= 2 and sell_score > buy_score:
         log.info(f"[{symbol}] SELL signal generated. {reason}")
-        return {"signal": "SELL", "symbol": symbol, "reason": reason}
+        return {"signal": "SELL", "symbol": symbol, "reason": reason, "current_price": current_price}
 
     log.debug(f"[{symbol}] HOLD: No strong signal detected. {reason}")
     return {"signal": "HOLD", "symbol": symbol, "reason": "No strong signal detected. " + reason}
