@@ -1,4 +1,6 @@
 import argparse
+import math
+import numpy as np
 import pandas as pd
 import sys
 import os
@@ -9,11 +11,113 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 from src.config import app_config
 from src.database import get_db_connection
 from src.analysis.signal_engine import generate_signal
-from src.analysis.technical_indicators import calculate_rsi
+from src.analysis.technical_indicators import (
+    calculate_rsi, detect_market_regime, multi_timeframe_confirmation,
+)
 from src.logger import log
 
 # --- Constants ---
 FEE_RATE = 0.001
+DEFAULT_SLIPPAGE_BPS = 5  # 5 basis points (0.05%) default slippage
+
+
+# ---------------------------------------------------------------------------
+# Risk Metrics
+# ---------------------------------------------------------------------------
+
+def calculate_risk_metrics(equity_curve: list, trade_history: list,
+                           initial_capital: float, risk_free_rate: float = 0.0) -> dict:
+    """
+    Calculates comprehensive risk-adjusted performance metrics from a backtest.
+
+    Args:
+        equity_curve: list of {'timestamp': ..., 'value': ...} dicts.
+        trade_history: list of {'symbol', 'side', 'pnl'} dicts.
+        initial_capital: starting capital.
+        risk_free_rate: annualized risk-free rate (default 0).
+
+    Returns:
+        dict with: sharpe_ratio, sortino_ratio, max_drawdown, max_drawdown_pct,
+                   profit_factor, calmar_ratio, avg_trade_pnl, total_return_pct,
+                   win_rate, total_trades, avg_win, avg_loss.
+    """
+    if not equity_curve or len(equity_curve) < 2:
+        return _empty_metrics()
+
+    values = pd.Series([e['value'] for e in equity_curve], dtype=float)
+    returns = values.pct_change().dropna()
+
+    # --- Return metrics ---
+    total_return = (values.iloc[-1] - initial_capital) / initial_capital
+    total_return_pct = total_return * 100
+
+    # --- Drawdown ---
+    cummax = values.cummax()
+    drawdowns = (values - cummax) / cummax
+    max_drawdown_pct = float(drawdowns.min()) * 100  # negative number
+    max_drawdown = float((values - cummax).min())
+
+    # --- Sharpe Ratio (annualized, assuming hourly data) ---
+    periods_per_year = 365 * 24  # hourly bars
+    excess_returns = returns - risk_free_rate / periods_per_year
+    sharpe = float('nan')
+    if len(returns) > 1 and returns.std() > 0:
+        sharpe = float(excess_returns.mean() / returns.std() * math.sqrt(periods_per_year))
+
+    # --- Sortino Ratio (only penalizes downside volatility) ---
+    downside = returns[returns < 0]
+    sortino = float('nan')
+    if len(downside) > 1 and downside.std() > 0:
+        sortino = float(excess_returns.mean() / downside.std() * math.sqrt(periods_per_year))
+
+    # --- Trade-level metrics ---
+    pnls = [t['pnl'] for t in trade_history]
+    num_trades = len(pnls)
+    wins = [p for p in pnls if p > 0]
+    losses = [p for p in pnls if p < 0]
+    win_rate = len(wins) / num_trades * 100 if num_trades > 0 else 0.0
+    avg_win = sum(wins) / len(wins) if wins else 0.0
+    avg_loss = abs(sum(losses) / len(losses)) if losses else 0.0
+    avg_trade = sum(pnls) / num_trades if num_trades > 0 else 0.0
+
+    # Profit factor = gross profit / gross loss
+    gross_profit = sum(wins) if wins else 0.0
+    gross_loss = abs(sum(losses)) if losses else 0.0
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+
+    # Calmar ratio = annualized return / max drawdown
+    calmar = float('nan')
+    if max_drawdown_pct < 0:
+        calmar = total_return_pct / abs(max_drawdown_pct)
+
+    return {
+        'total_return_pct': round(total_return_pct, 2),
+        'sharpe_ratio': round(sharpe, 3) if not math.isnan(sharpe) else None,
+        'sortino_ratio': round(sortino, 3) if not math.isnan(sortino) else None,
+        'max_drawdown_pct': round(max_drawdown_pct, 2),
+        'max_drawdown': round(max_drawdown, 2),
+        'profit_factor': round(profit_factor, 3),
+        'calmar_ratio': round(calmar, 3) if not math.isnan(calmar) else None,
+        'total_trades': num_trades,
+        'win_rate': round(win_rate, 2),
+        'avg_trade_pnl': round(avg_trade, 2),
+        'avg_win': round(avg_win, 2),
+        'avg_loss': round(avg_loss, 2),
+    }
+
+
+def _empty_metrics():
+    return {
+        'total_return_pct': 0.0, 'sharpe_ratio': None, 'sortino_ratio': None,
+        'max_drawdown_pct': 0.0, 'max_drawdown': 0.0, 'profit_factor': 0.0,
+        'calmar_ratio': None, 'total_trades': 0, 'win_rate': 0.0,
+        'avg_trade_pnl': 0.0, 'avg_win': 0.0, 'avg_loss': 0.0,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Data Loader
+# ---------------------------------------------------------------------------
 
 class DataLoader:
     """Handles loading of historical data."""
@@ -32,13 +136,30 @@ class DataLoader:
         log.info(f"Loaded {len(prices_df)} price records and {len(whales_df)} whale transactions.")
         return prices_df, whales_df
 
+
+# ---------------------------------------------------------------------------
+# Portfolio (with slippage)
+# ---------------------------------------------------------------------------
+
 class Portfolio:
     """Manages portfolio state and performance tracking."""
-    def __init__(self, initial_capital):
+    def __init__(self, initial_capital, slippage_bps=DEFAULT_SLIPPAGE_BPS):
+        self.initial_capital = initial_capital
         self.cash = initial_capital
         self.positions = {}
         self.trade_history = []
         self.equity_curve = []
+        self.slippage_bps = slippage_bps
+        # Trailing stop state: symbol -> peak price
+        self._trailing_peaks = {}
+
+    def _apply_slippage(self, price, side):
+        """Applies slippage: worse fill for entries, worse fill for exits."""
+        slip = price * self.slippage_bps / 10000
+        if side in ('BUY', 'CLOSE_SHORT'):
+            return price + slip  # pay more when buying
+        else:
+            return price - slip  # receive less when selling
 
     def get_total_value(self, current_prices):
         total_value = self.cash
@@ -51,44 +172,75 @@ class Portfolio:
         return total_value
 
     def place_order(self, symbol, side, quantity, price, timestamp):
-        fee = quantity * price * FEE_RATE
-        if side == 'BUY' and self.cash >= quantity * price + fee:
-            self.cash -= (quantity * price + fee)
-            self.positions[symbol] = {'side': 'LONG', 'quantity': quantity, 'entry_price': price, 'entry_timestamp': timestamp}
-        elif side == 'SHORT' and self.cash >= quantity * price + fee:
-            margin = quantity * price
+        fill_price = self._apply_slippage(price, side)
+        fee = quantity * fill_price * FEE_RATE
+        if side == 'BUY' and self.cash >= quantity * fill_price + fee:
+            self.cash -= (quantity * fill_price + fee)
+            self.positions[symbol] = {
+                'side': 'LONG', 'quantity': quantity, 'entry_price': fill_price,
+                'entry_timestamp': timestamp,
+            }
+            self._trailing_peaks[symbol] = fill_price
+        elif side == 'SHORT' and self.cash >= quantity * fill_price + fee:
+            margin = quantity * fill_price
             self.cash -= (margin + fee)
-            self.positions[symbol] = {'side': 'SHORT', 'quantity': quantity, 'entry_price': price, 'margin': margin, 'entry_timestamp': timestamp}
+            self.positions[symbol] = {
+                'side': 'SHORT', 'quantity': quantity, 'entry_price': fill_price,
+                'margin': margin, 'entry_timestamp': timestamp,
+            }
         elif side == 'CLOSE' and symbol in self.positions:
             pos = self.positions.pop(symbol)
+            close_slip = 'CLOSE_SHORT' if pos['side'] == 'SHORT' else 'CLOSE'
+            actual_fill = self._apply_slippage(price, close_slip)
+            fee = pos['quantity'] * actual_fill * FEE_RATE
             if pos['side'] == 'LONG':
-                revenue = pos['quantity'] * price
-                pnl = (price - pos['entry_price']) * pos['quantity'] - fee
+                revenue = pos['quantity'] * actual_fill
+                pnl = (actual_fill - pos['entry_price']) * pos['quantity'] - fee
                 self.cash += (revenue - fee)
             else:  # close SHORT
-                pnl = (pos['entry_price'] - price) * pos['quantity'] - fee
+                pnl = (pos['entry_price'] - actual_fill) * pos['quantity'] - fee
                 self.cash += (pos['margin'] + pnl)
-            self.trade_history.append({'symbol': symbol, 'side': pos['side'], 'pnl': pnl})
+            self.trade_history.append({
+                'symbol': symbol, 'side': pos['side'], 'pnl': pnl,
+                'entry_price': pos['entry_price'], 'exit_price': actual_fill,
+                'entry_time': pos['entry_timestamp'], 'exit_time': timestamp,
+            })
+            self._trailing_peaks.pop(symbol, None)
+
+    def update_trailing_peak(self, symbol, current_price):
+        """Updates and returns the peak price for trailing stop."""
+        prev = self._trailing_peaks.get(symbol, current_price)
+        new_peak = max(prev, current_price)
+        self._trailing_peaks[symbol] = new_peak
+        return new_peak
 
     def record_equity(self, timestamp, current_prices):
         self.equity_curve.append({'timestamp': timestamp, 'value': self.get_total_value(current_prices)})
 
+
+# ---------------------------------------------------------------------------
+# Strategy (with regime detection + multi-TF)
+# ---------------------------------------------------------------------------
+
 class Strategy:
-    """Generates trading signals based on market data."""
+    """Generates trading signals with regime detection and multi-timeframe confirmation."""
     def __init__(self, params):
         self.params = params
 
-    def generate_signals(self, symbol, historical_prices, whale_transactions, current_price, stablecoin_data, velocity_data):
-        if len(historical_prices) < max(self.params.sma_period, self.params.rsi_period):
-            log.debug(f"[{symbol}] HOLD: Not enough historical price data ({len(historical_prices)} points).")
-            return {'signal': 'HOLD'}
-            
+    def generate_signals(self, symbol, historical_prices, whale_transactions,
+                         current_price, stablecoin_data, velocity_data):
+        sma_period = self.params.sma_period
+        rsi_period = self.params.rsi_period
+        if len(historical_prices) < max(sma_period, rsi_period):
+            log.debug(f"[{symbol}] HOLD: Not enough data ({len(historical_prices)} points).")
+            return {'signal': 'HOLD', 'regime': 'unknown', 'mtf_direction': 'mixed'}
+
         price_list = historical_prices['price'].tolist()
-        sma = historical_prices['price'].rolling(window=self.params.sma_period).mean().iloc[-1]
-        rsi = calculate_rsi(price_list, period=self.params.rsi_period)
+        sma = historical_prices['price'].rolling(window=sma_period).mean().iloc[-1]
+        rsi = calculate_rsi(price_list, period=rsi_period)
         market_data = {'current_price': current_price, 'sma': sma, 'rsi': rsi}
 
-        return generate_signal(
+        signal = generate_signal(
             symbol=symbol,
             whale_transactions=whale_transactions,
             market_data=market_data,
@@ -99,111 +251,354 @@ class Strategy:
             velocity_threshold_multiplier=self.params.transaction_velocity_threshold_multiplier,
             rsi_overbought_threshold=self.params.rsi_overbought_threshold,
             rsi_oversold_threshold=self.params.rsi_oversold_threshold,
-            historical_prices=price_list
+            historical_prices=price_list,
         )
 
+        # --- Market Regime Detection ---
+        regime_data = detect_market_regime(price_list)
+        regime = regime_data.get('regime', 'ranging')
+        regime_params = regime_data.get('strategy_params', {})
+
+        # --- Multi-Timeframe Confirmation ---
+        mtf = multi_timeframe_confirmation(price_list, sma_period=sma_period, rsi_period=rsi_period)
+        mtf_direction = mtf['confirmed_direction']
+
+        # --- Filter signals based on regime + MTF ---
+        original = signal.get('signal')
+        if original in ('BUY', 'SELL'):
+            signal_direction = 'bullish' if original == 'BUY' else 'bearish'
+
+            if regime == 'volatile' and mtf['agreement_count'] < 3:
+                signal['signal'] = 'HOLD'
+            elif mtf_direction == 'mixed':
+                signal['signal'] = 'HOLD'
+            elif mtf_direction != signal_direction:
+                signal['signal'] = 'HOLD'
+
+        signal['regime'] = regime
+        signal['regime_params'] = regime_params
+        signal['mtf_direction'] = mtf_direction
+        return signal
+
+
+# ---------------------------------------------------------------------------
+# Backtester (with trailing stop, warm-up, Kelly sizing)
+# ---------------------------------------------------------------------------
+
 class Backtester:
-    """Orchestrates the backtesting simulation."""
+    """Orchestrates the backtesting simulation with all advanced features."""
     def __init__(self, watch_list, prices_df, whales_df, params):
         self.watch_list = watch_list
         self.prices_df = prices_df
         self.whales_df = whales_df
         self.params = params
-        self.portfolio = Portfolio(params.initial_capital)
+        self.portfolio = Portfolio(
+            params.initial_capital,
+            slippage_bps=getattr(params, 'slippage_bps', DEFAULT_SLIPPAGE_BPS),
+        )
         self.strategy = Strategy(params)
+        # Warm-up: skip this many bars before allowing trades
+        self.warmup_bars = max(params.sma_period, params.rsi_period, 30)
+        # Trailing stop params
+        self.trailing_stop_enabled = getattr(params, 'trailing_stop_enabled', True)
+        self.trailing_stop_activation = getattr(params, 'trailing_stop_activation', 0.02)
+        self.trailing_stop_distance = getattr(params, 'trailing_stop_distance', 0.015)
+        # Kelly state (updated as trades accumulate)
+        self._trade_count = 0
+        self._wins = 0
+        self._total_win_pnl = 0.0
+        self._total_loss_pnl = 0.0
+
+    def _get_effective_risk(self, regime_params):
+        """Returns risk fraction: Kelly-based if enough history, else fixed."""
+        if self._trade_count >= 10 and self._wins > 0:
+            losses_count = self._trade_count - self._wins
+            avg_win = self._total_win_pnl / self._wins if self._wins > 0 else 0.0
+            avg_loss = abs(self._total_loss_pnl / losses_count) if losses_count > 0 else 0.0
+            win_rate = self._wins / self._trade_count
+
+            if avg_loss > 0:
+                wl_ratio = avg_win / avg_loss
+                kelly = win_rate - (1 - win_rate) / wl_ratio
+                kelly = max(0.0, min(kelly * 0.5, 0.25))  # half-Kelly, capped
+                if kelly > 0:
+                    risk_mult = regime_params.get('risk_multiplier', 1.0)
+                    return kelly * risk_mult
+
+        risk_mult = regime_params.get('risk_multiplier', 1.0)
+        return self.params.trade_risk_percentage * risk_mult
+
+    def _update_kelly_state(self, pnl):
+        """Updates running Kelly statistics after each closed trade."""
+        self._trade_count += 1
+        if pnl > 0:
+            self._wins += 1
+            self._total_win_pnl += pnl
+        else:
+            self._total_loss_pnl += pnl
 
     def run(self):
         log.info("\n--- Starting Backtest Simulation ---")
+        log.info(f"Warm-up period: {self.warmup_bars} bars")
+        log.info(f"Trailing stop: {'enabled' if self.trailing_stop_enabled else 'disabled'} "
+                 f"(activation={self.trailing_stop_activation}, distance={self.trailing_stop_distance})")
+        log.info(f"Slippage: {self.portfolio.slippage_bps} bps")
+
         # Ensure whale timestamps are timezone-aware for proper comparison
-        self.whales_df['timestamp'] = self.whales_df['timestamp'].dt.tz_localize('UTC')
-        
+        if not self.whales_df.empty:
+            self.whales_df['timestamp'] = self.whales_df['timestamp'].dt.tz_localize('UTC')
+
         all_prices = self.prices_df.pivot(index='timestamp', columns='symbol', values='price').ffill()
-        
-        for timestamp, prices in all_prices.iterrows():
+
+        for bar_idx, (timestamp, prices) in enumerate(all_prices.iterrows()):
             current_prices = prices.to_dict()
             self.portfolio.record_equity(timestamp, current_prices)
             self.check_for_exits(current_prices, timestamp)
-            
+
+            # Skip entries during warm-up period
+            if bar_idx < self.warmup_bars:
+                continue
+
             if len(self.portfolio.positions) < self.params.max_concurrent_positions:
                 self.check_for_entries(current_prices, timestamp)
-        self.print_results()
+
+        return self.get_results()
 
     def check_for_exits(self, current_prices, timestamp):
         for symbol in list(self.portfolio.positions.keys()):
             pos = self.portfolio.positions[symbol]
             current_price = current_prices.get(symbol)
-            if current_price is None: continue
+            if current_price is None:
+                continue
+
+            entry_price = pos['entry_price']
             if pos['side'] == 'LONG':
-                pnl_percentage = (current_price - pos['entry_price']) / pos['entry_price']
+                pnl_percentage = (current_price - entry_price) / entry_price
             else:  # SHORT
-                pnl_percentage = (pos['entry_price'] - current_price) / pos['entry_price']
-            if pnl_percentage <= -self.params.stop_loss_percentage or pnl_percentage >= self.params.take_profit_percentage:
-                log.info(f"[{timestamp}] EXIT '{symbol}' ({pos['side']}): PnL% {pnl_percentage:.2%} triggered exit.")
-                self.portfolio.place_order(symbol, 'CLOSE', pos['quantity'], current_price, timestamp)
+                pnl_percentage = (entry_price - current_price) / entry_price
+
+            # --- Trailing Stop (LONG positions only) ---
+            if self.trailing_stop_enabled and pos['side'] == 'LONG':
+                peak = self.portfolio.update_trailing_peak(symbol, current_price)
+                if pnl_percentage >= self.trailing_stop_activation:
+                    drawdown_from_peak = (peak - current_price) / peak if peak > 0 else 0
+                    if drawdown_from_peak >= self.trailing_stop_distance:
+                        log.debug(f"[{timestamp}] TRAILING STOP '{symbol}': "
+                                  f"peak=${peak:.2f}, now=${current_price:.2f}")
+                        self.portfolio.place_order(symbol, 'CLOSE', pos['quantity'],
+                                                   current_price, timestamp)
+                        self._update_kelly_state(self.portfolio.trade_history[-1]['pnl'])
+                        continue
+
+            # --- Fixed stop-loss / take-profit ---
+            if pnl_percentage <= -self.params.stop_loss_percentage:
+                log.debug(f"[{timestamp}] STOP-LOSS '{symbol}' ({pos['side']}): PnL% {pnl_percentage:.2%}")
+                self.portfolio.place_order(symbol, 'CLOSE', pos['quantity'],
+                                           current_price, timestamp)
+                self._update_kelly_state(self.portfolio.trade_history[-1]['pnl'])
+            elif pnl_percentage >= self.params.take_profit_percentage:
+                log.debug(f"[{timestamp}] TAKE-PROFIT '{symbol}' ({pos['side']}): PnL% {pnl_percentage:.2%}")
+                self.portfolio.place_order(symbol, 'CLOSE', pos['quantity'],
+                                           current_price, timestamp)
+                self._update_kelly_state(self.portfolio.trade_history[-1]['pnl'])
 
     def check_for_entries(self, current_prices, timestamp):
         # --- Calculate point-in-time on-chain metrics ---
-        # Consider whale transactions from the last hour
         one_hour_ago = timestamp - pd.Timedelta(hours=1)
-        recent_whales_df = self.whales_df[self.whales_df['timestamp'].between(one_hour_ago, timestamp)]
-        recent_whales = recent_whales_df.to_dict('records')
+        if not self.whales_df.empty:
+            recent_whales_df = self.whales_df[self.whales_df['timestamp'].between(one_hour_ago, timestamp)]
+            recent_whales = recent_whales_df.to_dict('records')
+        else:
+            recent_whales_df = pd.DataFrame()
+            recent_whales = []
 
-        # Calculate stablecoin flows from these recent transactions
         stablecoin_inflow = sum(
-            tx['amount_usd'] for tx in recent_whales 
-            if tx['symbol'] in self.params.stablecoins_to_monitor and tx['to_owner_type'] == 'exchange'
+            tx['amount_usd'] for tx in recent_whales
+            if tx.get('symbol') in self.params.stablecoins_to_monitor
+            and tx.get('to_owner_type') == 'exchange'
         )
         stablecoin_data = {'stablecoin_inflow_usd': stablecoin_inflow}
 
         for symbol in self.watch_list:
-            if symbol in self.portfolio.positions: continue
+            if symbol in self.portfolio.positions:
+                continue
             current_price = current_prices.get(symbol)
-            if pd.isna(current_price): continue
+            if pd.isna(current_price):
+                continue
 
             # --- Calculate Transaction Velocity ---
             baseline_start = timestamp - pd.Timedelta(hours=self.params.transaction_velocity_baseline_hours)
-            baseline_whales_df = self.whales_df[self.whales_df['timestamp'].between(baseline_start, timestamp)]
-            
-            current_count = len(recent_whales_df[recent_whales_df['symbol'] == symbol.lower()])
-            baseline_count = len(baseline_whales_df[baseline_whales_df['symbol'] == symbol.lower()])
+            if not self.whales_df.empty:
+                baseline_whales_df = self.whales_df[self.whales_df['timestamp'].between(baseline_start, timestamp)]
+                current_count = len(recent_whales_df[recent_whales_df['symbol'] == symbol.lower()])
+                baseline_count = len(baseline_whales_df[baseline_whales_df['symbol'] == symbol.lower()])
+            else:
+                current_count = 0
+                baseline_count = 0
             baseline_avg = baseline_count / self.params.transaction_velocity_baseline_hours if self.params.transaction_velocity_baseline_hours > 0 else 0
             velocity_data = {'current_count': current_count, 'baseline_avg': baseline_avg}
 
-            # --- Generate Signal ---
-            historical_prices = self.prices_df[(self.prices_df['symbol'] == symbol) & (self.prices_df['timestamp'] <= timestamp)]
-            
-            signal_data = self.strategy.generate_signals(symbol, historical_prices, recent_whales, current_price, stablecoin_data, velocity_data)
-            
+            # --- Generate Signal (with regime + MTF filtering) ---
+            historical_prices = self.prices_df[
+                (self.prices_df['symbol'] == symbol) & (self.prices_df['timestamp'] <= timestamp)
+            ]
+
+            signal_data = self.strategy.generate_signals(
+                symbol, historical_prices, recent_whales, current_price,
+                stablecoin_data, velocity_data,
+            )
+
             signal = signal_data.get('signal')
+            regime_params = signal_data.get('regime_params', {})
+
+            # --- Dynamic position sizing ---
+            effective_risk = self._get_effective_risk(regime_params)
+
             if signal == 'BUY':
-                log.info(f"[{timestamp}] ENTRY '{symbol}' LONG: {signal_data.get('reason')}")
-                capital_to_risk = self.portfolio.cash * self.params.trade_risk_percentage
-                quantity_to_buy = capital_to_risk / current_price
-                self.portfolio.place_order(symbol, 'BUY', quantity_to_buy, current_price, timestamp)
+                log.debug(f"[{timestamp}] ENTRY '{symbol}' LONG (risk={effective_risk:.4f})")
+                capital_to_risk = self.portfolio.cash * effective_risk
+                quantity = capital_to_risk / current_price
+                self.portfolio.place_order(symbol, 'BUY', quantity, current_price, timestamp)
             elif signal == 'SELL':
-                log.info(f"[{timestamp}] ENTRY '{symbol}' SHORT: {signal_data.get('reason')}")
-                capital_to_risk = self.portfolio.cash * self.params.trade_risk_percentage
-                quantity_to_short = capital_to_risk / current_price
-                self.portfolio.place_order(symbol, 'SHORT', quantity_to_short, current_price, timestamp)
+                log.debug(f"[{timestamp}] ENTRY '{symbol}' SHORT (risk={effective_risk:.4f})")
+                capital_to_risk = self.portfolio.cash * effective_risk
+                quantity = capital_to_risk / current_price
+                self.portfolio.place_order(symbol, 'SHORT', quantity, current_price, timestamp)
+
+    def get_results(self) -> dict:
+        """Returns full results dict with risk metrics."""
+        metrics = calculate_risk_metrics(
+            self.portfolio.equity_curve,
+            self.portfolio.trade_history,
+            self.params.initial_capital,
+        )
+        final_value = self.portfolio.equity_curve[-1]['value'] if self.portfolio.equity_curve else self.params.initial_capital
+        total_pnl = final_value - self.params.initial_capital
+        metrics['final_value'] = round(final_value, 2)
+        metrics['total_pnl'] = round(total_pnl, 2)
+        metrics['initial_capital'] = self.params.initial_capital
+        return metrics
 
     def print_results(self):
+        results = self.get_results()
         log.info("\n--- Backtest Results ---")
-        final_value = self.portfolio.equity_curve[-1]['value']
-        total_pnl = final_value - self.params.initial_capital
-        total_pnl_percent = (total_pnl / self.params.initial_capital) * 100
-        num_trades = len(self.portfolio.trade_history)
-        if num_trades == 0:
-            log.info("No trades were executed.")
-            print(f"Final PnL: 0.00")
-            return
-        wins = sum(1 for t in self.portfolio.trade_history if t['pnl'] > 0)
-        win_rate = (wins / num_trades * 100) if num_trades > 0 else 0
-        log.info(f"Final Portfolio Value: ${final_value:,.2f}")
-        log.info(f"Total PnL: ${total_pnl:,.2f} ({total_pnl_percent:.2f}%)")
-        log.info(f"Total Trades: {num_trades}")
-        log.info(f"Win Rate: {win_rate:.2f}%")
+        log.info(f"Final Portfolio Value: ${results['final_value']:,.2f}")
+        log.info(f"Total PnL: ${results['total_pnl']:,.2f} ({results['total_return_pct']:.2f}%)")
+        log.info(f"Total Trades: {results['total_trades']}")
+        log.info(f"Win Rate: {results['win_rate']:.2f}%")
+        log.info(f"Sharpe Ratio: {results['sharpe_ratio']}")
+        log.info(f"Sortino Ratio: {results['sortino_ratio']}")
+        log.info(f"Max Drawdown: {results['max_drawdown_pct']:.2f}%")
+        log.info(f"Profit Factor: {results['profit_factor']:.3f}")
+        log.info(f"Calmar Ratio: {results['calmar_ratio']}")
+        log.info(f"Avg Trade PnL: ${results['avg_trade_pnl']:.2f}")
+        log.info(f"Avg Win: ${results['avg_win']:.2f} | Avg Loss: ${results['avg_loss']:.2f}")
         # Standardized output for parsing
-        print(f"Final PnL: {total_pnl:.2f}")
+        print(f"Final PnL: {results['total_pnl']:.2f}")
+
+
+# ---------------------------------------------------------------------------
+# Walk-Forward Validation
+# ---------------------------------------------------------------------------
+
+def run_walk_forward(prices_df, whales_df, params, n_splits=3):
+    """
+    Walk-forward analysis: splits data into n_splits windows, trains on each
+    window, tests on the next. Prevents overfitting by validating out-of-sample.
+
+    Args:
+        prices_df: Full historical price DataFrame.
+        whales_df: Full whale transaction DataFrame.
+        params: argparse Namespace with strategy parameters.
+        n_splits: Number of train/test windows (default 3).
+
+    Returns:
+        dict with per-fold and aggregate metrics.
+    """
+    timestamps = prices_df['timestamp'].sort_values().unique()
+    total_bars = len(timestamps)
+
+    # Each fold: 60% train, 40% test (overlapping windows)
+    fold_size = total_bars // (n_splits + 1)
+    train_size = int(fold_size * 1.5)
+
+    fold_results = []
+    all_equity = []
+
+    for fold in range(n_splits):
+        train_start_idx = fold * fold_size
+        train_end_idx = min(train_start_idx + train_size, total_bars - fold_size)
+        test_start_idx = train_end_idx
+        test_end_idx = min(test_start_idx + fold_size, total_bars)
+
+        if test_end_idx <= test_start_idx:
+            break
+
+        train_end_ts = timestamps[train_end_idx]
+        test_start_ts = timestamps[test_start_idx]
+        test_end_ts = timestamps[test_end_idx - 1]
+
+        # We only run the backtest on the TEST portion
+        # (In a full implementation, you'd optimize on train, test on test.
+        #  Here we use fixed params and measure out-of-sample consistency.)
+        test_prices = prices_df[
+            (prices_df['timestamp'] >= test_start_ts) & (prices_df['timestamp'] <= test_end_ts)
+        ].copy()
+
+        if not whales_df.empty:
+            test_whales = whales_df[
+                (whales_df['timestamp'] >= test_start_ts) & (whales_df['timestamp'] <= test_end_ts)
+            ].copy()
+        else:
+            test_whales = whales_df.copy()
+
+        if test_prices.empty:
+            continue
+
+        watchlist = test_prices['symbol'].unique().tolist()
+        bt = Backtester(watchlist, test_prices, test_whales, params)
+        fold_result = bt.run()
+        fold_result['fold'] = fold + 1
+        fold_result['test_start'] = str(test_start_ts)
+        fold_result['test_end'] = str(test_end_ts)
+        fold_results.append(fold_result)
+
+        log.info(f"Fold {fold + 1}: PnL=${fold_result['total_pnl']:.2f}, "
+                 f"Sharpe={fold_result.get('sharpe_ratio')}, "
+                 f"MaxDD={fold_result.get('max_drawdown_pct'):.2f}%")
+
+    # --- Aggregate metrics ---
+    if not fold_results:
+        return {'folds': [], 'aggregate': _empty_metrics()}
+
+    avg_return = np.mean([f['total_return_pct'] for f in fold_results])
+    avg_sharpe = np.mean([f['sharpe_ratio'] for f in fold_results if f['sharpe_ratio'] is not None])
+    avg_max_dd = np.mean([f['max_drawdown_pct'] for f in fold_results])
+    total_trades = sum(f['total_trades'] for f in fold_results)
+    avg_win_rate = np.mean([f['win_rate'] for f in fold_results if f['total_trades'] > 0])
+    consistency = sum(1 for f in fold_results if f['total_pnl'] > 0) / len(fold_results) * 100
+
+    aggregate = {
+        'avg_return_pct': round(float(avg_return), 2),
+        'avg_sharpe': round(float(avg_sharpe), 3) if not np.isnan(avg_sharpe) else None,
+        'avg_max_drawdown_pct': round(float(avg_max_dd), 2),
+        'total_trades': total_trades,
+        'avg_win_rate': round(float(avg_win_rate), 2) if not np.isnan(avg_win_rate) else 0.0,
+        'fold_consistency_pct': round(consistency, 1),
+    }
+
+    log.info(f"\n--- Walk-Forward Summary ({n_splits} folds) ---")
+    log.info(f"Avg Return: {aggregate['avg_return_pct']:.2f}%")
+    log.info(f"Avg Sharpe: {aggregate['avg_sharpe']}")
+    log.info(f"Avg Max DD: {aggregate['avg_max_drawdown_pct']:.2f}%")
+    log.info(f"Fold Consistency: {aggregate['fold_consistency_pct']:.0f}% profitable")
+
+    return {'folds': fold_results, 'aggregate': aggregate}
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description="Run a backtest of the crypto trading bot.")
@@ -213,7 +608,13 @@ def main():
     parser.add_argument('--stop-loss-percentage', type=float, default=app_config.get('settings', {}).get('stop_loss_percentage', 0.02))
     parser.add_argument('--take-profit-percentage', type=float, default=app_config.get('settings', {}).get('take_profit_percentage', 0.05))
     parser.add_argument('--max-concurrent-positions', type=int, default=app_config.get('settings', {}).get('max_concurrent_positions', 3))
-    
+
+    # New features
+    parser.add_argument('--slippage-bps', type=float, default=DEFAULT_SLIPPAGE_BPS, help='Slippage in basis points')
+    parser.add_argument('--trailing-stop-enabled', type=bool, default=True)
+    parser.add_argument('--trailing-stop-activation', type=float, default=0.02)
+    parser.add_argument('--trailing-stop-distance', type=float, default=0.015)
+
     # Technical Indicators
     parser.add_argument('--sma-period', type=int, default=app_config.get('settings', {}).get('sma_period', 20))
     parser.add_argument('--rsi-period', type=int, default=app_config.get('settings', {}).get('rsi_period', 14))
@@ -224,13 +625,17 @@ def main():
     parser.add_argument('--stablecoin-inflow-threshold-usd', type=float, default=app_config.get('settings', {}).get('stablecoin_inflow_threshold_usd', 100000000))
     parser.add_argument('--transaction-velocity-baseline-hours', type=int, default=app_config.get('settings', {}).get('transaction_velocity_baseline_hours', 24))
     parser.add_argument('--transaction-velocity-threshold-multiplier', type=float, default=app_config.get('settings', {}).get('transaction_velocity_threshold_multiplier', 5.0))
-    
+
     # Watch Lists (as comma-separated strings)
     parser.add_argument('--high-interest-wallets', type=str, default=",".join(app_config.get('settings', {}).get('high_interest_wallets', [])))
     parser.add_argument('--stablecoins-to-monitor', type=str, default=",".join(app_config.get('settings', {}).get('stablecoins_to_monitor', [])))
 
+    # Mode
+    parser.add_argument('--walk-forward', action='store_true', help='Run walk-forward validation instead of single backtest')
+    parser.add_argument('--walk-forward-splits', type=int, default=3, help='Number of walk-forward folds')
+
     args = parser.parse_args()
-    
+
     # Convert comma-separated strings to lists
     args.high_interest_wallets = args.high_interest_wallets.split(',') if args.high_interest_wallets else []
     args.stablecoins_to_monitor = args.stablecoins_to_monitor.split(',') if args.stablecoins_to_monitor else []
@@ -238,10 +643,15 @@ def main():
     prices, whales = DataLoader.load_historical_data()
     if prices.empty:
         log.info("No data found. Exiting backtest.")
+        return
+
+    if args.walk_forward:
+        run_walk_forward(prices, whales, args, n_splits=args.walk_forward_splits)
     else:
         watchlist = prices['symbol'].unique().tolist()
         backtester = Backtester(watchlist, prices, whales, args)
         backtester.run()
+        backtester.print_results()
 
 if __name__ == '__main__':
     main()

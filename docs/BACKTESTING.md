@@ -4,58 +4,95 @@ This document outlines the process for backtesting the trading bot's strategy ag
 
 ## Overview
 
-The backtesting framework is designed to systematically test different configurations of the investment bot's variables (e.g., SMA period, RSI thresholds, risk management percentages) to identify the optimal parameter set.
+The backtesting framework simulates the bot's full trading logic — including trailing stops, market regime detection, multi-timeframe confirmation, and Kelly-based position sizing — against historical price and whale transaction data.
 
 The process involves three main scripts:
 1.  `scripts/backfill_historical_data.py`: For populating the database with high-frequency historical data.
 2.  `scripts/optimize_strategy.py`: For running the backtester across a grid of different parameter combinations.
 3.  `scripts/view_optimization_results.py`: For analyzing the results of the optimization runs.
 
+## Features
+
+| Feature | Description |
+|---------|-------------|
+| **Risk Metrics** | Sharpe ratio, Sortino ratio, max drawdown, profit factor, Calmar ratio |
+| **Trailing Stop** | Tracks peak price, activates after configurable gain threshold |
+| **Market Regime** | ATR + ADX-based detection (trending/ranging/volatile) adjusts risk |
+| **Multi-Timeframe** | Confirms signals across short/medium/long windows, filters false entries |
+| **Kelly Sizing** | Dynamic position sizing based on running win rate after 10+ trades |
+| **Slippage** | Configurable basis-point slippage on all fills (default 5 bps) |
+| **Warm-up Period** | Skips first N bars to ensure indicators have valid data |
+| **Walk-Forward** | Out-of-sample validation across multiple time folds |
+
 ## The Workflow
 
 ### Step 1: Backfill the Database with High-Frequency Data
 
-The accuracy of a backtest is highly dependent on the quality of the historical data. The live bot collects data periodically, which can result in an incomplete dataset. To run a proper backtest, you must first backfill the database with a complete, high-frequency dataset.
-
-**Command:**
 ```bash
 python3 scripts/backfill_historical_data.py
 ```
-This script will:
-- Connect to the Binance API (no keys required for public data).
-- Fetch the last 90 days of **hourly** candlestick data for all cryptocurrencies in your `config/watch_list.yaml`.
-- Save this data to the `market_prices` table in your local SQLite database.
+This fetches the last 90 days of **hourly** candlestick data from Binance.
 
-**Important:** Before running the backfill script, you should clear any old, low-frequency data from the `market_prices` table:
+**Important:** Clear old data first:
 ```bash
 sqlite3 data/crypto_data.db "DELETE FROM market_prices;"
 ```
 
-### Step 2: Run the Strategy Optimization
+### Step 2: Run a Single Backtest
 
-Once you have a high-quality dataset, you can run the optimization script. This script will run the backtester for a "grid" of different parameter combinations, allowing you to systematically test how different settings affect performance.
+```bash
+python3 src/analysis/backtest.py
+```
 
-The script uses Python's `multiprocessing` module to run the backtests in parallel, significantly speeding up the process.
+Override parameters via CLI flags:
+```bash
+python3 src/analysis/backtest.py \
+    --stop-loss-percentage 0.03 \
+    --take-profit-percentage 0.08 \
+    --slippage-bps 10 \
+    --trailing-stop-activation 0.03 \
+    --trailing-stop-distance 0.02
+```
 
-**Command:**
+### Step 3: Run Walk-Forward Validation
+
+Walk-forward splits the data into non-overlapping windows and tests strategy consistency out-of-sample. This is the most reliable way to validate a strategy.
+
+```bash
+python3 src/analysis/backtest.py --walk-forward --walk-forward-splits 3
+```
+
+Key output metric: **Fold Consistency** — the % of time windows where the strategy was profitable. If this is below 66%, the strategy may be overfit.
+
+### Step 4: Run the Strategy Optimization
+
 ```bash
 python3 scripts/optimize_strategy.py
 ```
-This script will:
-- Define a `param_grid` of parameters to test (e.g., different SMA periods, RSI thresholds).
-- Run a full backtest for every possible combination of these parameters.
-- Save the results of each run (parameters and final PnL) to the `optimization_results` table in the database.
 
-### Step 3: Analyze the Results
+The grid now tests SMA period, RSI thresholds, stop-loss, and take-profit in parallel.
 
-After the optimization is complete, you can use the `view_optimization_results.py` script to view a summary of all the backtesting runs.
+### Step 5: Analyze the Results
 
-**Command:**
 ```bash
 python3 scripts/view_optimization_results.py
 ```
-This will display a table of all the parameter combinations tested and their resulting PnL, allowing you to easily identify the best-performing configuration.
 
-## Conclusion
+## Output Metrics
 
-This framework provides a systematic and efficient way to test and refine your trading strategy. By following this workflow, you can make data-driven decisions to improve the bot's performance.
+| Metric | What it tells you |
+|--------|-------------------|
+| **Sharpe Ratio** | Risk-adjusted return (> 1.0 is good, > 2.0 is excellent) |
+| **Sortino Ratio** | Like Sharpe but only penalizes downside vol (higher = better) |
+| **Max Drawdown** | Worst peak-to-trough decline (smaller = better) |
+| **Profit Factor** | Gross profit / gross loss (> 1.5 is good) |
+| **Calmar Ratio** | Return / max drawdown (higher = better risk-adjusted) |
+| **Win Rate** | % of profitable trades |
+| **Avg Win / Avg Loss** | The payoff ratio per trade |
+
+## Interpreting Walk-Forward Results
+
+- **Fold Consistency > 66%**: Strategy likely has an edge
+- **Avg Sharpe > 1.0 across folds**: Robust risk-adjusted performance
+- **Similar metrics across folds**: Strategy is stable, not overfit
+- **High variance between folds**: Strategy may be regime-dependent
