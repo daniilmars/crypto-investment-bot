@@ -607,6 +607,73 @@ def save_news_sentiment_batch(rows: list):
     finally:
         release_db_connection(conn)
 
+def get_trade_history_stats() -> dict:
+    """
+    Calculates win rate and average win/loss ratio from all closed trades.
+    Used by the Kelly Criterion position sizing algorithm.
+
+    Returns:
+        dict with keys:
+        - total_trades: int
+        - wins: int
+        - losses: int
+        - win_rate: float (0-1)
+        - avg_win: float (average PnL of winning trades)
+        - avg_loss: float (average absolute PnL of losing trades)
+        - kelly_fraction: float (recommended risk fraction, capped at 0.25)
+    """
+    conn = None
+    default = {
+        "total_trades": 0, "wins": 0, "losses": 0,
+        "win_rate": 0.0, "avg_win": 0.0, "avg_loss": 0.0,
+        "kelly_fraction": 0.0,
+    }
+    try:
+        conn = get_db_connection()
+        with _cursor(conn) as cursor:
+            query = "SELECT pnl FROM trades WHERE status = 'CLOSED' AND pnl IS NOT NULL"
+            cursor.execute(query)
+            rows = cursor.fetchall()
+
+        if not rows:
+            return default
+
+        pnls = [float(row[0]) for row in rows]
+        wins = [p for p in pnls if p > 0]
+        losses = [p for p in pnls if p < 0]
+        total = len(pnls)
+
+        win_rate = len(wins) / total if total > 0 else 0.0
+        avg_win = sum(wins) / len(wins) if wins else 0.0
+        avg_loss = abs(sum(losses) / len(losses)) if losses else 0.0
+
+        # Kelly Criterion: f* = W - (1-W)/R
+        # where W = win probability, R = win/loss ratio
+        # Use half-Kelly for safety, cap at 25%
+        kelly = 0.0
+        if avg_loss > 0 and total >= 10:
+            win_loss_ratio = avg_win / avg_loss
+            kelly = win_rate - (1 - win_rate) / win_loss_ratio
+            kelly = max(0.0, min(kelly * 0.5, 0.25))
+
+        log.info(f"Trade history stats: {total} trades, {len(wins)} wins, "
+                 f"win_rate={win_rate:.2%}, kelly={kelly:.4f}")
+        return {
+            "total_trades": total,
+            "wins": len(wins),
+            "losses": len(losses),
+            "win_rate": win_rate,
+            "avg_win": avg_win,
+            "avg_loss": avg_loss,
+            "kelly_fraction": kelly,
+        }
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in get_trade_history_stats: {e}", exc_info=True)
+        return default
+    finally:
+        release_db_connection(conn)
+
+
 def get_latest_news_sentiment(symbols: list) -> dict:
     """Retrieves the most recent news sentiment record per symbol in a single query."""
     if not symbols:

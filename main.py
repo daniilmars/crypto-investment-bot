@@ -19,7 +19,9 @@ from src.analysis.gemini_news_analyzer import analyze_news_impact, analyze_news_
 from src.analysis.signal_engine import generate_signal
 from src.analysis.stock_signal_engine import generate_stock_signal
 from src.analysis.technical_indicators import (calculate_rsi, calculate_sma,
-                                               calculate_transaction_velocity)
+                                               calculate_transaction_velocity,
+                                               detect_market_regime,
+                                               multi_timeframe_confirmation)
 from src.collectors.alpha_vantage_data import (get_company_overview,
                                                get_daily_prices,
                                                get_stock_price)
@@ -29,6 +31,7 @@ from src.collectors.whale_alert import (get_stablecoin_flows,
                                         get_whale_transactions)
 from src.config import app_config
 from src.database import (get_historical_prices,
+                          get_trade_history_stats,
                           get_transaction_timestamps_since, initialize_database,
                           save_signal)
 from src.execution.binance_trader import (get_account_balance,
@@ -49,6 +52,24 @@ except Exception as e:
 app = FastAPI()
 application = None
 _background_tasks = []
+
+# --- Trailing Stop-Loss State ---
+# Tracks the highest price seen since each position was opened.
+# Key: order_id, Value: highest price observed
+_trailing_stop_peaks = {}
+
+
+def _update_trailing_stop(order_id: str, current_price: float) -> float:
+    """Updates and returns the peak price for a position (used for trailing stop)."""
+    prev_peak = _trailing_stop_peaks.get(order_id, current_price)
+    new_peak = max(prev_peak, current_price)
+    _trailing_stop_peaks[order_id] = new_peak
+    return new_peak
+
+
+def _clear_trailing_stop(order_id: str):
+    """Removes tracking data for a closed position."""
+    _trailing_stop_peaks.pop(order_id, None)
 
 
 async def run_bot_cycle():
@@ -76,6 +97,22 @@ async def run_bot_cycle():
     stop_loss_percentage = settings.get('stop_loss_percentage', 0.02)
     take_profit_percentage = settings.get('take_profit_percentage', 0.05)
     max_concurrent_positions = settings.get('max_concurrent_positions', 3)
+    trailing_stop_enabled = settings.get('trailing_stop_enabled', True)
+    trailing_stop_activation = settings.get('trailing_stop_activation', 0.02)  # activate after 2% gain
+    trailing_stop_distance = settings.get('trailing_stop_distance', 0.015)     # trail 1.5% from peak
+
+    # --- Dynamic Position Sizing (Kelly Criterion) ---
+    trade_stats = get_trade_history_stats()
+    kelly_fraction = trade_stats.get('kelly_fraction', 0.0)
+    if kelly_fraction > 0 and trade_stats.get('total_trades', 0) >= 10:
+        effective_risk_pct = kelly_fraction
+        log.info(f"Using Kelly-based position sizing: {effective_risk_pct:.4f} "
+                 f"(based on {trade_stats['total_trades']} trades, "
+                 f"win rate {trade_stats['win_rate']:.1%})")
+    else:
+        effective_risk_pct = trade_risk_percentage
+        log.info(f"Using fixed position sizing: {effective_risk_pct:.4f} "
+                 f"({trade_stats.get('total_trades', 0)} trades, need 10+ for Kelly)")
 
     # 1. Collect data
     log.info("Fetching data from all sources...")
@@ -145,26 +182,50 @@ async def run_bot_cycle():
         current_price = float(price_data.get('price'))
         log.info(f"Current price for {symbol}: ${current_price:,.2f}")
 
-        # --- Position Monitoring (runs regardless of paused state) ---
+        # --- Position Monitoring with Trailing Stop ---
         if paper_trading:
             open_positions = get_open_positions()
             for position in open_positions:
                 if position['symbol'] == symbol and position['status'] == 'OPEN':
-                    pnl_percentage = (current_price - position['entry_price']) / position['entry_price']
+                    entry_price = position['entry_price']
+                    pnl_percentage = (current_price - entry_price) / entry_price
+                    order_id = position['order_id']
 
-                    # Check for Stop Loss
+                    # Update trailing stop peak tracker
+                    peak_price = _update_trailing_stop(order_id, current_price)
+                    drawdown_from_peak = (peak_price - current_price) / peak_price if peak_price > 0 else 0
+
+                    # Trailing stop: activates once position is up by trailing_stop_activation,
+                    # then closes if price drops trailing_stop_distance from the peak
+                    if trailing_stop_enabled and pnl_percentage >= trailing_stop_activation:
+                        if drawdown_from_peak >= trailing_stop_distance:
+                            locked_gain = (peak_price - entry_price) / entry_price
+                            log.info(f"[PAPER TRADE] Trailing stop triggered for {symbol}. "
+                                     f"Peak: ${peak_price:,.2f}, Current: ${current_price:,.2f}")
+                            place_order(symbol, "SELL", position['quantity'], current_price,
+                                        existing_order_id=order_id)
+                            _clear_trailing_stop(order_id)
+                            await send_telegram_alert({"signal": "SELL", "symbol": symbol,
+                                                       "current_price": current_price,
+                                                       "reason": f"Trailing stop hit (peak ${peak_price:,.2f}, "
+                                                                 f"locked ~{locked_gain * 100:.1f}% gain)."})
+                            continue
+
+                    # Fixed stop-loss (always active as a floor)
                     if pnl_percentage <= -stop_loss_percentage:
                         log.info(f"[PAPER TRADE] Stop-loss hit for {symbol}. Closing position.")
                         place_order(symbol, "SELL", position['quantity'], current_price,
-                                    existing_order_id=position['order_id'])
+                                    existing_order_id=order_id)
+                        _clear_trailing_stop(order_id)
                         await send_telegram_alert({"signal": "SELL", "symbol": symbol, "current_price": current_price,
                                                    "reason": f"Stop-loss hit ({stop_loss_percentage * 100:.2f}% loss)."})
 
-                    # Check for Take Profit
+                    # Take profit (as ultimate cap)
                     elif pnl_percentage >= take_profit_percentage:
                         log.info(f"[PAPER TRADE] Take-profit hit for {symbol}. Closing position.")
                         place_order(symbol, "SELL", position['quantity'], current_price,
-                                    existing_order_id=position['order_id'])
+                                    existing_order_id=order_id)
+                        _clear_trailing_stop(order_id)
                         await send_telegram_alert({"signal": "SELL", "symbol": symbol, "current_price": current_price,
                                                    "reason": f"Take-profit hit ({take_profit_percentage * 100:.2f}% gain)."})
 
@@ -176,7 +237,9 @@ async def run_bot_cycle():
         # 2. Analyze data for a signal
         log.info(f"Analyzing data for {symbol}...")
 
-        historical_prices = get_historical_prices(symbol, limit=max(sma_period, rsi_period) + 1)
+        # Fetch enough data for regime detection + indicators
+        price_limit = max(sma_period, rsi_period, 30) + 1
+        historical_prices = get_historical_prices(symbol, limit=price_limit)
         historical_timestamps = get_transaction_timestamps_since(symbol.lower(), hours_ago=baseline_hours)
 
         market_price_data = {'current_price': current_price, 'sma': None, 'rsi': None}
@@ -185,6 +248,16 @@ async def run_bot_cycle():
             market_price_data['sma'] = price_series.rolling(window=sma_period).mean().iloc[-1]
         market_price_data['rsi'] = calculate_rsi(historical_prices, period=rsi_period)
         log.info(f"Technical Indicators for {symbol}: SMA={market_price_data['sma']}, RSI={market_price_data['rsi']}")
+
+        # --- Market Regime Detection ---
+        regime_data = detect_market_regime(historical_prices)
+        regime = regime_data.get('regime', 'ranging')
+        regime_params = regime_data.get('strategy_params', {})
+        log.info(f"Market regime for {symbol}: {regime} (ADX={regime_data.get('adx')}, ATR%={regime_data.get('atr_pct')})")
+
+        # --- Multi-Timeframe Confirmation ---
+        mtf = multi_timeframe_confirmation(historical_prices, sma_period=sma_period, rsi_period=rsi_period)
+        log.info(f"Multi-TF for {symbol}: {mtf['confirmed_direction']} ({mtf['agreement_count']}/3 agree)")
 
         transaction_velocity = calculate_transaction_velocity(symbol, whale_transactions, historical_timestamps,
                                                               baseline_hours)
@@ -222,13 +295,43 @@ async def run_bot_cycle():
             historical_prices=historical_prices
         )
         log.info(f"Generated Signal for {symbol}: {signal}")
+
+        # --- Multi-Timeframe & Regime Filter ---
+        # Downgrade BUY/SELL to HOLD if multi-timeframe disagrees or regime is unfavorable
+        original_signal = signal['signal']
+        if original_signal in ("BUY", "SELL"):
+            mtf_direction = mtf['confirmed_direction']
+            signal_direction = 'bullish' if original_signal == 'BUY' else 'bearish'
+
+            # In volatile regime, require 3/3 timeframe agreement
+            min_agreement = regime_params.get('signal_threshold', 2)
+            if regime == 'volatile' and mtf['agreement_count'] < 3:
+                signal['signal'] = 'HOLD'
+                signal['reason'] += f" [Filtered: volatile regime requires 3/3 TF agreement, got {mtf['agreement_count']}/3]"
+                log.info(f"[{symbol}] Signal downgraded from {original_signal} to HOLD (volatile regime filter)")
+            elif mtf_direction == 'mixed':
+                signal['signal'] = 'HOLD'
+                signal['reason'] += f" [Filtered: multi-TF mixed — no directional consensus]"
+                log.info(f"[{symbol}] Signal downgraded from {original_signal} to HOLD (mixed multi-TF)")
+            elif mtf_direction != signal_direction:
+                signal['signal'] = 'HOLD'
+                signal['reason'] += f" [Filtered: signal={signal_direction} but multi-TF={mtf_direction}]"
+                log.info(f"[{symbol}] Signal downgraded from {original_signal} to HOLD (TF conflict)")
+
+        # Annotate signal with regime info
+        signal['regime'] = regime
+        signal['mtf_direction'] = mtf['confirmed_direction']
         save_signal(signal)
 
-        # --- 4. Paper Trading Logic ---
+        # --- 4. Paper Trading Logic with Dynamic Sizing ---
         if paper_trading:
             log.info(f"Processing signal for paper trading...")
             open_positions = get_open_positions()
             current_balance = get_account_balance().get('total_usd', paper_trading_initial_capital)
+
+            # Apply regime risk multiplier to effective risk percentage
+            risk_multiplier = regime_params.get('risk_multiplier', 1.0)
+            adjusted_risk_pct = effective_risk_pct * risk_multiplier
 
             if signal['signal'] == "BUY":
                 if any(p['symbol'] == symbol and p['status'] == 'OPEN' for p in open_positions):
@@ -237,12 +340,13 @@ async def run_bot_cycle():
                     log.info(
                         f"Skipping BUY for {symbol}: Max concurrent positions ({max_concurrent_positions}) reached.")
                 else:
-                    capital_to_risk = current_balance * trade_risk_percentage
+                    capital_to_risk = current_balance * adjusted_risk_pct
                     quantity_to_buy = capital_to_risk / current_price
                     if quantity_to_buy * current_price > current_balance:
                         log.warning(f"Skipping BUY for {symbol}: Insufficient balance.")
                     else:
-                        log.info(f"Executing paper trade: BUY {quantity_to_buy:.4f} {symbol}.")
+                        log.info(f"Executing paper trade: BUY {quantity_to_buy:.4f} {symbol} "
+                                 f"(risk={adjusted_risk_pct:.4f}, regime={regime}).")
                         place_order(symbol, "BUY", quantity_to_buy, current_price)
                         await send_telegram_alert(signal)
 
@@ -253,6 +357,7 @@ async def run_bot_cycle():
                     log.info(f"Executing paper trade: SELL {position_to_close['quantity']:.4f} {symbol}.")
                     place_order(symbol, "SELL", position_to_close['quantity'], current_price,
                                 existing_order_id=position_to_close['order_id'])
+                    _clear_trailing_stop(position_to_close['order_id'])
                     await send_telegram_alert(signal)
                 else:
                     log.info(f"Skipping SELL for {symbol}: No open position found.")
@@ -305,6 +410,9 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None, gemi
     trade_risk_percentage = settings.get('trade_risk_percentage', 0.01)
     max_concurrent_positions = settings.get('max_concurrent_positions', 3)
     paper_trading_initial_capital = settings.get('paper_trading_initial_capital', 10000.0)
+    trailing_stop_enabled = settings.get('trailing_stop_enabled', True)
+    trailing_stop_activation = settings.get('trailing_stop_activation', 0.02)
+    trailing_stop_distance = settings.get('trailing_stop_distance', 0.015)
 
     for symbol in watch_list:
         log.info(f"--- Processing stock: {symbol} ---")
@@ -318,24 +426,44 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None, gemi
         current_price = price_data['price']
         log.info(f"Current stock price for {symbol}: ${current_price:,.2f}")
 
-        # --- Position Monitoring (runs regardless of paused state) ---
+        # --- Position Monitoring with Trailing Stop ---
         if paper_trading:
             open_positions = get_open_positions()
             for position in open_positions:
                 if position['symbol'] == symbol and position['status'] == 'OPEN':
-                    pnl_percentage = (current_price - position['entry_price']) / position['entry_price']
+                    entry_price = position['entry_price']
+                    pnl_percentage = (current_price - entry_price) / entry_price
+                    order_id = position['order_id']
+
+                    peak_price = _update_trailing_stop(order_id, current_price)
+                    drawdown_from_peak = (peak_price - current_price) / peak_price if peak_price > 0 else 0
+
+                    if trailing_stop_enabled and pnl_percentage >= trailing_stop_activation:
+                        if drawdown_from_peak >= trailing_stop_distance:
+                            locked_gain = (peak_price - entry_price) / entry_price
+                            log.info(f"[PAPER TRADE] Trailing stop triggered for stock {symbol}.")
+                            place_order(symbol, "SELL", position['quantity'], current_price,
+                                        existing_order_id=order_id)
+                            _clear_trailing_stop(order_id)
+                            await send_telegram_alert({"signal": "SELL", "symbol": symbol,
+                                                       "current_price": current_price, "asset_type": "stock",
+                                                       "reason": f"Trailing stop hit (peak ${peak_price:,.2f}, "
+                                                                 f"locked ~{locked_gain * 100:.1f}% gain)."})
+                            continue
 
                     if pnl_percentage <= -stop_loss_percentage:
                         log.info(f"[PAPER TRADE] Stop-loss hit for stock {symbol}. Closing position.")
                         place_order(symbol, "SELL", position['quantity'], current_price,
-                                    existing_order_id=position['order_id'])
+                                    existing_order_id=order_id)
+                        _clear_trailing_stop(order_id)
                         await send_telegram_alert({"signal": "SELL", "symbol": symbol,
                                                    "current_price": current_price, "asset_type": "stock",
                                                    "reason": f"Stop-loss hit ({stop_loss_percentage * 100:.2f}% loss)."})
                     elif pnl_percentage >= take_profit_percentage:
                         log.info(f"[PAPER TRADE] Take-profit hit for stock {symbol}. Closing position.")
                         place_order(symbol, "SELL", position['quantity'], current_price,
-                                    existing_order_id=position['order_id'])
+                                    existing_order_id=order_id)
+                        _clear_trailing_stop(order_id)
                         await send_telegram_alert({"signal": "SELL", "symbol": symbol,
                                                    "current_price": current_price, "asset_type": "stock",
                                                    "reason": f"Take-profit hit ({take_profit_percentage * 100:.2f}% gain)."})
@@ -413,10 +541,15 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None, gemi
         log.info(f"Generated Stock Signal for {symbol}: {signal}")
         save_signal(signal)
 
-        # --- Paper Trading Logic ---
+        # --- Paper Trading Logic (with dynamic sizing) ---
         if paper_trading:
             open_positions = get_open_positions()
             current_balance = get_account_balance().get('total_usd', paper_trading_initial_capital)
+
+            # Use Kelly-based sizing if available
+            stock_trade_stats = get_trade_history_stats()
+            stock_kelly = stock_trade_stats.get('kelly_fraction', 0.0)
+            stock_risk_pct = stock_kelly if (stock_kelly > 0 and stock_trade_stats.get('total_trades', 0) >= 10) else trade_risk_percentage
 
             if signal['signal'] == "BUY":
                 if any(p['symbol'] == symbol and p['status'] == 'OPEN' for p in open_positions):
@@ -424,12 +557,13 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None, gemi
                 elif len(open_positions) >= max_concurrent_positions:
                     log.info(f"Skipping BUY for stock {symbol}: Max concurrent positions reached.")
                 else:
-                    capital_to_risk = current_balance * trade_risk_percentage
+                    capital_to_risk = current_balance * stock_risk_pct
                     quantity_to_buy = capital_to_risk / current_price
                     if quantity_to_buy * current_price > current_balance:
                         log.warning(f"Skipping BUY for stock {symbol}: Insufficient balance.")
                     else:
-                        log.info(f"Executing paper trade: BUY {quantity_to_buy:.4f} {symbol}.")
+                        log.info(f"Executing paper trade: BUY {quantity_to_buy:.4f} {symbol} "
+                                 f"(risk={stock_risk_pct:.4f}).")
                         place_order(symbol, "BUY", quantity_to_buy, current_price)
                         await send_telegram_alert(signal)
 
@@ -440,6 +574,7 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None, gemi
                     log.info(f"Executing paper trade: SELL {position_to_close['quantity']:.4f} {symbol}.")
                     place_order(symbol, "SELL", position_to_close['quantity'], current_price,
                                 existing_order_id=position_to_close['order_id'])
+                    _clear_trailing_stop(position_to_close['order_id'])
                     await send_telegram_alert(signal)
                 else:
                     log.info(f"Skipping SELL for stock {symbol}: No open position found.")
