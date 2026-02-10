@@ -30,6 +30,9 @@ uvicorn==0.35.0
 # For LSTM Model
 tensorflow==2.16.2
 
+# For GCP billing budget queries
+google-cloud-billing-budgets>=1.14.0
+
 # For news sentiment analysis
 vaderSentiment>=3.3.2
 newsapi-python>=0.2.7
