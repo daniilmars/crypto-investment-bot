@@ -25,7 +25,8 @@ from src.analysis.technical_indicators import (calculate_rsi, calculate_sma,
 from src.collectors.alpha_vantage_data import (get_company_overview,
                                                get_daily_prices,
                                                get_stock_price)
-from src.collectors.binance_data import get_current_price
+from src.collectors.binance_data import (get_current_price, get_24hr_stats,
+                                         get_klines, get_order_book_depth)
 from src.collectors.news_data import collect_news_sentiment
 from src.collectors.whale_alert import (get_stablecoin_flows,
                                         get_whale_transactions)
@@ -182,6 +183,16 @@ async def run_bot_cycle():
         current_price = float(price_data.get('price'))
         log.info(f"Current price for {symbol}: ${current_price:,.2f}")
 
+        # Fetch 24hr stats (volume, price change) and order book depth
+        stats_24hr = get_24hr_stats(api_symbol) or {}
+        order_book = get_order_book_depth(api_symbol) or {}
+
+        # Fetch klines (OHLC) for proper regime detection
+        klines = get_klines(api_symbol, interval='1h', limit=100)
+        klines_high = [k['high'] for k in klines] if klines else None
+        klines_low = [k['low'] for k in klines] if klines else None
+        klines_close = [k['close'] for k in klines] if klines else None
+
         # --- Position Monitoring with Trailing Stop ---
         if paper_trading:
             open_positions = get_open_positions()
@@ -249,8 +260,11 @@ async def run_bot_cycle():
         market_price_data['rsi'] = calculate_rsi(historical_prices, period=rsi_period)
         log.info(f"Technical Indicators for {symbol}: SMA={market_price_data['sma']}, RSI={market_price_data['rsi']}")
 
-        # --- Market Regime Detection ---
-        regime_data = detect_market_regime(historical_prices)
+        # --- Market Regime Detection (use OHLC from klines when available) ---
+        if klines_close and len(klines_close) >= 30:
+            regime_data = detect_market_regime(klines_close, prices_high=klines_high, prices_low=klines_low)
+        else:
+            regime_data = detect_market_regime(historical_prices)
         regime = regime_data.get('regime', 'ranging')
         regime_params = regime_data.get('strategy_params', {})
         log.info(f"Market regime for {symbol}: {regime} (ADX={regime_data.get('adx')}, ATR%={regime_data.get('atr_pct')})")
@@ -282,6 +296,16 @@ async def run_bot_cycle():
             if ga:
                 symbol_news_data['gemini_assessment'] = ga
 
+        # Build volume data from 24hr stats for signal engine
+        crypto_volume_data = {}
+        if stats_24hr:
+            crypto_volume_data = {
+                'volume': stats_24hr.get('volume', 0),
+                'price_change_percent': stats_24hr.get('price_change_percent', 0),
+                'avg_volume': stats_24hr.get('volume', 0),  # single-day baseline
+                'volume_spike_multiplier': 1.5,
+            }
+
         signal = generate_signal(
             symbol=symbol,
             whale_transactions=whale_transactions,
@@ -292,7 +316,9 @@ async def run_bot_cycle():
             rsi_overbought_threshold=rsi_overbought_threshold,
             rsi_oversold_threshold=rsi_oversold_threshold,
             news_sentiment_data=symbol_news_data,
-            historical_prices=historical_prices
+            historical_prices=historical_prices,
+            volume_data=crypto_volume_data,
+            order_book_data=order_book,
         )
         log.info(f"Generated Signal for {symbol}: {signal}")
 

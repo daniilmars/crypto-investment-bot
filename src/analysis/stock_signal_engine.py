@@ -90,6 +90,28 @@ def generate_stock_signal(symbol, market_data, volume_data=None, fundamental_dat
             buy_score += 1
             reasons.append(f"P/E {pe_ratio:.1f} < {pe_ratio_buy_threshold} with positive earnings growth {earnings_growth:.1f}%")
 
+    # --- Indicator 4b: Revenue Growth ---
+    revenue_growth = fundamental_data.get('revenue_growth')
+    if revenue_growth is not None:
+        if revenue_growth > 0.10:
+            buy_score += 1
+            reasons.append(f"Revenue growth {revenue_growth * 100:.1f}% (strong)")
+        elif revenue_growth < -0.05:
+            sell_score += 1
+            reasons.append(f"Revenue growth {revenue_growth * 100:.1f}% (declining)")
+
+    # --- Indicator 4c: Beta (Risk-Adjusted) ---
+    beta = fundamental_data.get('beta')
+    if beta is not None:
+        # High beta in an overbought market amplifies sell signal
+        if beta > 1.5 and rsi is not None and rsi > rsi_overbought_threshold:
+            sell_score += 1
+            reasons.append(f"High beta {beta:.2f} with overbought RSI (volatile downside risk)")
+        # Low beta with good fundamentals is defensive buy
+        elif beta < 0.8 and pe_ratio is not None and pe_ratio < pe_ratio_buy_threshold:
+            buy_score += 1
+            reasons.append(f"Low beta {beta:.2f} with reasonable P/E (defensive value)")
+
     # --- Indicator 5: News Sentiment (Gemini preferred, VADER fallback) ---
     if news_sentiment_data:
         gemini = news_sentiment_data.get('gemini_assessment')

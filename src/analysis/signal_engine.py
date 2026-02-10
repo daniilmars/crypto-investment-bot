@@ -2,7 +2,7 @@ import pandas as pd
 from src.logger import log
 from src.analysis.technical_indicators import calculate_macd, calculate_bollinger_bands
 
-def generate_signal(symbol, whale_transactions, market_data, high_interest_wallets=None, stablecoin_data=None, stablecoin_threshold=100000000, velocity_data=None, velocity_threshold_multiplier=5.0, rsi_overbought_threshold=70, rsi_oversold_threshold=30, news_sentiment_data=None, historical_prices=None):
+def generate_signal(symbol, whale_transactions, market_data, high_interest_wallets=None, stablecoin_data=None, stablecoin_threshold=100000000, velocity_data=None, velocity_threshold_multiplier=5.0, rsi_overbought_threshold=70, rsi_oversold_threshold=30, news_sentiment_data=None, historical_prices=None, volume_data=None, order_book_data=None):
     """
     Generates a trading signal based on on-chain data and technical indicators.
     Prioritizes anomalies and high-priority events.
@@ -143,8 +143,39 @@ def generate_signal(symbol, whale_transactions, market_data, high_interest_walle
                 sell_score += 1
                 bollinger_reason = f", BB: overbought (price > {bb['upper_band']:,.2f})"
 
+    # Indicator 7: Volume (24hr stats from Binance)
+    volume_reason = ""
+    if volume_data is None:
+        volume_data = {}
+    vol_change = volume_data.get('price_change_percent', 0)
+    vol_current = volume_data.get('volume', 0)
+    vol_avg = volume_data.get('avg_volume', 0)
+    vol_spike_multiplier = volume_data.get('volume_spike_multiplier', 1.5)
+
+    if vol_current > 0 and vol_avg > 0 and vol_current > vol_avg * vol_spike_multiplier:
+        if vol_change > 0:
+            buy_score += 1
+            volume_reason = f", Volume: spike ({vol_current:,.0f} > {vol_avg * vol_spike_multiplier:,.0f}) with price up {vol_change:.1f}%"
+        elif vol_change < 0:
+            sell_score += 1
+            volume_reason = f", Volume: spike ({vol_current:,.0f} > {vol_avg * vol_spike_multiplier:,.0f}) with price down {vol_change:.1f}%"
+
+    # Indicator 8: Order Book Depth Imbalance
+    orderbook_reason = ""
+    if order_book_data is None:
+        order_book_data = {}
+    bid_ask_ratio = order_book_data.get('bid_ask_ratio', 0)
+
+    if bid_ask_ratio > 0:
+        if bid_ask_ratio > 1.5:
+            buy_score += 1
+            orderbook_reason = f", OrderBook: bid-heavy ({bid_ask_ratio:.2f} ratio, buying pressure)"
+        elif bid_ask_ratio < 0.67:
+            sell_score += 1
+            orderbook_reason = f", OrderBook: ask-heavy ({bid_ask_ratio:.2f} ratio, selling pressure)"
+
     # --- Signal Generation ---
-    reason = f"Price: ${current_price:,.2f}, SMA: ${sma:,.2f}, RSI: {rsi:.2f}, Whale Net Flow: ${net_flow:,.2f}{news_reason}{macd_reason}{bollinger_reason}. Buy Score: {buy_score}, Sell Score: {sell_score}."
+    reason = f"Price: ${current_price:,.2f}, SMA: ${sma:,.2f}, RSI: {rsi:.2f}, Whale Net Flow: ${net_flow:,.2f}{news_reason}{macd_reason}{bollinger_reason}{volume_reason}{orderbook_reason}. Buy Score: {buy_score}, Sell Score: {sell_score}."
 
     if buy_score >= 2 and buy_score > sell_score:
         log.info(f"[{symbol}] BUY signal generated. {reason}")

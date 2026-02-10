@@ -86,8 +86,198 @@ def get_current_price(symbol: str):
     log.error(f"Failed to fetch price for {symbol} after {MAX_RETRIES} attempts.")
     return None
 
+def get_24hr_stats(symbol: str):
+    """
+    Fetches 24-hour rolling statistics for a symbol from Binance.
+
+    Returns:
+        dict with 'volume', 'quote_volume', 'price_change_percent', 'high', 'low',
+        'weighted_avg_price', 'trade_count' or None on failure.
+    """
+    if not _validate_symbol(symbol):
+        return None
+    endpoint = f"{BINANCE_API_URL}/ticker/24hr"
+    params = {'symbol': symbol}
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = requests.get(endpoint, params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+
+            result = {
+                'symbol': symbol,
+                'volume': float(data.get('volume', 0)),
+                'quote_volume': float(data.get('quoteVolume', 0)),
+                'price_change_percent': float(data.get('priceChangePercent', 0)),
+                'high': float(data.get('highPrice', 0)),
+                'low': float(data.get('lowPrice', 0)),
+                'weighted_avg_price': float(data.get('weightedAvgPrice', 0)),
+                'trade_count': int(data.get('count', 0)),
+            }
+            log.info(f"Fetched 24hr stats for {symbol}: vol={result['volume']:.2f}, "
+                     f"change={result['price_change_percent']:.2f}%")
+            return result
+
+        except requests.exceptions.HTTPError as http_err:
+            if hasattr(http_err, 'response') and http_err.response is not None and http_err.response.status_code == 400:
+                log.error(f"Invalid symbol '{symbol}' for 24hr stats.")
+                return None
+            log.error(f"HTTP error fetching 24hr stats (attempt {attempt}/{MAX_RETRIES}): {http_err}")
+        except requests.exceptions.RequestException as e:
+            log.error(f"Error fetching 24hr stats from Binance (attempt {attempt}/{MAX_RETRIES}): {e}")
+        except (json.JSONDecodeError, ValueError, KeyError) as e:
+            log.error(f"Error parsing 24hr stats response (attempt {attempt}/{MAX_RETRIES}): {e}")
+
+        if attempt < MAX_RETRIES:
+            backoff = RETRY_BACKOFF_BASE ** attempt
+            log.info(f"Retrying in {backoff}s...")
+            time.sleep(backoff)
+
+    log.error(f"Failed to fetch 24hr stats for {symbol} after {MAX_RETRIES} attempts.")
+    return None
+
+
+def get_klines(symbol: str, interval: str = '1h', limit: int = 100):
+    """
+    Fetches candlestick (klines) OHLC data from Binance.
+
+    Args:
+        symbol: Trading pair (e.g. 'BTCUSDT')
+        interval: Candle interval ('1m','5m','15m','1h','4h','1d', etc.)
+        limit: Number of candles to fetch (max 1000)
+
+    Returns:
+        list of dicts with 'open', 'high', 'low', 'close', 'volume', 'timestamp'
+        or None on failure.
+    """
+    if not _validate_symbol(symbol):
+        return None
+    if limit > 1000:
+        limit = 1000
+
+    endpoint = f"{BINANCE_API_URL}/klines"
+    params = {'symbol': symbol, 'interval': interval, 'limit': limit}
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = requests.get(endpoint, params=params, timeout=30)
+            response.raise_for_status()
+            raw_klines = response.json()
+
+            klines = []
+            for k in raw_klines:
+                klines.append({
+                    'timestamp': int(k[0]),
+                    'open': float(k[1]),
+                    'high': float(k[2]),
+                    'low': float(k[3]),
+                    'close': float(k[4]),
+                    'volume': float(k[5]),
+                })
+            log.info(f"Fetched {len(klines)} klines for {symbol} ({interval}).")
+            return klines
+
+        except requests.exceptions.HTTPError as http_err:
+            if hasattr(http_err, 'response') and http_err.response is not None and http_err.response.status_code == 400:
+                log.error(f"Invalid request for klines: {symbol}/{interval}.")
+                return None
+            log.error(f"HTTP error fetching klines (attempt {attempt}/{MAX_RETRIES}): {http_err}")
+        except requests.exceptions.RequestException as e:
+            log.error(f"Error fetching klines from Binance (attempt {attempt}/{MAX_RETRIES}): {e}")
+        except (json.JSONDecodeError, ValueError, IndexError) as e:
+            log.error(f"Error parsing klines response (attempt {attempt}/{MAX_RETRIES}): {e}")
+
+        if attempt < MAX_RETRIES:
+            backoff = RETRY_BACKOFF_BASE ** attempt
+            log.info(f"Retrying in {backoff}s...")
+            time.sleep(backoff)
+
+    log.error(f"Failed to fetch klines for {symbol} after {MAX_RETRIES} attempts.")
+    return None
+
+
+def get_order_book_depth(symbol: str, limit: int = 20):
+    """
+    Fetches order book depth from Binance.
+
+    Args:
+        symbol: Trading pair (e.g. 'BTCUSDT')
+        limit: Depth levels (5, 10, 20, 50, 100, 500, 1000)
+
+    Returns:
+        dict with 'bid_volume', 'ask_volume', 'bid_ask_ratio', 'top_bid', 'top_ask',
+        'spread_pct' or None on failure.
+    """
+    if not _validate_symbol(symbol):
+        return None
+
+    endpoint = f"{BINANCE_API_URL}/depth"
+    params = {'symbol': symbol, 'limit': limit}
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = requests.get(endpoint, params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+
+            bids = data.get('bids', [])
+            asks = data.get('asks', [])
+
+            if not bids or not asks:
+                log.warning(f"Empty order book for {symbol}.")
+                return None
+
+            # Calculate total volume on each side (price * quantity)
+            bid_volume = sum(float(b[0]) * float(b[1]) for b in bids)
+            ask_volume = sum(float(a[0]) * float(a[1]) for a in asks)
+
+            top_bid = float(bids[0][0])
+            top_ask = float(asks[0][0])
+            spread_pct = ((top_ask - top_bid) / top_ask) * 100 if top_ask > 0 else 0
+
+            bid_ask_ratio = bid_volume / ask_volume if ask_volume > 0 else 0
+
+            result = {
+                'symbol': symbol,
+                'bid_volume': bid_volume,
+                'ask_volume': ask_volume,
+                'bid_ask_ratio': bid_ask_ratio,
+                'top_bid': top_bid,
+                'top_ask': top_ask,
+                'spread_pct': spread_pct,
+            }
+            log.info(f"Order book for {symbol}: bid/ask ratio={bid_ask_ratio:.3f}, "
+                     f"spread={spread_pct:.4f}%")
+            return result
+
+        except requests.exceptions.HTTPError as http_err:
+            if hasattr(http_err, 'response') and http_err.response is not None and http_err.response.status_code == 400:
+                log.error(f"Invalid symbol '{symbol}' for order book.")
+                return None
+            log.error(f"HTTP error fetching order book (attempt {attempt}/{MAX_RETRIES}): {http_err}")
+        except requests.exceptions.RequestException as e:
+            log.error(f"Error fetching order book from Binance (attempt {attempt}/{MAX_RETRIES}): {e}")
+        except (json.JSONDecodeError, ValueError, IndexError) as e:
+            log.error(f"Error parsing order book response (attempt {attempt}/{MAX_RETRIES}): {e}")
+
+        if attempt < MAX_RETRIES:
+            backoff = RETRY_BACKOFF_BASE ** attempt
+            log.info(f"Retrying in {backoff}s...")
+            time.sleep(backoff)
+
+    log.error(f"Failed to fetch order book for {symbol} after {MAX_RETRIES} attempts.")
+    return None
+
+
 if __name__ == '__main__':
     log.info("--- Testing Binance Data Collector (with DB saving) ---")
     get_current_price("BTCUSDT")
     get_current_price("ETHUSDT")
+    log.info("--- Testing 24hr Stats ---")
+    get_24hr_stats("BTCUSDT")
+    log.info("--- Testing Klines ---")
+    get_klines("BTCUSDT", interval='1h', limit=10)
+    log.info("--- Testing Order Book ---")
+    get_order_book_depth("BTCUSDT")
     log.info("--- Test Complete ---")

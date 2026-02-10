@@ -204,7 +204,17 @@ def collect_news_sentiment(symbols):
         if not matched_symbols:
             continue
 
-        score = _vader_analyzer.polarity_scores(title)['compound']
+        # Score title and description separately, then combine with weighted average.
+        # Title carries more weight as it's the editorial summary of the article.
+        title_score = _vader_analyzer.polarity_scores(title)['compound'] if title else 0
+        desc_score = _vader_analyzer.polarity_scores(description)['compound'] if description else 0
+
+        if title and description:
+            score = title_score * 0.6 + desc_score * 0.4
+        elif title:
+            score = title_score
+        else:
+            score = desc_score
 
         for symbol in matched_symbols:
             symbol_articles[symbol].append({
