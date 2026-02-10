@@ -1,91 +1,21 @@
-name: Cloud Health Check
+name: Health Check
 
 on:
-  workflow_dispatch: # Allows manual triggering
+  workflow_dispatch:
   schedule:
-    - cron: '0 * * * *' # Runs every hour
-
-env:
-  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  SERVICE_ACCOUNT_EMAIL: crypto-bot-deployer@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com
-  DB_INSTANCE_NAME: crypto-bot-db
-  SERVICE_NAME: crypto-bot
-  REGION: us-central1
+    - cron: '0 * * * *'
 
 jobs:
-  run-health-checks:
-    name: Run Cloud Health Checks
+  health-check:
+    name: Check Bot Health
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v3
-
-      - name: Google Auth
-        id: auth
-        uses: 'google-github-actions/auth@v1'
-        with:
-          credentials_json: '${{ secrets.GCP_SA_KEY }}'
-
-      - name: 'Set up Cloud SDK'
-        uses: 'google-github-actions/setup-gcloud@v1'
-
-      - name: 1. Check Enabled APIs
+      - name: Health check
         run: |
-          echo "Verifying required APIs are enabled..."
-          ENABLED_APIS=$(gcloud services list --enabled --project=${{ env.PROJECT_ID }} --format="value(config.name)")
-          REQUIRED_APIS=(
-            "run.googleapis.com"
-            "artifactregistry.googleapis.com"
-            "cloudbuild.googleapis.com"
-            "sqladmin.googleapis.com"
-            "cloudresourcemanager.googleapis.com"
-          )
-          for api in "${REQUIRED_APIS[@]}"; do
-            if ! echo "${ENABLED_APIS}" | grep -q "^${api}$"; then
-              echo "Error: Required API '${api}' is not enabled."
-              exit 1
-            fi
-          done
-          echo "✅ All required APIs are enabled."
-
-      - name: 2. Check Service Account Permissions
-        run: |
-          echo "Verifying service account IAM roles..."
-          ROLES=$(gcloud projects get-iam-policy ${{ env.PROJECT_ID }} \
-            --flatten="bindings[].members" \
-            --format='table[no-heading](bindings.role)' \
-            --filter="bindings.members:${{ env.SERVICE_ACCOUNT_EMAIL }}")
-          REQUIRED_ROLES=(
-            "roles/run.admin"
-            "roles/artifactregistry.admin"
-            "roles/cloudbuild.builds.editor"
-            "roles/cloudsql.client"
-            "roles/storage.admin"
-          )
-          for role in "${REQUIRED_ROLES[@]}"; do
-            if ! echo "${ROLES}" | grep -q "^${role}$"; then
-              echo "Error: Service account is a missing required role '${role}'."
-              exit 1
-            fi
-          done
-          echo "✅ Service account has all required permissions."
-
-      - name: 3. Check Cloud SQL Instance Status
-        run: |
-          echo "Verifying Cloud SQL instance status..."
-          DB_STATUS=$(gcloud sql instances describe ${{ env.DB_INSTANCE_NAME }} --project=${{ env.PROJECT_ID }} --format="value(state)")
-          if [ "${DB_STATUS}" != "RUNNABLE" ]; then
-            echo "Error: Cloud SQL instance '${{ env.DB_INSTANCE_NAME }}' is not in a RUNNABLE state. Current state: ${DB_STATUS}"
+          RESPONSE=$(curl -sf --max-time 15 "http://${{ secrets.GCE_INSTANCE_IP }}:8080/health" || true)
+          if echo "$RESPONSE" | grep -q '"status"'; then
+            echo "Bot is healthy: $RESPONSE"
+          else
+            echo "::error::Health check failed — bot may be down"
             exit 1
           fi
-          echo "✅ Cloud SQL instance is RUNNABLE."
-
-      - name: 4. Get Cloud Run Service URL
-        id: get_url
-        run: |
-          URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} --platform managed --region ${{ env.REGION }} --format='value(status.url)')
-          echo "SERVICE_URL=$URL" >> $GITHUB_ENV
-
-      - name: Health Check Passed
-        run: echo "🎉 All cloud health checks passed successfully."
-
