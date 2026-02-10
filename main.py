@@ -519,8 +519,12 @@ async def startup_event():
         log.warning("SERVICE_URL environment variable not set. Webhook will not be set.")
     else:
         webhook_url = f"{service_url}/webhook"
+        webhook_secret = os.environ.get("TELEGRAM_WEBHOOK_SECRET")
         log.info(f"Setting webhook to: {webhook_url}")
-        await application.bot.set_webhook(url=webhook_url)
+        await application.bot.set_webhook(
+            url=webhook_url,
+            secret_token=webhook_secret
+        )
 
     # Start background tasks
     _background_tasks.append(asyncio.create_task(bot_loop()))
@@ -568,10 +572,19 @@ async def health_check():
 async def handle_webhook(request: Request):
     """
     Handles incoming updates from the Telegram API webhook.
+    Validates the secret token header to prevent CSRF attacks.
     """
     if not application:
         log.error("Webhook received but application not initialized.")
         return {"status": "error", "message": "Bot not initialized"}, 500
+
+    # Validate the Telegram secret token if configured
+    webhook_secret = os.environ.get("TELEGRAM_WEBHOOK_SECRET")
+    if webhook_secret:
+        token_header = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if token_header != webhook_secret:
+            log.warning("Webhook request rejected: invalid secret token.")
+            return {"status": "error", "message": "Unauthorized"}, 403
 
     try:
         data = await request.json()

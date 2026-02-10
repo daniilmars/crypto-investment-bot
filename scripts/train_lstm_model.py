@@ -38,8 +38,8 @@ def train_lstm_for_symbol(symbol: str, sequence_length: int = 24):
     # --- 1. Data Loading & Feature Engineering ---
     log.info(f"Phase 1: Loading data and engineering features for {symbol}...")
     try:
-        prices_df = pd.read_sql(f"SELECT * FROM market_prices WHERE symbol LIKE '{symbol}%'", conn, parse_dates=['timestamp'])
-        whales_df = pd.read_sql(f"SELECT * FROM whale_transactions WHERE symbol = '{symbol.lower()}'", conn, parse_dates=['timestamp'])
+        prices_df = pd.read_sql("SELECT * FROM market_prices WHERE symbol LIKE %(sym)s", conn, params={"sym": f"{symbol}%"}, parse_dates=['timestamp'])
+        whales_df = pd.read_sql("SELECT * FROM whale_transactions WHERE symbol = %(sym)s", conn, params={"sym": symbol.lower()}, parse_dates=['timestamp'])
     except Exception as e:
         log.error(f"Failed to load data for {symbol}: {e}")
         return

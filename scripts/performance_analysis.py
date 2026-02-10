@@ -14,9 +14,9 @@ def analyze_performance(database_url: str):
         # Calculate the date 7 days ago
         seven_days_ago = datetime.utcnow() - timedelta(days=7)
         
-        # Query the trades table
-        query = f"SELECT * FROM trades WHERE entry_timestamp >= '{seven_days_ago}'"
-        trades_df = pd.read_sql(query, engine)
+        # Query the trades table using parameterized query
+        query = "SELECT * FROM trades WHERE entry_timestamp >= %(cutoff)s"
+        trades_df = pd.read_sql(query, engine, params={"cutoff": seven_days_ago})
         
         if trades_df.empty:
             print("No trades found in the last 7 days.")

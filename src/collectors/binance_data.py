@@ -1,3 +1,4 @@
+import re
 import requests
 import json
 import time
@@ -7,6 +8,17 @@ from src.logger import log
 
 MAX_RETRIES = 3
 RETRY_BACKOFF_BASE = 2
+
+# Symbols must be alphanumeric, 1-20 characters (covers BTC, BTCUSDT, etc.)
+_SYMBOL_RE = re.compile(r'^[A-Za-z0-9]{1,20}$')
+
+
+def _validate_symbol(symbol: str) -> bool:
+    """Validates that a symbol is alphanumeric and within expected length."""
+    if not symbol or not _SYMBOL_RE.match(symbol):
+        log.error(f"Invalid symbol format: {symbol!r}")
+        return False
+    return True
 
 # Binance API base URL
 BINANCE_API_URL = "https://api.binance.us/api/v3"
@@ -41,6 +53,8 @@ def get_current_price(symbol: str):
     Fetches the latest price for a specific symbol from the Binance API and saves it.
     Retries with exponential backoff on transient failures.
     """
+    if not _validate_symbol(symbol):
+        return None
     endpoint = f"{BINANCE_API_URL}/ticker/price"
     params = {'symbol': symbol}
 

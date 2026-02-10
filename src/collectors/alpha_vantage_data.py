@@ -1,9 +1,21 @@
+import re
 import requests
 import json
 import time
 from src.config import app_config
 from src.collectors.binance_data import save_price_data
 from src.logger import log
+
+# Stock symbols: 1-10 alphanumeric chars, may include dots/hyphens (e.g. BRK.B)
+_STOCK_SYMBOL_RE = re.compile(r'^[A-Za-z0-9.\-]{1,10}$')
+
+
+def _validate_stock_symbol(symbol: str) -> bool:
+    """Validates that a stock symbol matches expected format."""
+    if not symbol or not _STOCK_SYMBOL_RE.match(symbol):
+        log.error(f"Invalid stock symbol format: {symbol!r}")
+        return False
+    return True
 
 ALPHA_VANTAGE_BASE_URL = "https://www.alphavantage.co/query"
 MAX_RETRIES = 3
@@ -86,6 +98,8 @@ def get_stock_price(symbol):
     Returns:
         dict with 'symbol', 'price', 'volume', 'change_percent' or None on failure.
     """
+    if not _validate_stock_symbol(symbol):
+        return None
     data = _rate_limited_request({
         'function': 'GLOBAL_QUOTE',
         'symbol': symbol
@@ -129,6 +143,8 @@ def get_daily_prices(symbol):
         dict with 'prices' (list of floats, oldest→newest) and 'volumes' (list of floats)
         or None on failure.
     """
+    if not _validate_stock_symbol(symbol):
+        return None
     data = _rate_limited_request({
         'function': 'TIME_SERIES_DAILY',
         'symbol': symbol,
@@ -164,6 +180,8 @@ def get_company_overview(symbol):
     Returns:
         dict with 'pe_ratio', 'earnings_growth', 'revenue_growth', 'beta' or None.
     """
+    if not _validate_stock_symbol(symbol):
+        return None
     # Check cache
     cached = _company_overview_cache.get(symbol)
     if cached and (time.time() - cached['timestamp']) < CACHE_TTL:

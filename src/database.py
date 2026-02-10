@@ -110,12 +110,12 @@ def release_db_connection(conn):
                 pool.putconn(conn)
                 log.debug("Returned connection to pool.")
                 return
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning(f"Failed to return connection to pool: {e}")
     try:
         conn.close()
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning(f"Failed to close connection: {e}")
 
 def initialize_database(db_url=None):
     """
@@ -264,6 +264,17 @@ def save_optimization_result(params: dict, pnl: float):
             cursor.close()
         release_db_connection(conn)
 
+def _safe_table_query(table: str) -> str:
+    """Returns a safe COUNT query for a validated table name.
+
+    Raises ValueError if the table is not in ALLOWED_TABLES.
+    """
+    if table not in ALLOWED_TABLES:
+        raise ValueError(f"Table '{table}' is not in the allowed list")
+    # table is now guaranteed to be one of the hardcoded ALLOWED_TABLES values
+    return f"SELECT COUNT(*) FROM {table}"
+
+
 def get_db_stats() -> dict:
     """Retrieves statistics from the database."""
     stats = {}
@@ -277,7 +288,7 @@ def get_db_stats() -> dict:
             if table not in ALLOWED_TABLES:
                 continue
             try:
-                cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                cursor.execute(_safe_table_query(table))
                 stats[table] = cursor.fetchone()[0]
             except Exception as e:
                 stats[table] = f"Error: {e}"
@@ -458,7 +469,7 @@ def get_table_counts() -> dict:
                 if table not in ALLOWED_TABLES:
                     continue
                 try:
-                    cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                    cursor.execute(_safe_table_query(table))
                     counts[table] = cursor.fetchone()[0]
                 except (sqlite3.OperationalError, psycopg2.errors.UndefinedTable):
                     counts[table] = 0

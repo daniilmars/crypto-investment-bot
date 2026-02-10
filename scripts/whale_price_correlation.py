@@ -28,21 +28,21 @@ def analyze_whale_data_for_symbol(symbol: str):
     # --- 1. Data Loading & Preprocessing ---
     log.info(f"Phase 1: Loading and preparing data for {symbol}...")
     try:
-        prices_df = pd.read_sql(f"SELECT * FROM market_prices WHERE symbol LIKE '{symbol}%'", conn, parse_dates=['timestamp'])
+        prices_df = pd.read_sql("SELECT * FROM market_prices WHERE symbol LIKE %(sym)s", conn, params={"sym": f"{symbol}%"}, parse_dates=['timestamp'])
         prices_df.set_index('timestamp', inplace=True)
         if prices_df.index.tz is None:
             prices_df.index = prices_df.index.tz_localize('UTC')
         else:
             prices_df.index = prices_df.index.tz_convert('UTC')
 
-        whales_df = pd.read_sql(f"SELECT * FROM whale_transactions WHERE symbol = '{symbol.lower()}'", conn, parse_dates=['timestamp'])
+        whales_df = pd.read_sql("SELECT * FROM whale_transactions WHERE symbol = %(sym)s", conn, params={"sym": symbol.lower()}, parse_dates=['timestamp'])
         whales_df.set_index('timestamp', inplace=True)
         if whales_df.index.tz is None:
             whales_df.index = whales_df.index.tz_localize('UTC')
         else:
             whales_df.index = whales_df.index.tz_convert('UTC')
 
-        sentiment_df = pd.read_sql(f"SELECT * FROM news_sentiment WHERE symbol = '{symbol.lower()}'", conn, parse_dates=['timestamp'])
+        sentiment_df = pd.read_sql("SELECT * FROM news_sentiment WHERE symbol = %(sym)s", conn, params={"sym": symbol.lower()}, parse_dates=['timestamp'])
         sentiment_df.set_index('timestamp', inplace=True)
         if sentiment_df.index.tz is None:
             sentiment_df.index = sentiment_df.index.tz_localize('UTC')

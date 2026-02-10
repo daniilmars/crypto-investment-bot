@@ -33,9 +33,9 @@ def analyze_data_quality():
 
             # --- 1. Data Loading ---
             try:
-                prices_df = pd.read_sql(f"SELECT * FROM market_prices WHERE symbol LIKE '{symbol}%'", conn, parse_dates=['timestamp'])
-                whales_df = pd.read_sql(f"SELECT * FROM whale_transactions WHERE symbol = '{symbol.lower()}'", conn, parse_dates=['timestamp'])
-                sentiment_df = pd.read_sql(f"SELECT * FROM news_sentiment WHERE symbol = '{symbol.lower()}'", conn, parse_dates=['timestamp'])
+                prices_df = pd.read_sql("SELECT * FROM market_prices WHERE symbol LIKE %(sym)s", conn, params={"sym": f"{symbol}%"}, parse_dates=['timestamp'])
+                whales_df = pd.read_sql("SELECT * FROM whale_transactions WHERE symbol = %(sym)s", conn, params={"sym": symbol.lower()}, parse_dates=['timestamp'])
+                sentiment_df = pd.read_sql("SELECT * FROM news_sentiment WHERE symbol = %(sym)s", conn, params={"sym": symbol.lower()}, parse_dates=['timestamp'])
             except Exception as e:
                 log.error(f"Failed to load data for {symbol}: {e}")
                 report_file.write(f"Error loading data: {e}\\n\\n")

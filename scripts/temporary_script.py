@@ -15,9 +15,12 @@ def view_whale_transactions():
     whale transactions.
     """
     log.info("--- Connecting to PostgreSQL to view whale transactions ---")
-    
-    db_url = "postgresql://postgres:Arugambay2023@35.193.176.100/crypto_data"
-    
+
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        log.error("DATABASE_URL environment variable is not set.")
+        return
+
     try:
         with closing(psycopg2.connect(db_url)) as conn:
             # Use pandas to read the data for nice formatting
