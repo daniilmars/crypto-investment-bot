@@ -86,39 +86,48 @@ jobs:
       - name: Deploy on VM
         run: |
           gcloud compute ssh ${{ env.INSTANCE_NAME }} \
-            --zone=${{ env.ZONE }} --quiet --command='
+            --zone=${{ env.ZONE }} --quiet \
+            --ssh-flag="-o ServerAliveInterval=30" \
+            --ssh-flag="-o ServerAliveCountMax=20" \
+            --command='
             set -e
             DEPLOY_DIR="$HOME/crypto-investment-bot"
             mkdir -p "$DEPLOY_DIR"
             tar xzf /tmp/deploy.tar.gz -C "$DEPLOY_DIR"
             rm /tmp/deploy.tar.gz
-            cd "$DEPLOY_DIR"
+
+            # Ensure swap exists (e2-micro needs it to build TensorFlow)
+            if [ "$(sudo swapon --show | wc -l)" -eq 0 ]; then
+              sudo fallocate -l 2G /var/swapfile
+              sudo chmod 600 /var/swapfile
+              sudo mkswap /var/swapfile
+              sudo swapon /var/swapfile
+            fi
 
             # Stop and remove existing container
-            docker stop crypto-bot 2>/dev/null || true
-            docker rm crypto-bot 2>/dev/null || true
+            sudo docker stop crypto-bot 2>/dev/null || true
+            sudo docker rm crypto-bot 2>/dev/null || true
 
             # Build new image
-            docker build -t crypto-bot .
+            sudo docker build -t crypto-bot "$DEPLOY_DIR"
 
             # Run container
-            docker run -d \
+            sudo docker run -d \
               --name crypto-bot \
               --restart unless-stopped \
               -p 8080:8080 \
-              --env-file .env \
+              --env-file "$DEPLOY_DIR/.env" \
               -e GOOGLE_GENAI_USE_VERTEXAI=true \
-              -v "$DEPLOY_DIR/config/settings.yaml:/app/config/settings.yaml:ro" \
               -v crypto-bot-data:/app/data \
               crypto-bot
 
-            docker ps --filter name=crypto-bot
+            sudo docker ps --filter name=crypto-bot
           '
 
       - name: Verify deployment
         run: |
-          echo "Waiting 30s for container to start..."
-          sleep 30
+          echo "Waiting 90s for container to start (TensorFlow import is slow on e2-micro)..."
+          sleep 90
           EXTERNAL_IP=$(gcloud compute instances describe ${{ env.INSTANCE_NAME }} \
             --zone=${{ env.ZONE }} \
             --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
