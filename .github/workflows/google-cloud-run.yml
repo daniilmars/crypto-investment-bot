@@ -93,10 +93,26 @@ jobs:
             tar xzf /tmp/deploy.tar.gz -C "$DEPLOY_DIR"
             rm /tmp/deploy.tar.gz
             cd "$DEPLOY_DIR"
-            docker compose down --remove-orphans 2>/dev/null || true
-            docker compose build
-            docker compose up -d
-            docker compose ps
+
+            # Stop and remove existing container
+            docker stop crypto-bot 2>/dev/null || true
+            docker rm crypto-bot 2>/dev/null || true
+
+            # Build new image
+            docker build -t crypto-bot .
+
+            # Run container
+            docker run -d \
+              --name crypto-bot \
+              --restart unless-stopped \
+              -p 8080:8080 \
+              --env-file .env \
+              -e GOOGLE_GENAI_USE_VERTEXAI=true \
+              -v "$DEPLOY_DIR/config/settings.yaml:/app/config/settings.yaml:ro" \
+              -v crypto-bot-data:/app/data \
+              crypto-bot
+
+            docker ps --filter name=crypto-bot
           '
 
       - name: Verify deployment
