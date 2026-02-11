@@ -76,15 +76,36 @@ jobs:
 
           settings:
             watch_list:
+              # Tier 1 — Large caps with strong whale data
               - "BTC"
               - "ETH"
-              - "SOL"
               - "XRP"
+              - "TRX"
+              # Tier 2 — Major alts
+              - "SOL"
+              - "BNB"
               - "ADA"
               - "AVAX"
               - "DOGE"
-              - "BNB"
-              - "TRX"
+              - "MATIC"
+              - "LINK"
+              - "XLM"
+              - "SHIB"
+              # Tier 3 — Top-25 by market cap (price + news, no whale data)
+              - "DOT"
+              - "UNI"
+              - "ATOM"
+              - "LTC"
+              - "NEAR"
+              - "APT"
+              - "SUI"
+              - "FIL"
+              - "ARB"
+              - "OP"
+              - "PEPE"
+              - "ICP"
+              - "HBAR"
+              - "RENDER"
 
             min_whale_transaction_usd: 5000000
             sma_period: 20

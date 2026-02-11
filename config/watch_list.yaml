@@ -1,15 +1,35 @@
 # A list of cryptocurrency symbols to monitor for trading signals.
 symbols:
+  # Tier 1 — Large caps with strong whale data
   - BTC
   - ETH
-  - SOL
   - XRP
+  - TRX
+  # Tier 2 — Major alts
+  - SOL
+  - BNB
   - ADA
   - AVAX
   - DOGE
   - MATIC
-  - BNB
-  - TRX
+  - LINK
+  - XLM
+  - SHIB
+  # Tier 3 — Top-25 by market cap (price + news, no whale data)
+  - DOT
+  - UNI
+  - ATOM
+  - LTC
+  - NEAR
+  - APT
+  - SUI
+  - FIL
+  - ARB
+  - OP
+  - PEPE
+  - ICP
+  - HBAR
+  - RENDER
 
 # A list of stablecoin symbols (lowercase) to monitor for exchange inflows.
 stablecoins:
