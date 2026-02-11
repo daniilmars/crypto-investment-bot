@@ -68,6 +68,71 @@ jobs:
           EOF
           sed -i 's/^[[:space:]]*//' .env
 
+      - name: Write settings.yaml
+        run: |
+          cat > config/settings.yaml << 'SETTINGS_EOF'
+          gcp_billing:
+            enabled: true
+
+          settings:
+            watch_list:
+              - "BTC"
+              - "ETH"
+              - "SOL"
+              - "XRP"
+              - "ADA"
+              - "AVAX"
+              - "DOGE"
+              - "BNB"
+              - "TRX"
+
+            min_whale_transaction_usd: 5000000
+            sma_period: 20
+            rsi_period: 14
+            rsi_overbought_threshold: 70
+            rsi_oversold_threshold: 30
+
+            high_interest_wallets:
+              - "Grayscale"
+              - "US Government"
+
+            stablecoins_to_monitor:
+              - "usdt"
+              - "usdc"
+              - "busd"
+              - "dai"
+              - "tusd"
+              - "fdusd"
+              - "pyusd"
+
+            stablecoin_inflow_threshold_usd: 100000000
+            transaction_velocity_baseline_hours: 24
+            transaction_velocity_threshold_multiplier: 5.0
+            status_report_hours: 24
+
+            paper_trading: true
+            paper_trading_initial_capital: 10000.0
+            trade_risk_percentage: 0.01
+            stop_loss_percentage: 0.02
+            take_profit_percentage: 0.05
+            max_concurrent_positions: 3
+
+            regular_status_update:
+              enabled: true
+              interval_hours: 1
+
+            news_analysis:
+              enabled: true
+              volume_spike_multiplier: 3.0
+              sentiment_shift_threshold: 0.3
+              sentiment_buy_threshold: 0.15
+              sentiment_sell_threshold: -0.15
+              min_gemini_confidence: 0.6
+
+            stock_trading:
+              enabled: false
+          SETTINGS_EOF
+
       - name: Create deployment bundle
         run: |
           tar czf /tmp/deploy.tar.gz \
