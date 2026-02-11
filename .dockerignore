@@ -22,5 +22,4 @@ docs/
 data/
 *.db
 
-# Ignore local configuration - this should be passed via env vars in production
-config/settings.yaml
+# Note: config/settings.yaml is generated during CI deploy and must NOT be ignored
