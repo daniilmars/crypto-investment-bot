@@ -36,7 +36,10 @@ from src.database import (get_historical_prices,
                           get_transaction_timestamps_since, initialize_database,
                           save_signal)
 from src.execution.binance_trader import (get_account_balance,
-                                          get_open_positions, place_order)
+                                          get_open_positions, place_order,
+                                          _is_live_trading, _get_trading_mode)
+from src.execution.circuit_breaker import (check_circuit_breaker, get_daily_pnl,
+                                           get_recent_closed_trades)
 from src.logger import log
 from src.notify.telegram_bot import (send_news_alert, send_telegram_alert,
                                      start_bot)
@@ -194,13 +197,18 @@ async def run_bot_cycle():
         klines_close = [k['close'] for k in klines] if klines else None
 
         # --- Position Monitoring with Trailing Stop ---
-        if paper_trading:
+        # For live trading, OCO brackets handle SL/TP server-side, but we still
+        # monitor and log. For paper trading, this is the primary protection.
+        is_live = _is_live_trading()
+        trading_mode = _get_trading_mode()
+        if paper_trading or is_live:
             open_positions = get_open_positions()
             for position in open_positions:
                 if position['symbol'] == symbol and position['status'] == 'OPEN':
                     entry_price = position['entry_price']
                     pnl_percentage = (current_price - entry_price) / entry_price
                     order_id = position['order_id']
+                    mode_label = trading_mode.upper()
 
                     # Update trailing stop peak tracker
                     peak_price = _update_trailing_stop(order_id, current_price)
@@ -211,7 +219,7 @@ async def run_bot_cycle():
                     if trailing_stop_enabled and pnl_percentage >= trailing_stop_activation:
                         if drawdown_from_peak >= trailing_stop_distance:
                             locked_gain = (peak_price - entry_price) / entry_price
-                            log.info(f"[PAPER TRADE] Trailing stop triggered for {symbol}. "
+                            log.info(f"[{mode_label}] Trailing stop triggered for {symbol}. "
                                      f"Peak: ${peak_price:,.2f}, Current: ${current_price:,.2f}")
                             place_order(symbol, "SELL", position['quantity'], current_price,
                                         existing_order_id=order_id)
@@ -224,7 +232,7 @@ async def run_bot_cycle():
 
                     # Fixed stop-loss (always active as a floor)
                     if pnl_percentage <= -stop_loss_percentage:
-                        log.info(f"[PAPER TRADE] Stop-loss hit for {symbol}. Closing position.")
+                        log.info(f"[{mode_label}] Stop-loss hit for {symbol}. Closing position.")
                         place_order(symbol, "SELL", position['quantity'], current_price,
                                     existing_order_id=order_id)
                         _clear_trailing_stop(order_id)
@@ -233,7 +241,7 @@ async def run_bot_cycle():
 
                     # Take profit (as ultimate cap)
                     elif pnl_percentage >= take_profit_percentage:
-                        log.info(f"[PAPER TRADE] Take-profit hit for {symbol}. Closing position.")
+                        log.info(f"[{mode_label}] Take-profit hit for {symbol}. Closing position.")
                         place_order(symbol, "SELL", position['quantity'], current_price,
                                     existing_order_id=order_id)
                         _clear_trailing_stop(order_id)
@@ -349,11 +357,37 @@ async def run_bot_cycle():
         signal['mtf_direction'] = mtf['confirmed_direction']
         save_signal(signal)
 
-        # --- 4. Paper Trading Logic with Dynamic Sizing ---
-        if paper_trading:
-            log.info(f"Processing signal for paper trading...")
+        # --- 4. Trade Execution (Paper & Live) with Dynamic Sizing ---
+        live_config = settings.get('live_trading', {})
+        is_live = _is_live_trading()
+        can_trade = paper_trading or is_live
+
+        if can_trade:
+            # Circuit breaker check (live trading only)
+            if is_live:
+                cb_balance = get_account_balance().get('USDT', 0)
+                cb_daily_pnl = get_daily_pnl()
+                cb_recent_trades = get_recent_closed_trades(limit=live_config.get('max_consecutive_losses', 3))
+                cb_tripped, cb_reason = check_circuit_breaker(cb_balance, cb_daily_pnl, cb_recent_trades)
+                if cb_tripped:
+                    log.warning(f"Circuit breaker active: {cb_reason}")
+                    await send_telegram_alert({
+                        "signal": "CIRCUIT_BREAKER", "symbol": symbol,
+                        "current_price": current_price,
+                        "reason": f"Circuit breaker: {cb_reason}"
+                    })
+                    continue
+
+            log.info(f"Processing signal for {trading_mode} trading...")
             open_positions = get_open_positions()
-            current_balance = get_account_balance().get('total_usd', paper_trading_initial_capital)
+
+            # Use live or paper initial capital
+            if is_live:
+                current_balance = get_account_balance().get('USDT', live_config.get('initial_capital', 100.0))
+                active_max_positions = live_config.get('max_concurrent_positions', max_concurrent_positions)
+            else:
+                current_balance = get_account_balance().get('total_usd', paper_trading_initial_capital)
+                active_max_positions = max_concurrent_positions
 
             # Apply regime risk multiplier to effective risk percentage
             risk_multiplier = regime_params.get('risk_multiplier', 1.0)
@@ -362,28 +396,33 @@ async def run_bot_cycle():
             if signal['signal'] == "BUY":
                 if any(p['symbol'] == symbol and p['status'] == 'OPEN' for p in open_positions):
                     log.info(f"Skipping BUY for {symbol}: Position already open.")
-                elif len(open_positions) >= max_concurrent_positions:
+                elif len(open_positions) >= active_max_positions:
                     log.info(
-                        f"Skipping BUY for {symbol}: Max concurrent positions ({max_concurrent_positions}) reached.")
+                        f"Skipping BUY for {symbol}: Max concurrent positions ({active_max_positions}) reached.")
                 else:
                     capital_to_risk = current_balance * adjusted_risk_pct
                     quantity_to_buy = capital_to_risk / current_price
                     if quantity_to_buy * current_price > current_balance:
                         log.warning(f"Skipping BUY for {symbol}: Insufficient balance.")
                     else:
-                        log.info(f"Executing paper trade: BUY {quantity_to_buy:.4f} {symbol} "
+                        log.info(f"Executing {trading_mode} trade: BUY {quantity_to_buy:.6f} {symbol} "
                                  f"(risk={adjusted_risk_pct:.4f}, regime={regime}).")
-                        place_order(symbol, "BUY", quantity_to_buy, current_price)
+                        order_result = place_order(symbol, "BUY", quantity_to_buy, current_price)
+                        # Enrich signal with order details for Telegram alert
+                        if order_result.get('status') == 'FILLED':
+                            signal['order_result'] = order_result
                         await send_telegram_alert(signal)
 
             elif signal['signal'] == "SELL":
                 position_to_close = next(
                     (p for p in open_positions if p['symbol'] == symbol and p['status'] == 'OPEN'), None)
                 if position_to_close:
-                    log.info(f"Executing paper trade: SELL {position_to_close['quantity']:.4f} {symbol}.")
-                    place_order(symbol, "SELL", position_to_close['quantity'], current_price,
+                    log.info(f"Executing {trading_mode} trade: SELL {position_to_close['quantity']:.6f} {symbol}.")
+                    order_result = place_order(symbol, "SELL", position_to_close['quantity'], current_price,
                                 existing_order_id=position_to_close['order_id'])
                     _clear_trailing_stop(position_to_close['order_id'])
+                    if order_result.get('status') == 'CLOSED':
+                        signal['order_result'] = order_result
                     await send_telegram_alert(signal)
                 else:
                     log.info(f"Skipping SELL for {symbol}: No open position found.")

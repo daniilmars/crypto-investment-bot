@@ -23,8 +23,9 @@ def test_initialize_database_creates_tables(mock_get_db_connection, mock_release
     from src.database import initialize_database
     initialize_database()
 
-    # Assert: Check if the CREATE TABLE statements were executed (6 tables total)
-    assert mock_cursor.execute.call_count == 6
+    # Assert: Check if CREATE TABLE + ALTER TABLE statements were executed
+    # 7 CREATE TABLEs + 5 ALTER TABLE (new trade columns) = 12
+    assert mock_cursor.execute.call_count == 12
 
     # Check the SQL statements (case-insensitive and ignoring whitespace)
     executed_queries = [' '.join(call[0][0].split()) for call in mock_cursor.execute.call_args_list]

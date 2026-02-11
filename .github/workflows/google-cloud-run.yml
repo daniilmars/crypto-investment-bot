@@ -51,6 +51,8 @@ jobs:
           cat > .env << EOF
           BINANCE_API_KEY=${{ secrets.BINANCE_API_KEY }}
           BINANCE_API_SECRET=${{ secrets.BINANCE_API_SECRET }}
+          BINANCE_API_KEY_TESTNET=${{ secrets.BINANCE_API_KEY_TESTNET }}
+          BINANCE_API_SECRET_TESTNET=${{ secrets.BINANCE_API_SECRET_TESTNET }}
           WHALE_ALERT_API_KEY=${{ secrets.WHALE_ALERT_API_KEY }}
           TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}
@@ -131,7 +133,7 @@ jobs:
             transaction_velocity_threshold_multiplier: 5.0
             status_report_hours: 24
 
-            paper_trading: true
+            paper_trading: false
             paper_trading_initial_capital: 10000.0
             trade_risk_percentage: 0.01
             stop_loss_percentage: 0.02
@@ -149,6 +151,20 @@ jobs:
               sentiment_buy_threshold: 0.15
               sentiment_sell_threshold: -0.15
               min_gemini_confidence: 0.6
+
+            live_trading:
+              enabled: true
+              mode: "testnet"
+              initial_capital: 100.0
+              max_concurrent_positions: 2
+              trade_risk_percentage: 0.05
+              stop_loss_percentage: 0.03
+              take_profit_percentage: 0.06
+              daily_loss_limit_pct: 0.10
+              max_drawdown_pct: 0.25
+              balance_floor_usd: 70.0
+              max_consecutive_losses: 3
+              cooldown_hours: 24
 
             stock_trading:
               enabled: false

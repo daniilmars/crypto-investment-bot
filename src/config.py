@@ -84,6 +84,17 @@ def _load_settings(base_config):
         stock_trading['watch_list'] = [symbol.strip() for symbol in stock_watch_list_env.split(';')]
         settings['stock_trading'] = stock_trading
 
+    # Live trading env var overrides
+    live_trading = settings.get('live_trading', {})
+    live_enabled_env = _get_env('LIVE_TRADING_ENABLED')
+    if live_enabled_env is not None:
+        live_trading['enabled'] = live_enabled_env.lower() == 'true'
+    live_mode_env = _get_env('LIVE_TRADING_MODE')
+    if live_mode_env:
+        live_trading['mode'] = live_mode_env
+    if live_trading:
+        settings['live_trading'] = live_trading
+
     return settings
 
 def _load_database_config(config):

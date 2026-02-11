@@ -41,7 +41,7 @@ def test_get_current_price_success(mock_requests_get, mock_db_connection):
     # Assert: Check the outcome
     # 1. The API was called correctly (with timeout)
     mock_requests_get.assert_called_once_with(
-        "https://api.binance.us/api/v3/ticker/price",
+        "https://api.binance.com/api/v3/ticker/price",
         params={'symbol': 'BTCUSDT'},
         timeout=30
     )

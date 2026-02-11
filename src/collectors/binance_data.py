@@ -21,7 +21,7 @@ def _validate_symbol(symbol: str) -> bool:
     return True
 
 # Binance API base URL
-BINANCE_API_URL = "https://api.binance.us/api/v3"
+BINANCE_API_URL = "https://api.binance.com/api/v3"
 
 def save_price_data(price_data: dict):
     """Saves price data to the database."""

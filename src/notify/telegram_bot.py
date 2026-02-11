@@ -9,7 +9,10 @@ from src.database import (
 )
 from src.analysis.gemini_summary import generate_market_summary
 from src.gcp.costs import get_gcp_billing_summary
-from src.execution.binance_trader import get_open_positions
+from src.execution.binance_trader import (get_open_positions, get_account_balance,
+                                          _is_live_trading, _get_trading_mode,
+                                          _get_live_balance)
+from src.execution.circuit_breaker import get_circuit_breaker_status
 from src.collectors.binance_data import get_current_price
 from src.state import bot_is_running
 
@@ -43,7 +46,7 @@ async def send_telegram_message(bot: Bot, chat_id: str, message: str):
 
 # --- Alerting Functions ---
 async def send_telegram_alert(signal: dict):
-    """Formats and sends a signal alert."""
+    """Formats and sends a signal alert, with live trade details when available."""
     if not telegram_config.get('enabled') or not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
         log.error("Telegram bot is not configured.")
         return
@@ -54,12 +57,38 @@ async def send_telegram_alert(signal: dict):
     reason = signal.get('reason', 'No reason provided.')
     asset_type = signal.get('asset_type', 'crypto')
     alert_header = "Stock Alert" if asset_type == "stock" else "Crypto Alert"
+
+    # Show trading mode in header for non-paper modes
+    mode = _get_trading_mode()
+    if mode != 'paper':
+        alert_header = f"{alert_header} [{mode.upper()}]"
+
     message = (
         f"🚨 *{alert_header}* 🚨\n\n"
         f"*{signal_type} Signal for {symbol}*\n\n"
         f"*Price:* ${price:,.2f}\n"
         f"*Reason:* {reason}"
     )
+
+    # Append live trade details if present
+    order_result = signal.get('order_result')
+    if order_result:
+        fill_price = order_result.get('price', 0)
+        fees = order_result.get('fees', 0)
+        exchange_id = order_result.get('exchange_order_id', '')
+        pnl = order_result.get('pnl')
+        message += f"\n\n*Fill Price:* ${fill_price:,.2f}"
+        if fees:
+            message += f"\n*Fees:* ${fees:.4f}"
+        if exchange_id:
+            message += f"\n*Exchange Order:* `{exchange_id}`"
+        if pnl is not None:
+            message += f"\n*PnL:* ${pnl:,.2f}"
+        oco = order_result.get('oco')
+        if oco:
+            message += (f"\n*OCO Bracket:* TP=${oco['take_profit']:,.2f} / "
+                        f"SL=${oco['stop_loss']:,.2f}")
+
     await send_telegram_message(bot, CHAT_ID, message)
 
 async def send_news_alert(triggered_symbols, sentiment_data, gemini_assessments=None):
@@ -123,8 +152,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🤖 *Crypto Investment Bot Help*\n\n"
         "`/start` - Check if the bot is running.\n"
         "`/status` - Get a detailed market and bot health summary.\n"
-        "`/positions` - View open paper trades.\n"
+        "`/positions` - View open trades.\n"
         "`/performance` - Get a performance report.\n"
+        "`/trading_mode` - Show current trading mode.\n"
+        "`/livebalance` - Show real Binance balance.\n"
+        "`/circuitbreaker` - Show circuit breaker status.\n"
         "`/pause` - Pause new trades.\n"
         "`/resume` - Resume trading.\n"
         "`/db_stats` - View database statistics.\n"
@@ -267,6 +299,61 @@ async def db_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log.error(f"Error fetching DB stats: {e}")
         await update.message.reply_text("Error fetching database statistics.")
 
+@authorized
+async def trading_mode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /trading_mode command."""
+    mode = _get_trading_mode()
+    is_live = _is_live_trading()
+    settings = app_config.get('settings', {})
+    paper = settings.get('paper_trading', True)
+    live_config = settings.get('live_trading', {})
+    message = (
+        f"*Trading Mode:* `{mode}`\n\n"
+        f"*paper\\_trading:* `{paper}`\n"
+        f"*live\\_trading.enabled:* `{live_config.get('enabled', False)}`\n"
+        f"*live\\_trading.mode:* `{live_config.get('mode', 'testnet')}`"
+    )
+    await update.message.reply_text(message, parse_mode='Markdown')
+
+
+@authorized
+async def livebalance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /livebalance command."""
+    if not _is_live_trading():
+        await update.message.reply_text("Live trading is not active. Showing paper balance.")
+    balance = get_account_balance()
+    mode = _get_trading_mode()
+    message = (
+        f"💰 *Balance [{mode.upper()}]*\n\n"
+        f"*Available USDT:* ${balance.get('USDT', 0):,.2f}\n"
+        f"*Total USD:* ${balance.get('total_usd', 0):,.2f}"
+    )
+    await update.message.reply_text(message, parse_mode='Markdown')
+
+
+@authorized
+async def circuitbreaker_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /circuitbreaker command."""
+    cb_status = get_circuit_breaker_status()
+    status_emoji = "🔴" if cb_status['in_cooldown'] else "🟢"
+    message = (
+        f"{status_emoji} *Circuit Breaker Status*\n\n"
+        f"*Active:* {'YES — trading halted' if cb_status['in_cooldown'] else 'No — trading allowed'}\n"
+        f"*Cooldown:* {cb_status['cooldown_hours']}h\n\n"
+        f"*Thresholds:*\n"
+        f"- Balance floor: ${cb_status['balance_floor']:.2f}\n"
+        f"- Daily loss limit: {cb_status['daily_loss_limit_pct']*100:.0f}%\n"
+        f"- Max drawdown: {cb_status['max_drawdown_pct']*100:.0f}%\n"
+        f"- Max consecutive losses: {cb_status['max_consecutive_losses']}"
+    )
+    last = cb_status.get('last_event')
+    if last:
+        message += (f"\n\n*Last event:* {last.get('event_type', 'unknown')}\n"
+                    f"*Details:* {last.get('details', 'N/A')}\n"
+                    f"*Triggered:* {last.get('triggered_at', 'N/A')}")
+    await update.message.reply_text(message, parse_mode='Markdown')
+
+
 # --- Bot Lifecycle Management ---
 async def start_bot() -> Application:
     """
@@ -284,7 +371,10 @@ async def start_bot() -> Application:
             CommandHandler("status", status), CommandHandler("db_stats", db_stats),
             CommandHandler("positions", positions), CommandHandler("performance", performance),
             CommandHandler("pause", pause), CommandHandler("resume", resume),
-            CommandHandler("gcosts", gcosts), CommandHandler("db_schema", db_schema)
+            CommandHandler("gcosts", gcosts), CommandHandler("db_schema", db_schema),
+            CommandHandler("trading_mode", trading_mode_cmd),
+            CommandHandler("livebalance", livebalance),
+            CommandHandler("circuitbreaker", circuitbreaker_cmd),
         ]
         application.add_handlers(handlers)
         await application.initialize()

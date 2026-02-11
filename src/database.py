@@ -23,7 +23,7 @@ def _cursor(conn):
 # --- Connection Pool (for PostgreSQL) ---
 _pg_pool = None
 
-ALLOWED_TABLES = frozenset({"market_prices", "whale_transactions", "signals", "trades", "optimization_results", "news_sentiment"})
+ALLOWED_TABLES = frozenset({"market_prices", "whale_transactions", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events"})
 
 # --- Database Connection Management ---
 
@@ -222,6 +222,45 @@ def initialize_database(db_url=None):
                 PRIMARY KEY (timestamp, symbol)
             )'''
         cursor.execute(news_sentiment_sql)
+
+        # Circuit Breaker Events
+        circuit_breaker_sql = '''
+            CREATE TABLE IF NOT EXISTS circuit_breaker_events (
+                id SERIAL PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                details TEXT,
+                triggered_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                resolved_at TIMESTAMPTZ
+            )''' if is_postgres_conn else '''
+            CREATE TABLE IF NOT EXISTS circuit_breaker_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT NOT NULL,
+                details TEXT,
+                triggered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                resolved_at TIMESTAMP
+            )'''
+        cursor.execute(circuit_breaker_sql)
+
+        # --- Migrate trades table: add live trading columns if missing ---
+        new_trade_columns = [
+            ("trading_mode", "TEXT DEFAULT 'paper'"),
+            ("exchange_order_id", "TEXT"),
+            ("fees", "REAL DEFAULT 0"),
+            ("fill_price", "REAL"),
+            ("fill_quantity", "REAL"),
+        ]
+        for col_name, col_type in new_trade_columns:
+            try:
+                cursor.execute(f"ALTER TABLE trades ADD COLUMN {col_name} {col_type}")
+                log.info(f"Added column '{col_name}' to trades table.")
+            except (sqlite3.OperationalError, psycopg2.errors.DuplicateColumn):
+                # Column already exists — safe to ignore
+                if is_postgres_conn:
+                    conn.rollback()
+            except Exception as e:
+                log.warning(f"Could not add column '{col_name}' to trades: {e}")
+                if is_postgres_conn:
+                    conn.rollback()
 
         conn.commit()
     except (sqlite3.Error, psycopg2.Error) as e:
