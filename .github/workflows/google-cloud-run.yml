@@ -7,8 +7,8 @@ on:
 
 env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  ZONE: us-central1-a
-  INSTANCE_NAME: crypto-bot
+  ZONE: europe-west3-a
+  INSTANCE_NAME: crypto-bot-eu
 
 jobs:
   test:
@@ -59,7 +59,7 @@ jobs:
           TELEGRAM_AUTHORIZED_USER_IDS=${{ secrets.TELEGRAM_AUTHORIZED_USER_IDS }}
           NEWSAPI_ORG_KEY=${{ secrets.NEWSAPI_ORG_KEY }}
           GCP_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }}
-          GCP_LOCATION=us-central1
+          GCP_LOCATION=europe-west3
           ALPHA_VANTAGE_API_KEY=${{ secrets.ALPHA_VANTAGE_API_KEY }}
           ALPACA_API_KEY=${{ secrets.ALPACA_API_KEY }}
           ALPACA_API_SECRET=${{ secrets.ALPACA_API_SECRET }}
@@ -169,7 +169,7 @@ jobs:
               cooldown_hours: 24
 
             stock_trading:
-              enabled: false
+              enabled: true
               broker: "paper_only"
               alpaca:
                 paper: true
@@ -226,6 +226,10 @@ jobs:
             # Build new image
             sudo docker build -t crypto-bot "$DEPLOY_DIR"
 
+            # Ensure persistent data directory exists with correct ownership
+            sudo mkdir -p /mnt/stateful_partition/data
+            sudo chown -R 1000:1000 /mnt/stateful_partition/data
+
             # Run container
             sudo docker run -d \
               --name crypto-bot \
@@ -233,7 +237,7 @@ jobs:
               -p 8080:8080 \
               --env-file "$DEPLOY_DIR/.env" \
               -e GOOGLE_GENAI_USE_VERTEXAI=true \
-              -v crypto-bot-data:/app/data \
+              -v /mnt/stateful_partition/data:/app/data \
               crypto-bot
 
             sudo docker ps --filter name=crypto-bot
@@ -241,8 +245,8 @@ jobs:
 
       - name: Verify deployment
         run: |
-          echo "Waiting 90s for container to start (TensorFlow import is slow on e2-micro)..."
-          sleep 90
+          echo "Waiting 120s for container to start (TensorFlow import is slow on e2-micro)..."
+          sleep 120
           EXTERNAL_IP=$(gcloud compute instances describe ${{ env.INSTANCE_NAME }} \
             --zone=${{ env.ZONE }} \
             --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
