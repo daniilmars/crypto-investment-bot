@@ -248,6 +248,7 @@ def initialize_database(db_url=None):
             ("fees", "REAL DEFAULT 0"),
             ("fill_price", "REAL"),
             ("fill_quantity", "REAL"),
+            ("asset_type", "TEXT DEFAULT 'crypto'"),
         ]
         for col_name, col_type in new_trade_columns:
             try:

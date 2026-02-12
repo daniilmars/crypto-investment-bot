@@ -40,6 +40,10 @@ from src.execution.binance_trader import (get_account_balance,
                                           _is_live_trading, _get_trading_mode)
 from src.execution.circuit_breaker import (check_circuit_breaker, get_daily_pnl,
                                            get_recent_closed_trades)
+from src.execution.stock_trader import (
+    place_stock_order, get_stock_positions, get_stock_balance,
+    _is_market_open, _check_pdt_rule,
+)
 from src.logger import log
 from src.notify.telegram_bot import (send_news_alert, send_telegram_alert,
                                      start_bot)
@@ -456,7 +460,15 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None, gemi
         log.info("Stock watch list is empty. Skipping stock cycle.")
         return
 
-    log.info(f"--- Starting stock trading cycle for {len(watch_list)} symbols ---")
+    broker = stock_settings.get('broker', 'paper_only')
+    use_alpaca_data = broker == 'alpaca'
+
+    # Skip if market is closed and using Alpaca broker
+    if broker == 'alpaca' and not _is_market_open():
+        log.info("NYSE is closed. Skipping stock cycle (broker=alpaca).")
+        return
+
+    log.info(f"--- Starting stock trading cycle for {len(watch_list)} symbols (broker={broker}) ---")
 
     # Load stock-specific settings with fallbacks to shared settings
     sma_period = stock_settings.get('sma_period', settings.get('sma_period', 20))
@@ -482,8 +494,12 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None, gemi
     for symbol in watch_list:
         log.info(f"--- Processing stock: {symbol} ---")
 
-        # Fetch current stock price
-        price_data = get_stock_price(symbol)
+        # Fetch current stock price (Alpaca or Alpha Vantage)
+        if use_alpaca_data:
+            from src.collectors.alpaca_data import get_stock_price_alpaca
+            price_data = get_stock_price_alpaca(symbol)
+        else:
+            price_data = get_stock_price(symbol)
         if not price_data or not price_data.get('price'):
             log.warning(f"Could not fetch current price for stock {symbol}. Skipping.")
             continue
@@ -493,7 +509,7 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None, gemi
 
         # --- Position Monitoring with Trailing Stop ---
         if paper_trading:
-            open_positions = get_open_positions()
+            open_positions = get_open_positions(asset_type='stock')
             for position in open_positions:
                 if position['symbol'] == symbol and position['status'] == 'OPEN':
                     entry_price = position['entry_price']
@@ -508,7 +524,7 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None, gemi
                             locked_gain = (peak_price - entry_price) / entry_price
                             log.info(f"[PAPER TRADE] Trailing stop triggered for stock {symbol}.")
                             place_order(symbol, "SELL", position['quantity'], current_price,
-                                        existing_order_id=order_id)
+                                        existing_order_id=order_id, asset_type='stock')
                             _clear_trailing_stop(order_id)
                             await send_telegram_alert({"signal": "SELL", "symbol": symbol,
                                                        "current_price": current_price, "asset_type": "stock",
@@ -519,7 +535,7 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None, gemi
                     if pnl_percentage <= -stop_loss_percentage:
                         log.info(f"[PAPER TRADE] Stop-loss hit for stock {symbol}. Closing position.")
                         place_order(symbol, "SELL", position['quantity'], current_price,
-                                    existing_order_id=order_id)
+                                    existing_order_id=order_id, asset_type='stock')
                         _clear_trailing_stop(order_id)
                         await send_telegram_alert({"signal": "SELL", "symbol": symbol,
                                                    "current_price": current_price, "asset_type": "stock",
@@ -527,7 +543,7 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None, gemi
                     elif pnl_percentage >= take_profit_percentage:
                         log.info(f"[PAPER TRADE] Take-profit hit for stock {symbol}. Closing position.")
                         place_order(symbol, "SELL", position['quantity'], current_price,
-                                    existing_order_id=order_id)
+                                    existing_order_id=order_id, asset_type='stock')
                         _clear_trailing_stop(order_id)
                         await send_telegram_alert({"signal": "SELL", "symbol": symbol,
                                                    "current_price": current_price, "asset_type": "stock",
@@ -538,8 +554,12 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None, gemi
             log.info("Bot is paused. Skipping new stock signal generation.")
             continue
 
-        # Fetch daily prices for technical analysis
-        daily_data = get_daily_prices(symbol)
+        # Fetch daily prices for technical analysis (Alpaca or Alpha Vantage)
+        if use_alpaca_data:
+            from src.collectors.alpaca_data import get_daily_prices_alpaca
+            daily_data = get_daily_prices_alpaca(symbol)
+        else:
+            daily_data = get_daily_prices(symbol)
         if not daily_data or not daily_data.get('prices'):
             log.warning(f"Could not fetch daily prices for {symbol}. Skipping analysis.")
             continue
@@ -606,12 +626,54 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None, gemi
         log.info(f"Generated Stock Signal for {symbol}: {signal}")
         save_signal(signal)
 
-        # --- Paper Trading Logic (with dynamic sizing) ---
-        if paper_trading:
-            open_positions = get_open_positions()
-            current_balance = get_account_balance().get('total_usd', paper_trading_initial_capital)
+        # --- Trade Execution (broker-aware) ---
+        if broker == 'alpaca':
+            # Use Alpaca for real/paper execution
+            alpaca_positions = get_stock_positions()
+            pdt_status = _check_pdt_rule()
 
-            # Use Kelly-based sizing if available
+            if signal['signal'] == "BUY":
+                if any(p['symbol'] == symbol for p in alpaca_positions):
+                    log.info(f"Skipping BUY for stock {symbol}: Position already open on Alpaca.")
+                elif len(alpaca_positions) >= max_concurrent_positions:
+                    log.info(f"Skipping BUY for stock {symbol}: Max concurrent positions reached.")
+                elif pdt_status['is_restricted']:
+                    log.info(f"Skipping BUY for stock {symbol}: PDT rule — no day trades remaining.")
+                else:
+                    balance = get_stock_balance()
+                    buying_power = balance.get('buying_power', 0)
+                    stock_trade_stats = get_trade_history_stats()
+                    stock_kelly = stock_trade_stats.get('kelly_fraction', 0.0)
+                    stock_risk_pct = stock_kelly if (stock_kelly > 0 and stock_trade_stats.get('total_trades', 0) >= 10) else trade_risk_percentage
+                    capital_to_risk = buying_power * stock_risk_pct
+                    quantity_to_buy = capital_to_risk / current_price
+                    if quantity_to_buy * current_price > buying_power:
+                        log.warning(f"Skipping BUY for stock {symbol}: Insufficient buying power.")
+                    else:
+                        log.info(f"Executing Alpaca trade: BUY {quantity_to_buy:.4f} {symbol}.")
+                        order_result = place_stock_order(symbol, "BUY", quantity_to_buy, current_price)
+                        if order_result.get('status') == 'FILLED':
+                            signal['order_result'] = order_result
+                        await send_telegram_alert(signal)
+
+            elif signal['signal'] == "SELL":
+                alpaca_pos = next((p for p in alpaca_positions if p['symbol'] == symbol), None)
+                if alpaca_pos:
+                    log.info(f"Executing Alpaca trade: SELL {alpaca_pos['quantity']:.4f} {symbol}.")
+                    order_result = place_stock_order(symbol, "SELL", alpaca_pos['quantity'], current_price)
+                    if order_result.get('status') == 'FILLED':
+                        signal['order_result'] = order_result
+                    await send_telegram_alert(signal)
+                else:
+                    log.info(f"Skipping SELL for stock {symbol}: No open position on Alpaca.")
+            else:
+                log.info(f"Signal is HOLD for stock {symbol}. No trade action taken.")
+
+        else:
+            # Paper-only execution via binance_trader paper path
+            open_positions = get_open_positions(asset_type='stock')
+            current_balance = get_account_balance(asset_type='stock').get('total_usd', paper_trading_initial_capital)
+
             stock_trade_stats = get_trade_history_stats()
             stock_kelly = stock_trade_stats.get('kelly_fraction', 0.0)
             stock_risk_pct = stock_kelly if (stock_kelly > 0 and stock_trade_stats.get('total_trades', 0) >= 10) else trade_risk_percentage
@@ -629,7 +691,7 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None, gemi
                     else:
                         log.info(f"Executing paper trade: BUY {quantity_to_buy:.4f} {symbol} "
                                  f"(risk={stock_risk_pct:.4f}).")
-                        place_order(symbol, "BUY", quantity_to_buy, current_price)
+                        place_order(symbol, "BUY", quantity_to_buy, current_price, asset_type='stock')
                         await send_telegram_alert(signal)
 
             elif signal['signal'] == "SELL":
@@ -638,7 +700,7 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None, gemi
                 if position_to_close:
                     log.info(f"Executing paper trade: SELL {position_to_close['quantity']:.4f} {symbol}.")
                     place_order(symbol, "SELL", position_to_close['quantity'], current_price,
-                                existing_order_id=position_to_close['order_id'])
+                                existing_order_id=position_to_close['order_id'], asset_type='stock')
                     _clear_trailing_stop(position_to_close['order_id'])
                     await send_telegram_alert(signal)
                 else:

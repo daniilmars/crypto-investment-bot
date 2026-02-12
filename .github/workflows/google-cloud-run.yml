@@ -61,6 +61,8 @@ jobs:
           GCP_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }}
           GCP_LOCATION=us-central1
           ALPHA_VANTAGE_API_KEY=${{ secrets.ALPHA_VANTAGE_API_KEY }}
+          ALPACA_API_KEY=${{ secrets.ALPACA_API_KEY }}
+          ALPACA_API_SECRET=${{ secrets.ALPACA_API_SECRET }}
           DATABASE_URL=
           DB_INSTANCE_CONNECTION_NAME=
           GCP_BILLING_ENABLED=true
@@ -168,6 +170,17 @@ jobs:
 
             stock_trading:
               enabled: false
+              broker: "paper_only"
+              alpaca:
+                paper: true
+              watch_list:
+                - "AAPL"
+                - "MSFT"
+                - "GOOGL"
+                - "AMZN"
+                - "NVDA"
+                - "META"
+                - "TSLA"
           SETTINGS_EOF
 
       - name: Create deployment bundle

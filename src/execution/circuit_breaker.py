@@ -199,26 +199,41 @@ def get_circuit_breaker_status():
     }
 
 
-def get_daily_pnl():
-    """Returns the sum of PnL from trades closed today (UTC)."""
+def get_daily_pnl(asset_type=None):
+    """Returns the sum of PnL from trades closed today (UTC), optionally filtered by asset_type."""
     conn = None
     try:
         conn = get_db_connection()
         is_pg = isinstance(conn, psycopg2.extensions.connection)
         with _cursor(conn) as cursor:
-            if is_pg:
-                query = """
-                    SELECT COALESCE(SUM(pnl), 0) FROM trades
-                    WHERE status = 'CLOSED' AND pnl IS NOT NULL
-                    AND exit_timestamp >= CURRENT_DATE
-                """
+            if asset_type:
+                if is_pg:
+                    query = """
+                        SELECT COALESCE(SUM(pnl), 0) FROM trades
+                        WHERE status = 'CLOSED' AND pnl IS NOT NULL
+                        AND exit_timestamp >= CURRENT_DATE AND asset_type = %s
+                    """
+                else:
+                    query = """
+                        SELECT COALESCE(SUM(pnl), 0) FROM trades
+                        WHERE status = 'CLOSED' AND pnl IS NOT NULL
+                        AND exit_timestamp >= date('now') AND asset_type = ?
+                    """
+                cursor.execute(query, (asset_type,))
             else:
-                query = """
-                    SELECT COALESCE(SUM(pnl), 0) FROM trades
-                    WHERE status = 'CLOSED' AND pnl IS NOT NULL
-                    AND exit_timestamp >= date('now')
-                """
-            cursor.execute(query)
+                if is_pg:
+                    query = """
+                        SELECT COALESCE(SUM(pnl), 0) FROM trades
+                        WHERE status = 'CLOSED' AND pnl IS NOT NULL
+                        AND exit_timestamp >= CURRENT_DATE
+                    """
+                else:
+                    query = """
+                        SELECT COALESCE(SUM(pnl), 0) FROM trades
+                        WHERE status = 'CLOSED' AND pnl IS NOT NULL
+                        AND exit_timestamp >= date('now')
+                    """
+                cursor.execute(query)
             return float(cursor.fetchone()[0])
     except Exception as e:
         log.warning(f"Could not compute daily PnL: {e}")
@@ -227,24 +242,37 @@ def get_daily_pnl():
         release_db_connection(conn)
 
 
-def get_recent_closed_trades(limit=5):
-    """Returns the most recent closed trades, newest first."""
+def get_recent_closed_trades(limit=5, asset_type=None):
+    """Returns the most recent closed trades, newest first, optionally filtered by asset_type."""
     conn = None
     try:
         conn = get_db_connection()
         is_pg = isinstance(conn, psycopg2.extensions.connection)
         with _cursor(conn) as cursor:
-            if is_pg:
-                query = """
-                    SELECT * FROM trades WHERE status = 'CLOSED' AND pnl IS NOT NULL
-                    ORDER BY exit_timestamp DESC LIMIT %s
-                """
+            if asset_type:
+                if is_pg:
+                    query = """
+                        SELECT * FROM trades WHERE status = 'CLOSED' AND pnl IS NOT NULL
+                        AND asset_type = %s ORDER BY exit_timestamp DESC LIMIT %s
+                    """
+                else:
+                    query = """
+                        SELECT * FROM trades WHERE status = 'CLOSED' AND pnl IS NOT NULL
+                        AND asset_type = ? ORDER BY exit_timestamp DESC LIMIT ?
+                    """
+                cursor.execute(query, (asset_type, limit))
             else:
-                query = """
-                    SELECT * FROM trades WHERE status = 'CLOSED' AND pnl IS NOT NULL
-                    ORDER BY exit_timestamp DESC LIMIT ?
-                """
-            cursor.execute(query, (limit,))
+                if is_pg:
+                    query = """
+                        SELECT * FROM trades WHERE status = 'CLOSED' AND pnl IS NOT NULL
+                        ORDER BY exit_timestamp DESC LIMIT %s
+                    """
+                else:
+                    query = """
+                        SELECT * FROM trades WHERE status = 'CLOSED' AND pnl IS NOT NULL
+                        ORDER BY exit_timestamp DESC LIMIT ?
+                    """
+                cursor.execute(query, (limit,))
             return [dict(row) for row in cursor.fetchall()]
     except Exception as e:
         log.warning(f"Could not fetch recent trades: {e}")

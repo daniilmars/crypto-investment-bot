@@ -13,6 +13,9 @@ from src.execution.binance_trader import (get_open_positions, get_account_balanc
                                           _is_live_trading, _get_trading_mode,
                                           _get_live_balance)
 from src.execution.circuit_breaker import get_circuit_breaker_status
+from src.execution.stock_trader import (
+    get_stock_positions, get_stock_balance, _check_pdt_rule, get_market_hours,
+)
 from src.collectors.binance_data import get_current_price
 from src.state import bot_is_running
 
@@ -150,18 +153,25 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /help command."""
     help_text = (
         "🤖 *Crypto Investment Bot Help*\n\n"
+        "*General:*\n"
         "`/start` - Check if the bot is running.\n"
         "`/status` - Get a detailed market and bot health summary.\n"
-        "`/positions` - View open trades.\n"
+        "`/positions` - View open crypto trades.\n"
         "`/performance` - Get a performance report.\n"
         "`/trading_mode` - Show current trading mode.\n"
         "`/livebalance` - Show real Binance balance.\n"
         "`/circuitbreaker` - Show circuit breaker status.\n"
         "`/pause` - Pause new trades.\n"
-        "`/resume` - Resume trading.\n"
+        "`/resume` - Resume trading.\n\n"
+        "*Stocks:*\n"
+        "`/stocks` - View open stock positions.\n"
+        "`/stock_balance` - Show stock account balance.\n"
+        "`/pdt` - PDT rule status (day trades remaining).\n"
+        "`/market_hours` - NYSE open/closed status.\n\n"
+        "*System:*\n"
         "`/db_stats` - View database statistics.\n"
         "`/db_schema` - View the database schema.\n"
-        "`/gcosts` - Get GCP billing summary (authorized users only)."
+        "`/gcosts` - Get GCP billing summary."
     )
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
@@ -354,6 +364,128 @@ async def circuitbreaker_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text(message, parse_mode='Markdown')
 
 
+@authorized
+async def stocks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /stocks command — shows open stock positions with real-time P&L."""
+    try:
+        stock_settings = app_config.get('settings', {}).get('stock_trading', {})
+        broker = stock_settings.get('broker', 'paper_only')
+
+        if broker == 'alpaca':
+            positions = get_stock_positions()
+            if not positions:
+                await update.message.reply_text("No open stock positions on Alpaca.")
+                return
+            message = "📊 *Stock Positions [ALPACA]* 📊\n\n"
+            total_pnl = 0
+            for pos in positions:
+                pnl = pos.get('unrealized_pl', 0)
+                pnl_pct = pos.get('unrealized_plpc', 0) * 100
+                total_pnl += pnl
+                message += (
+                    f"*{pos['symbol']}*\n"
+                    f"- Qty: {pos['quantity']:.4f}\n"
+                    f"- Entry: ${pos['entry_price']:,.2f}\n"
+                    f"- Current: ${pos['current_price']:,.2f}\n"
+                    f"- PnL: ${pnl:,.2f} ({pnl_pct:+.2f}%)\n\n"
+                )
+            message += f"*Total Unrealized PnL: ${total_pnl:,.2f}*"
+        else:
+            positions = get_open_positions(asset_type='stock')
+            if not positions:
+                await update.message.reply_text("No open stock positions (paper).")
+                return
+            message = "📊 *Stock Positions [PAPER]* 📊\n\n"
+            total_pnl = 0
+            for pos in positions:
+                symbol = pos.get('symbol')
+                quantity = pos.get('quantity', 0)
+                entry_price = pos.get('entry_price', 0)
+                current_price = _get_position_price(symbol) or entry_price
+                pnl = (current_price - entry_price) * quantity
+                pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+                total_pnl += pnl
+                message += (
+                    f"*{symbol}*\n"
+                    f"- Qty: {quantity:.4f}\n"
+                    f"- Entry: ${entry_price:,.2f}\n"
+                    f"- Current: ${current_price:,.2f}\n"
+                    f"- PnL: ${pnl:,.2f} ({pnl_pct:+.2f}%)\n\n"
+                )
+            message += f"*Total Unrealized PnL: ${total_pnl:,.2f}*"
+
+        await update.message.reply_text(message, parse_mode='Markdown')
+    except Exception as e:
+        log.error(f"Error in /stocks: {e}")
+        await update.message.reply_text("Error fetching stock positions.")
+
+
+@authorized
+async def stock_balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /stock_balance command — shows Alpaca account balance."""
+    try:
+        stock_settings = app_config.get('settings', {}).get('stock_trading', {})
+        broker = stock_settings.get('broker', 'paper_only')
+
+        if broker == 'alpaca':
+            balance = get_stock_balance()
+            message = (
+                f"💰 *Stock Balance [ALPACA]*\n\n"
+                f"*Cash:* ${balance.get('cash', 0):,.2f}\n"
+                f"*Equity:* ${balance.get('equity', 0):,.2f}\n"
+                f"*Portfolio Value:* ${balance.get('portfolio_value', 0):,.2f}\n"
+                f"*Buying Power:* ${balance.get('buying_power', 0):,.2f}"
+            )
+        else:
+            balance = get_account_balance(asset_type='stock')
+            message = (
+                f"💰 *Stock Balance [PAPER]*\n\n"
+                f"*Available:* ${balance.get('USDT', 0):,.2f}\n"
+                f"*Total:* ${balance.get('total_usd', 0):,.2f}"
+            )
+        await update.message.reply_text(message, parse_mode='Markdown')
+    except Exception as e:
+        log.error(f"Error in /stock_balance: {e}")
+        await update.message.reply_text("Error fetching stock balance.")
+
+
+@authorized
+async def pdt_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /pdt command — shows Pattern Day Trader rule status."""
+    try:
+        pdt = _check_pdt_rule()
+        status_emoji = "🔴" if pdt['is_restricted'] else "🟢"
+        message = (
+            f"{status_emoji} *PDT Rule Status*\n\n"
+            f"*Day trades used:* {pdt['day_trades_used']} / 3\n"
+            f"*Remaining:* {pdt['day_trades_remaining']}\n"
+            f"*Restricted:* {'YES — no more day trades' if pdt['is_restricted'] else 'No'}\n\n"
+            f"_Rolling 5 business day window_"
+        )
+        await update.message.reply_text(message, parse_mode='Markdown')
+    except Exception as e:
+        log.error(f"Error in /pdt: {e}")
+        await update.message.reply_text("Error checking PDT status.")
+
+
+@authorized
+async def market_hours_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /market_hours command — shows NYSE open/closed status."""
+    try:
+        hours = get_market_hours()
+        status_emoji = "🟢" if hours['is_open'] else "🔴"
+        message = (
+            f"{status_emoji} *Market Hours (NYSE)*\n\n"
+            f"*Status:* {'OPEN' if hours['is_open'] else 'CLOSED'}\n"
+            f"*Next open:* {hours['next_open']}\n"
+            f"*Next close:* {hours['next_close']}"
+        )
+        await update.message.reply_text(message, parse_mode='Markdown')
+    except Exception as e:
+        log.error(f"Error in /market_hours: {e}")
+        await update.message.reply_text("Error checking market hours.")
+
+
 # --- Bot Lifecycle Management ---
 async def start_bot() -> Application:
     """
@@ -375,6 +507,10 @@ async def start_bot() -> Application:
             CommandHandler("trading_mode", trading_mode_cmd),
             CommandHandler("livebalance", livebalance),
             CommandHandler("circuitbreaker", circuitbreaker_cmd),
+            CommandHandler("stocks", stocks_cmd),
+            CommandHandler("stock_balance", stock_balance_cmd),
+            CommandHandler("pdt", pdt_cmd),
+            CommandHandler("market_hours", market_hours_cmd),
         ]
         application.add_handlers(handlers)
         await application.initialize()

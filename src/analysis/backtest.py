@@ -26,7 +26,8 @@ DEFAULT_SLIPPAGE_BPS = 5  # 5 basis points (0.05%) default slippage
 # ---------------------------------------------------------------------------
 
 def calculate_risk_metrics(equity_curve: list, trade_history: list,
-                           initial_capital: float, risk_free_rate: float = 0.0) -> dict:
+                           initial_capital: float, risk_free_rate: float = 0.0,
+                           bar_interval_minutes: int = 60) -> dict:
     """
     Calculates comprehensive risk-adjusted performance metrics from a backtest.
 
@@ -57,8 +58,8 @@ def calculate_risk_metrics(equity_curve: list, trade_history: list,
     max_drawdown_pct = float(drawdowns.min()) * 100  # negative number
     max_drawdown = float((values - cummax).min())
 
-    # --- Sharpe Ratio (annualized, assuming hourly data) ---
-    periods_per_year = 365 * 24  # hourly bars
+    # --- Sharpe Ratio (annualized) ---
+    periods_per_year = int(365 * 24 * 60 / bar_interval_minutes)
     excess_returns = returns - risk_free_rate / periods_per_year
     sharpe = float('nan')
     if len(returns) > 1 and returns.std() > 0:
@@ -345,7 +346,7 @@ class Backtester:
         log.info(f"Slippage: {self.portfolio.slippage_bps} bps")
 
         # Ensure whale timestamps are timezone-aware for proper comparison
-        if not self.whales_df.empty:
+        if not self.whales_df.empty and self.whales_df['timestamp'].dt.tz is None:
             self.whales_df['timestamp'] = self.whales_df['timestamp'].dt.tz_localize('UTC')
 
         all_prices = self.prices_df.pivot(index='timestamp', columns='symbol', values='price').ffill()
@@ -467,10 +468,12 @@ class Backtester:
 
     def get_results(self) -> dict:
         """Returns full results dict with risk metrics."""
+        bar_interval = getattr(self.params, 'bar_interval_minutes', 60)
         metrics = calculate_risk_metrics(
             self.portfolio.equity_curve,
             self.portfolio.trade_history,
             self.params.initial_capital,
+            bar_interval_minutes=bar_interval,
         )
         final_value = self.portfolio.equity_curve[-1]['value'] if self.portfolio.equity_curve else self.params.initial_capital
         total_pnl = final_value - self.params.initial_capital
@@ -521,6 +524,11 @@ def run_walk_forward(prices_df, whales_df, params, n_splits=3):
     # Each fold: 60% train, 40% test (overlapping windows)
     fold_size = total_bars // (n_splits + 1)
     train_size = int(fold_size * 1.5)
+
+    # Ensure whale timestamps are tz-aware to match price timestamps
+    if not whales_df.empty and whales_df['timestamp'].dt.tz is None:
+        whales_df = whales_df.copy()
+        whales_df['timestamp'] = whales_df['timestamp'].dt.tz_localize('UTC')
 
     fold_results = []
     all_equity = []
@@ -629,6 +637,9 @@ def main():
     # Watch Lists (as comma-separated strings)
     parser.add_argument('--high-interest-wallets', type=str, default=",".join(app_config.get('settings', {}).get('high_interest_wallets', [])))
     parser.add_argument('--stablecoins-to-monitor', type=str, default=",".join(app_config.get('settings', {}).get('stablecoins_to_monitor', [])))
+
+    # Data
+    parser.add_argument('--bar-interval-minutes', type=int, default=60, help='Bar interval in minutes (15 for 15m, 60 for 1h)')
 
     # Mode
     parser.add_argument('--walk-forward', action='store_true', help='Run walk-forward validation instead of single backtest')

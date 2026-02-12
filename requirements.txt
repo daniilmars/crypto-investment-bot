@@ -40,3 +40,6 @@ feedparser>=6.0.0
 
 # For authenticated Binance trading (live/testnet)
 python-binance>=1.0.19
+
+# For Alpaca stock trading (paper + live)
+alpaca-py>=0.30.0
