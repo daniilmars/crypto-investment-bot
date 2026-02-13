@@ -1,0 +1,194 @@
+# ----------------------------------------------------
+# API Keys and Configuration for the Crypto Bot
+# ----------------------------------------------------
+#
+# INSTRUCTIONS:
+# 1. Rename this file from 'settings.yaml.example' to 'settings.yaml'.
+# 2. Fill in your actual API keys and settings below.
+# 3. IMPORTANT: The 'settings.yaml' file is listed in .gitignore and will NOT be committed.
+#
+# ----------------------------------------------------
+
+# -- GCP Billing Settings --
+# Configuration for the /gcosts command.
+gcp_billing:
+  enabled: true
+  # Find this in your GCP Console under 'Billing' -> 'Account Management'.
+  # It typically looks like '012345-ABCDEF-GHIJKL'.
+  billing_account_id: "YOUR_GCP_BILLING_ACCOUNT_ID"
+
+# -- Notification Settings --
+# Choose your preferred notification service.
+# You can enable multiple services.
+
+notification_services:
+  telegram:
+    enabled: true
+    token: "8323515226:AAEEo7_lbvk870cj2eZKWkcPQDM47DBbwVw"
+    chat_id: "7910661624"
+    authorized_user_ids:
+      - 7910661624
+
+  pushover:
+    enabled: false
+    user_key: "YOUR_PUSHOVER_USER_KEY"
+    api_token: "YOUR_PUSHOVER_API_TOKEN"
+
+# -- API Keys for Data Sources --
+# Add the API keys for the data sources you want to use.
+
+api_keys:
+  whale_alert: "YOUR_WHALE_ALERT_API_KEY"
+  binance:
+    api_key: "YOUR_BINANCE_API_KEY"
+    api_secret: "YOUR_BINANCE_API_SECRET"
+  gemini: "YOUR_GEMINI_API_KEY"
+  alpha_vantage: "YOUR_ALPHA_VANTAGE_API_KEY"
+  lunarcrush: "YOUR_LUNARCRUSH_API_KEY"
+  glassnode: "YOUR_GLASSNODE_API_KEY"
+  newsapi: "YOUR_NEWSAPI_ORG_KEY"
+  news_api: "YOUR_NEWS_API_KEY"
+  alpaca:
+    api_key: "YOUR_ALPACA_API_KEY"
+    api_secret: "YOUR_ALPACA_API_SECRET"
+
+# -- General Bot Settings --
+settings:
+  # Minimum value in USD for a whale transaction to be considered significant.
+  min_whale_transaction_usd: 5000000
+
+  # List of cryptocurrencies to monitor. Use symbols.
+  # Example: ["BTC", "ETH", "SOL"]
+  watch_list:
+    - "BTC"
+    - "ETH"
+    - "SOL"
+    - "XRP"
+    - "ADA"
+    - "AVAX"
+    - "DOGE"
+    - "MATIC"
+    - "BNB"
+    - "TRX"
+  # How often the bot should run its analysis cycle, in minutes.
+  run_interval_minutes: 15
+
+  # -- Technical Indicator Settings --
+  # Period for Simple Moving Average (SMA) calculation.
+  sma_period: 20
+  # RSI overbought threshold (e.g., 70 for overbought).
+  rsi_overbought_threshold: 70
+  # RSI oversold threshold (e.g., 30 for oversold).
+  rsi_oversold_threshold: 30
+
+  # -- Signal Quality Settings --
+  # Minimum number of indicators that must agree for a BUY or SELL signal.
+  signal_threshold: 3
+  # Volume confirmation gate: block entries when volume < N-bar average.
+  volume_gate_enabled: true
+  volume_gate_period: 20
+  # Per-symbol cooldown (hours) after a stop-loss exit before re-entering.
+  stoploss_cooldown_hours: 6
+
+  # -- Advanced Signal Settings --
+  # List of specific wallet owners to watch for high-priority signals.
+  # The names should match the 'owner' field from the Whale Alert API.
+  # Example: ["Grayscale", "US Government", "Ethereum Foundation"]
+  high_interest_wallets:
+    - "Grayscale"
+    - "US Government"
+
+  # Threshold in USD for stablecoin inflows to an exchange to be considered a strong BUY signal.
+  stablecoin_inflow_threshold_usd: 100000000
+
+  # List of stablecoin symbols (lowercase) to monitor for exchange inflows.
+  stablecoins_to_monitor:
+    - "usdt"
+    - "usdc"
+    - "busd"
+    - "dai"
+    - "tusd"
+    - "fdusd"
+    - "pyusd"
+  # -- Volatility & Anomaly Detection --
+  # The number of hours to look back to establish a baseline for transaction frequency.
+  transaction_velocity_baseline_hours: 24
+
+  # The multiplier to apply to the baseline average. If the current hour's transaction
+  # count exceeds this, it's flagged as a volatility anomaly.
+  transaction_velocity_threshold_multiplier: 5.0
+
+  # -- Telegram Bot Settings --
+  # The number of hours to look back for the /status report.
+  status_report_hours: 24
+
+  # -- Trading Settings --
+  # Enable or disable paper trading mode. If true, no real trades will be placed.
+  paper_trading: true
+  # Initial capital for paper trading simulation.
+  paper_trading_initial_capital: 10000.0
+
+  # -- Risk Management Settings --
+  # Optimized via SL/TP sweep on 23-day dataset (Jan 12 – Feb 5, 2026).
+  # SL=3.5%/TP=8%: +30.6% return, 55.7% win rate, Sharpe 2.15.
+  trade_risk_percentage: 0.03
+  stop_loss_percentage: 0.035
+  take_profit_percentage: 0.08
+  max_concurrent_positions: 5
+
+  # -- Regular Status Update Settings --
+  regular_status_update:
+    enabled: true
+    interval_hours: 1
+
+  # -- News Analysis Settings --
+  news_analysis:
+    enabled: true
+    # Volume spike: trigger Gemini if current_volume > previous_volume * multiplier
+    volume_spike_multiplier: 3.0
+    # Sentiment shift: trigger Gemini if abs(current - previous) >= threshold
+    sentiment_shift_threshold: 0.3
+    # VADER sentiment thresholds for signal scoring
+    sentiment_buy_threshold: 0.15
+    sentiment_sell_threshold: -0.15
+    # Minimum Gemini confidence to override VADER
+    min_gemini_confidence: 0.6
+
+  # -- Live Trading Settings --
+  live_trading:
+    enabled: false          # Master switch (must also set paper_trading: false)
+    mode: "testnet"         # "testnet" or "live"
+    initial_capital: 100.0
+    max_concurrent_positions: 2
+    trade_risk_percentage: 0.05
+    stop_loss_percentage: 0.03
+    take_profit_percentage: 0.06
+    # Circuit breaker thresholds
+    daily_loss_limit_pct: 0.10
+    max_drawdown_pct: 0.25
+    balance_floor_usd: 70.0
+    max_consecutive_losses: 3
+    cooldown_hours: 24
+
+  # -- Stock Trading Settings --
+  stock_trading:
+    enabled: true
+    broker: "paper_only"    # "paper_only" or "alpaca"
+    alpaca:
+      paper: true           # use Alpaca paper trading endpoint
+    watch_list:
+      - "AAPL"
+      - "MSFT"
+      - "GOOGL"
+      - "AMZN"
+      - "NVDA"
+      - "META"
+      - "TSLA"
+    sma_period: 20
+    rsi_period: 14
+    rsi_overbought_threshold: 70
+    rsi_oversold_threshold: 30
+    pe_ratio_buy_threshold: 25
+    pe_ratio_sell_threshold: 40
+    earnings_growth_sell_threshold: -10
+    volume_spike_multiplier: 1.5

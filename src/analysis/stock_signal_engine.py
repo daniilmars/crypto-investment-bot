@@ -8,7 +8,8 @@ def generate_stock_signal(symbol, market_data, volume_data=None, fundamental_dat
                           earnings_growth_sell_threshold=-10,
                           volume_spike_multiplier=1.5,
                           news_sentiment_data=None,
-                          historical_prices=None):
+                          historical_prices=None,
+                          signal_threshold=3):
     """
     Generates a BUY/SELL/HOLD signal for a stock using a 4-indicator scoring system.
     Requires 2+ indicators to agree for a BUY or SELL signal.
@@ -168,12 +169,12 @@ def generate_stock_signal(symbol, market_data, volume_data=None, fundamental_dat
     reason_str = "; ".join(reasons) if reasons else "No indicators triggered"
     reason_str += f". Buy Score: {buy_score}, Sell Score: {sell_score}."
 
-    if buy_score >= 2:
+    if buy_score >= signal_threshold and buy_score > sell_score:
         log.info(f"[{symbol}] Stock BUY signal. {reason_str}")
         return {"signal": "BUY", "symbol": symbol, "reason": reason_str,
                 "current_price": current_price}
 
-    if sell_score >= 2:
+    if sell_score >= signal_threshold and sell_score > buy_score:
         log.info(f"[{symbol}] Stock SELL signal. {reason_str}")
         return {"signal": "SELL", "symbol": symbol, "reason": reason_str,
                 "current_price": current_price}

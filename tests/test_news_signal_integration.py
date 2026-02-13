@@ -22,7 +22,7 @@ class TestCryptoNewsIndicator:
         }
         signal = generate_signal(
             symbol='BTCUSDT', whale_transactions=[], market_data=market_data,
-            news_sentiment_data=news_data
+            news_sentiment_data=news_data, signal_threshold=2
         )
         assert signal['signal'] == 'BUY'
         assert 'VADER bullish' in signal['reason']
@@ -37,7 +37,7 @@ class TestCryptoNewsIndicator:
         }
         signal = generate_signal(
             symbol='BTCUSDT', whale_transactions=[], market_data=market_data,
-            news_sentiment_data=news_data
+            news_sentiment_data=news_data, signal_threshold=2
         )
         assert signal['signal'] == 'SELL'
         assert 'VADER bearish' in signal['reason']
@@ -83,7 +83,7 @@ class TestStockNewsIndicator:
         }
         signal = generate_stock_signal(
             symbol='AAPL', market_data=self._market(150, sma=140, rsi=50),
-            news_sentiment_data=news_data
+            news_sentiment_data=news_data, signal_threshold=2
         )
         assert signal['signal'] == 'BUY'
         assert 'VADER bullish' in signal['reason']
@@ -97,7 +97,7 @@ class TestStockNewsIndicator:
         }
         signal = generate_stock_signal(
             symbol='AAPL', market_data=self._market(130, sma=140, rsi=50),
-            news_sentiment_data=news_data
+            news_sentiment_data=news_data, signal_threshold=2
         )
         assert signal['signal'] == 'SELL'
         assert 'VADER bearish' in signal['reason']
@@ -183,7 +183,7 @@ class TestGeminiGroundedSearch:
         }
         signal = generate_signal(
             symbol='BTCUSDT', whale_transactions=[], market_data=market_data,
-            news_sentiment_data=news_data
+            news_sentiment_data=news_data, signal_threshold=2
         )
         assert signal['signal'] == 'BUY'
         assert 'Gemini bullish' in signal['reason']
@@ -200,7 +200,7 @@ class TestGeminiGroundedSearch:
         }
         signal = generate_signal(
             symbol='BTCUSDT', whale_transactions=[], market_data=market_data,
-            news_sentiment_data=news_data
+            news_sentiment_data=news_data, signal_threshold=2
         )
         assert signal['signal'] == 'SELL'
         assert 'Gemini bearish' in signal['reason']
@@ -217,7 +217,7 @@ class TestGeminiGroundedSearch:
         }
         signal = generate_signal(
             symbol='BTCUSDT', whale_transactions=[], market_data=market_data,
-            news_sentiment_data=news_data
+            news_sentiment_data=news_data, signal_threshold=2
         )
         assert signal['signal'] == 'BUY'
         assert 'VADER bullish' in signal['reason']

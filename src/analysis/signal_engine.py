@@ -2,7 +2,7 @@ import pandas as pd
 from src.logger import log
 from src.analysis.technical_indicators import calculate_macd, calculate_bollinger_bands
 
-def generate_signal(symbol, whale_transactions, market_data, high_interest_wallets=None, stablecoin_data=None, stablecoin_threshold=100000000, velocity_data=None, velocity_threshold_multiplier=5.0, rsi_overbought_threshold=70, rsi_oversold_threshold=30, news_sentiment_data=None, historical_prices=None, volume_data=None, order_book_data=None):
+def generate_signal(symbol, whale_transactions, market_data, high_interest_wallets=None, stablecoin_data=None, stablecoin_threshold=100000000, velocity_data=None, velocity_threshold_multiplier=5.0, rsi_overbought_threshold=70, rsi_oversold_threshold=30, news_sentiment_data=None, historical_prices=None, volume_data=None, order_book_data=None, signal_threshold=3):
     """
     Generates a trading signal based on on-chain data and technical indicators.
     Prioritizes anomalies and high-priority events.
@@ -177,11 +177,11 @@ def generate_signal(symbol, whale_transactions, market_data, high_interest_walle
     # --- Signal Generation ---
     reason = f"Price: ${current_price:,.2f}, SMA: ${sma:,.2f}, RSI: {rsi:.2f}, Whale Net Flow: ${net_flow:,.2f}{news_reason}{macd_reason}{bollinger_reason}{volume_reason}{orderbook_reason}. Buy Score: {buy_score}, Sell Score: {sell_score}."
 
-    if buy_score >= 2 and buy_score > sell_score:
+    if buy_score >= signal_threshold and buy_score > sell_score:
         log.info(f"[{symbol}] BUY signal generated. {reason}")
         return {"signal": "BUY", "symbol": symbol, "reason": reason, "current_price": current_price}
 
-    if sell_score >= 2 and sell_score > buy_score:
+    if sell_score >= signal_threshold and sell_score > buy_score:
         log.info(f"[{symbol}] SELL signal generated. {reason}")
         return {"signal": "SELL", "symbol": symbol, "reason": reason, "current_price": current_price}
 

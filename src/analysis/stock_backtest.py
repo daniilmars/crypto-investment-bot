@@ -157,6 +157,7 @@ class StockStrategy:
             rsi_overbought_threshold=getattr(self.params, 'rsi_overbought_threshold', 70),
             rsi_oversold_threshold=getattr(self.params, 'rsi_oversold_threshold', 30),
             historical_prices=price_history,
+            signal_threshold=getattr(self.params, 'signal_threshold', 3),
         )
         return signal
 
@@ -186,6 +187,12 @@ class StockBacktester:
         self.trailing_stop_enabled = getattr(params, 'trailing_stop_enabled', True)
         self.trailing_stop_activation = getattr(params, 'trailing_stop_activation', 0.02)
         self.trailing_stop_distance = getattr(params, 'trailing_stop_distance', 0.015)
+        # Volume gate
+        self.volume_gate_enabled = getattr(params, 'volume_gate_enabled', True)
+        self.volume_gate_period = getattr(params, 'volume_gate_period', 20)
+        # Stop-loss cooldown (bars)
+        self.stoploss_cooldown_bars = getattr(params, 'stoploss_cooldown_bars', 6)
+        self._stoploss_cooldowns = {}  # symbol -> bar index when cooldown expires
         # Kelly state
         self._trade_count = 0
         self._wins = 0
@@ -230,7 +237,7 @@ class StockBacktester:
         for bar_idx, (timestamp, prices) in enumerate(all_prices.iterrows()):
             current_prices = prices.to_dict()
             self.portfolio.record_equity(timestamp, current_prices)
-            self._check_exits(current_prices, timestamp)
+            self._check_exits(current_prices, timestamp, bar_idx)
 
             if bar_idx < self.warmup_bars:
                 continue
@@ -240,7 +247,7 @@ class StockBacktester:
 
         return self._get_results()
 
-    def _check_exits(self, current_prices, timestamp):
+    def _check_exits(self, current_prices, timestamp, bar_idx=0):
         for symbol in list(self.portfolio.positions.keys()):
             pos = self.portfolio.positions[symbol]
             current_price = current_prices.get(symbol)
@@ -266,6 +273,9 @@ class StockBacktester:
                 self.portfolio.place_order(symbol, 'CLOSE', pos['quantity'],
                                            current_price, timestamp)
                 self._update_kelly_state(self.portfolio.trade_history[-1]['pnl'])
+                # Set stop-loss cooldown
+                if self.stoploss_cooldown_bars > 0:
+                    self._stoploss_cooldowns[symbol] = bar_idx + self.stoploss_cooldown_bars
             elif pnl_pct >= self.params.take_profit_percentage:
                 self.portfolio.place_order(symbol, 'CLOSE', pos['quantity'],
                                            current_price, timestamp)
@@ -281,6 +291,12 @@ class StockBacktester:
             if current_price is None or pd.isna(current_price):
                 continue
 
+            # --- Stop-loss cooldown check ---
+            if symbol in self._stoploss_cooldowns:
+                if bar_idx < self._stoploss_cooldowns[symbol]:
+                    continue
+                del self._stoploss_cooldowns[symbol]
+
             # Build price history up to this bar
             price_col = all_prices[symbol].iloc[:bar_idx + 1].dropna()
             price_history = price_col.tolist()
@@ -291,8 +307,17 @@ class StockBacktester:
                 volume_history = vol_col.tolist()
 
             signal = self.strategy.generate_signals(symbol, price_history, current_price, volume_history)
+            sig = signal.get('signal')
 
-            if signal.get('signal') == 'BUY':
+            # --- Volume gate: skip entry if volume below N-bar average ---
+            if sig == 'BUY' and self.volume_gate_enabled and volume_history:
+                if len(volume_history) >= self.volume_gate_period:
+                    vol_avg = sum(volume_history[-self.volume_gate_period:]) / self.volume_gate_period
+                    if volume_history[-1] < vol_avg:
+                        log.debug(f"[{timestamp}] Volume gate blocked BUY for '{symbol}'")
+                        sig = 'HOLD'
+
+            if sig == 'BUY':
                 effective_risk = self._get_effective_risk()
                 capital_to_risk = self.portfolio.cash * effective_risk
                 quantity = capital_to_risk / current_price
@@ -347,6 +372,11 @@ def main():
     parser.add_argument('--stop-loss-percentage', type=float, default=0.07)
     parser.add_argument('--take-profit-percentage', type=float, default=0.10)
     parser.add_argument('--max-concurrent-positions', type=int, default=3)
+    parser.add_argument('--signal-threshold', type=int, default=3, help='Min indicators to agree for BUY/SELL')
+    parser.add_argument('--volume-gate-enabled', action='store_true', default=True)
+    parser.add_argument('--no-volume-gate', dest='volume_gate_enabled', action='store_false')
+    parser.add_argument('--volume-gate-period', type=int, default=20, help='Bars for volume moving average')
+    parser.add_argument('--stoploss-cooldown-bars', type=int, default=6, help='Bars to wait after SL before re-entry')
     parser.add_argument('--slippage-bps', type=float, default=DEFAULT_SLIPPAGE_BPS)
     parser.add_argument('--trailing-stop-enabled', type=bool, default=True)
     parser.add_argument('--trailing-stop-activation', type=float, default=0.02)

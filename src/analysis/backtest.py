@@ -253,6 +253,7 @@ class Strategy:
             rsi_overbought_threshold=self.params.rsi_overbought_threshold,
             rsi_oversold_threshold=self.params.rsi_oversold_threshold,
             historical_prices=price_list,
+            signal_threshold=getattr(self.params, 'signal_threshold', 3),
         )
 
         # --- Market Regime Detection ---
@@ -304,6 +305,12 @@ class Backtester:
         self.trailing_stop_enabled = getattr(params, 'trailing_stop_enabled', True)
         self.trailing_stop_activation = getattr(params, 'trailing_stop_activation', 0.02)
         self.trailing_stop_distance = getattr(params, 'trailing_stop_distance', 0.015)
+        # Volume gate
+        self.volume_gate_enabled = getattr(params, 'volume_gate_enabled', True)
+        self.volume_gate_period = getattr(params, 'volume_gate_period', 20)
+        # Stop-loss cooldown (bars)
+        self.stoploss_cooldown_bars = getattr(params, 'stoploss_cooldown_bars', 6)
+        self._stoploss_cooldowns = {}  # symbol -> bar index when cooldown expires
         # Kelly state (updated as trades accumulate)
         self._trade_count = 0
         self._wins = 0
@@ -351,21 +358,26 @@ class Backtester:
 
         all_prices = self.prices_df.pivot(index='timestamp', columns='symbol', values='price').ffill()
 
+        # Volume data for volume gate (gracefully absent for crypto)
+        self._all_volumes = None
+        if 'volume' in self.prices_df.columns:
+            self._all_volumes = self.prices_df.pivot(index='timestamp', columns='symbol', values='volume').ffill()
+
         for bar_idx, (timestamp, prices) in enumerate(all_prices.iterrows()):
             current_prices = prices.to_dict()
             self.portfolio.record_equity(timestamp, current_prices)
-            self.check_for_exits(current_prices, timestamp)
+            self.check_for_exits(current_prices, timestamp, bar_idx)
 
             # Skip entries during warm-up period
             if bar_idx < self.warmup_bars:
                 continue
 
             if len(self.portfolio.positions) < self.params.max_concurrent_positions:
-                self.check_for_entries(current_prices, timestamp)
+                self.check_for_entries(current_prices, timestamp, bar_idx)
 
         return self.get_results()
 
-    def check_for_exits(self, current_prices, timestamp):
+    def check_for_exits(self, current_prices, timestamp, bar_idx=0):
         for symbol in list(self.portfolio.positions.keys()):
             pos = self.portfolio.positions[symbol]
             current_price = current_prices.get(symbol)
@@ -397,13 +409,16 @@ class Backtester:
                 self.portfolio.place_order(symbol, 'CLOSE', pos['quantity'],
                                            current_price, timestamp)
                 self._update_kelly_state(self.portfolio.trade_history[-1]['pnl'])
+                # Set stop-loss cooldown
+                if self.stoploss_cooldown_bars > 0:
+                    self._stoploss_cooldowns[symbol] = bar_idx + self.stoploss_cooldown_bars
             elif pnl_percentage >= self.params.take_profit_percentage:
                 log.debug(f"[{timestamp}] TAKE-PROFIT '{symbol}' ({pos['side']}): PnL% {pnl_percentage:.2%}")
                 self.portfolio.place_order(symbol, 'CLOSE', pos['quantity'],
                                            current_price, timestamp)
                 self._update_kelly_state(self.portfolio.trade_history[-1]['pnl'])
 
-    def check_for_entries(self, current_prices, timestamp):
+    def check_for_entries(self, current_prices, timestamp, bar_idx=0):
         # --- Calculate point-in-time on-chain metrics ---
         one_hour_ago = timestamp - pd.Timedelta(hours=1)
         if not self.whales_df.empty:
@@ -426,6 +441,12 @@ class Backtester:
             current_price = current_prices.get(symbol)
             if pd.isna(current_price):
                 continue
+
+            # --- Stop-loss cooldown check ---
+            if symbol in self._stoploss_cooldowns:
+                if bar_idx < self._stoploss_cooldowns[symbol]:
+                    continue
+                del self._stoploss_cooldowns[symbol]
 
             # --- Calculate Transaction Velocity ---
             baseline_start = timestamp - pd.Timedelta(hours=self.params.transaction_velocity_baseline_hours)
@@ -451,6 +472,17 @@ class Backtester:
 
             signal = signal_data.get('signal')
             regime_params = signal_data.get('regime_params', {})
+
+            # --- Volume gate: skip entry if volume below N-bar average ---
+            if signal in ('BUY', 'SELL') and self.volume_gate_enabled and self._all_volumes is not None:
+                if symbol in self._all_volumes.columns:
+                    vol_series = self._all_volumes[symbol].iloc[:bar_idx + 1].dropna()
+                    if len(vol_series) >= self.volume_gate_period:
+                        vol_avg = vol_series.iloc[-self.volume_gate_period:].mean()
+                        if vol_series.iloc[-1] < vol_avg:
+                            log.debug(f"[{timestamp}] Volume gate blocked {signal} for '{symbol}': "
+                                      f"vol={vol_series.iloc[-1]:.0f} < avg={vol_avg:.0f}")
+                            signal = 'HOLD'
 
             # --- Dynamic position sizing ---
             effective_risk = self._get_effective_risk(regime_params)
@@ -616,6 +648,13 @@ def main():
     parser.add_argument('--stop-loss-percentage', type=float, default=app_config.get('settings', {}).get('stop_loss_percentage', 0.02))
     parser.add_argument('--take-profit-percentage', type=float, default=app_config.get('settings', {}).get('take_profit_percentage', 0.05))
     parser.add_argument('--max-concurrent-positions', type=int, default=app_config.get('settings', {}).get('max_concurrent_positions', 3))
+
+    # Signal quality
+    parser.add_argument('--signal-threshold', type=int, default=app_config.get('settings', {}).get('signal_threshold', 3), help='Min indicators to agree for BUY/SELL')
+    parser.add_argument('--volume-gate-enabled', action='store_true', default=app_config.get('settings', {}).get('volume_gate_enabled', True))
+    parser.add_argument('--no-volume-gate', dest='volume_gate_enabled', action='store_false')
+    parser.add_argument('--volume-gate-period', type=int, default=app_config.get('settings', {}).get('volume_gate_period', 20), help='Bars for volume moving average')
+    parser.add_argument('--stoploss-cooldown-bars', type=int, default=app_config.get('settings', {}).get('stoploss_cooldown_hours', 6), help='Bars to wait after SL before re-entry')
 
     # New features
     parser.add_argument('--slippage-bps', type=float, default=DEFAULT_SLIPPAGE_BPS, help='Slippage in basis points')

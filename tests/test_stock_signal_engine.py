@@ -25,6 +25,7 @@ class TestStrongBuy:
         signal = generate_stock_signal(
             symbol="AAPL",
             market_data=_market(price=150, sma=140, rsi=25),
+            signal_threshold=2,
         )
         assert signal['signal'] == "BUY"
         assert signal['symbol'] == "AAPL"
@@ -36,6 +37,7 @@ class TestStrongBuy:
             symbol="MSFT",
             market_data=_market(price=300, sma=280, rsi=50),
             fundamental_data=_fundamentals(pe=20, earnings_growth=15),
+            signal_threshold=2,
         )
         assert signal['signal'] == "BUY"
 
@@ -45,6 +47,7 @@ class TestStrongBuy:
             symbol="GOOGL",
             market_data=_market(price=140, sma=145, rsi=25),
             volume_data=_volume(current=2000000, avg=1000000, change_pct=3.5),
+            signal_threshold=2,
         )
         assert signal['signal'] == "BUY"
 
@@ -57,6 +60,7 @@ class TestStrongSell:
         signal = generate_stock_signal(
             symbol="TSLA",
             market_data=_market(price=200, sma=220, rsi=75),
+            signal_threshold=2,
         )
         assert signal['signal'] == "SELL"
 
@@ -67,6 +71,7 @@ class TestStrongSell:
             market_data=_market(price=500, sma=480, rsi=55),
             volume_data=_volume(current=5000000, avg=2000000, change_pct=-4.0),
             fundamental_data=_fundamentals(pe=45, earnings_growth=10),
+            signal_threshold=2,
         )
         assert signal['signal'] == "SELL"
 
@@ -76,6 +81,7 @@ class TestStrongSell:
             symbol="META",
             market_data=_market(price=300, sma=320, rsi=55),
             fundamental_data=_fundamentals(pe=30, earnings_growth=-15),
+            signal_threshold=2,
         )
         assert signal['signal'] == "SELL"
 
@@ -126,6 +132,7 @@ class TestEdgeCases:
             symbol="AAPL",
             market_data=_market(price=150, sma=140, rsi=25),
             volume_data=None,
+            signal_threshold=2,
         )
         assert signal['signal'] == "BUY"  # SMA + RSI still trigger
 
@@ -135,6 +142,7 @@ class TestEdgeCases:
             symbol="TSLA",
             market_data=_market(price=200, sma=220, rsi=75),
             fundamental_data=None,
+            signal_threshold=2,
         )
         assert signal['signal'] == "SELL"  # SMA + RSI still trigger
 
@@ -155,5 +163,6 @@ class TestEdgeCases:
             symbol="AAPL",
             market_data=_market(price=150, sma=140, rsi=40),
             rsi_oversold_threshold=45,
+            signal_threshold=2,
         )
         assert signal['signal'] == "BUY"

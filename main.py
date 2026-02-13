@@ -66,6 +66,11 @@ _background_tasks = []
 # Key: order_id, Value: highest price observed
 _trailing_stop_peaks = {}
 
+# --- Stop-Loss Cooldown State ---
+# Prevents re-entry into a symbol for N hours after a stop-loss exit.
+# Key: symbol, Value: timestamp when cooldown expires
+_stoploss_cooldowns = {}
+
 
 def _update_trailing_stop(order_id: str, current_price: float) -> float:
     """Updates and returns the peak price for a position (used for trailing stop)."""
@@ -97,6 +102,10 @@ async def run_bot_cycle():
     rsi_period = settings.get('rsi_period', 14)
     rsi_overbought_threshold = settings.get('rsi_overbought_threshold', 70)
     rsi_oversold_threshold = settings.get('rsi_oversold_threshold', 30)
+    signal_threshold = settings.get('signal_threshold', 3)
+    volume_gate_enabled = settings.get('volume_gate_enabled', True)
+    volume_gate_period = settings.get('volume_gate_period', 20)
+    stoploss_cooldown_hours = settings.get('stoploss_cooldown_hours', 6)
 
     # Paper trading and risk management settings
     paper_trading = settings.get('paper_trading', True)
@@ -240,6 +249,10 @@ async def run_bot_cycle():
                         place_order(symbol, "SELL", position['quantity'], current_price,
                                     existing_order_id=order_id)
                         _clear_trailing_stop(order_id)
+                        if stoploss_cooldown_hours > 0:
+                            from datetime import datetime, timedelta, timezone
+                            _stoploss_cooldowns[symbol] = datetime.now(timezone.utc) + timedelta(hours=stoploss_cooldown_hours)
+                            log.info(f"[{symbol}] Stop-loss cooldown set for {stoploss_cooldown_hours}h")
                         await send_telegram_alert({"signal": "SELL", "symbol": symbol, "current_price": current_price,
                                                    "reason": f"Stop-loss hit ({stop_loss_percentage * 100:.2f}% loss)."})
 
@@ -331,6 +344,7 @@ async def run_bot_cycle():
             historical_prices=historical_prices,
             volume_data=crypto_volume_data,
             order_book_data=order_book,
+            signal_threshold=signal_threshold,
         )
         log.info(f"Generated Signal for {symbol}: {signal}")
 
@@ -396,6 +410,25 @@ async def run_bot_cycle():
             # Apply regime risk multiplier to effective risk percentage
             risk_multiplier = regime_params.get('risk_multiplier', 1.0)
             adjusted_risk_pct = effective_risk_pct * risk_multiplier
+
+            # --- Stop-loss cooldown check ---
+            if signal['signal'] in ("BUY", "SELL") and symbol in _stoploss_cooldowns:
+                from datetime import datetime, timezone
+                if datetime.now(timezone.utc) < _stoploss_cooldowns[symbol]:
+                    log.info(f"Skipping {signal['signal']} for {symbol}: stop-loss cooldown active.")
+                    signal['signal'] = 'HOLD'
+                else:
+                    del _stoploss_cooldowns[symbol]
+
+            # --- Volume gate: block entry if klines volume below average ---
+            if signal['signal'] in ("BUY", "SELL") and volume_gate_enabled and klines:
+                volumes = [k['volume'] for k in klines]
+                if len(volumes) >= volume_gate_period:
+                    vol_avg = sum(volumes[-volume_gate_period:]) / volume_gate_period
+                    if volumes[-1] < vol_avg:
+                        log.info(f"Volume gate blocked {signal['signal']} for {symbol}: "
+                                 f"vol={volumes[-1]:.0f} < avg={vol_avg:.0f}")
+                        signal['signal'] = 'HOLD'
 
             if signal['signal'] == "BUY":
                 if any(p['symbol'] == symbol and p['status'] == 'OPEN' for p in open_positions):
@@ -479,6 +512,10 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None, gemi
     pe_sell = stock_settings.get('pe_ratio_sell_threshold', 40)
     earnings_sell = stock_settings.get('earnings_growth_sell_threshold', -10)
     vol_multiplier = stock_settings.get('volume_spike_multiplier', 1.5)
+    signal_threshold = settings.get('signal_threshold', 3)
+    volume_gate_enabled = settings.get('volume_gate_enabled', True)
+    volume_gate_period = settings.get('volume_gate_period', 20)
+    stoploss_cooldown_hours = settings.get('stoploss_cooldown_hours', 6)
 
     # Shared risk management settings
     paper_trading = settings.get('paper_trading', True)
@@ -537,6 +574,10 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None, gemi
                         place_order(symbol, "SELL", position['quantity'], current_price,
                                     existing_order_id=order_id, asset_type='stock')
                         _clear_trailing_stop(order_id)
+                        if stoploss_cooldown_hours > 0:
+                            from datetime import datetime, timedelta, timezone
+                            _stoploss_cooldowns[symbol] = datetime.now(timezone.utc) + timedelta(hours=stoploss_cooldown_hours)
+                            log.info(f"[{symbol}] Stop-loss cooldown set for {stoploss_cooldown_hours}h")
                         await send_telegram_alert({"signal": "SELL", "symbol": symbol,
                                                    "current_price": current_price, "asset_type": "stock",
                                                    "reason": f"Stop-loss hit ({stop_loss_percentage * 100:.2f}% loss)."})
@@ -620,11 +661,30 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None, gemi
             earnings_growth_sell_threshold=earnings_sell,
             volume_spike_multiplier=vol_multiplier,
             news_sentiment_data=stock_news_data,
-            historical_prices=prices
+            historical_prices=prices,
+            signal_threshold=signal_threshold,
         )
         signal['asset_type'] = 'stock'
         log.info(f"Generated Stock Signal for {symbol}: {signal}")
         save_signal(signal)
+
+        # --- Stop-loss cooldown check ---
+        if signal['signal'] in ("BUY", "SELL") and symbol in _stoploss_cooldowns:
+            from datetime import datetime, timezone
+            if datetime.now(timezone.utc) < _stoploss_cooldowns[symbol]:
+                log.info(f"Skipping {signal['signal']} for stock {symbol}: stop-loss cooldown active.")
+                signal['signal'] = 'HOLD'
+            else:
+                del _stoploss_cooldowns[symbol]
+
+        # --- Volume gate: block entry if daily volume below average ---
+        if signal['signal'] in ("BUY", "SELL") and volume_gate_enabled and volumes:
+            if len(volumes) >= volume_gate_period:
+                vol_avg = sum(volumes[-volume_gate_period:]) / volume_gate_period
+                if volumes[-1] < vol_avg:
+                    log.info(f"Volume gate blocked {signal['signal']} for stock {symbol}: "
+                             f"vol={volumes[-1]:.0f} < avg={vol_avg:.0f}")
+                    signal['signal'] = 'HOLD'
 
         # --- Trade Execution (broker-aware) ---
         if broker == 'alpaca':
