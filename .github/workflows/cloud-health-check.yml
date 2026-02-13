@@ -5,17 +5,33 @@ on:
   schedule:
     - cron: '0 * * * *'
 
+env:
+  ZONE: europe-west3-a
+  INSTANCE_NAME: crypto-bot-eu
+
 jobs:
   health-check:
     name: Check Bot Health
     runs-on: ubuntu-latest
     steps:
+      - name: Google Auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: '${{ secrets.GCP_SA_KEY }}'
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
       - name: Health check
         run: |
-          RESPONSE=$(curl -sf --max-time 15 "http://${{ secrets.GCE_INSTANCE_IP }}:8080/health" || true)
+          EXTERNAL_IP=$(gcloud compute instances describe ${{ env.INSTANCE_NAME }} \
+            --zone=${{ env.ZONE }} \
+            --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
+          echo "VM IP: $EXTERNAL_IP"
+          RESPONSE=$(curl -sf --max-time 15 "http://${EXTERNAL_IP}:8080/health" || true)
           if echo "$RESPONSE" | grep -q '"status"'; then
             echo "Bot is healthy: $RESPONSE"
           else
-            echo "::error::Health check failed — bot may be down"
+            echo "::error::Health check failed — bot may be down (IP: $EXTERNAL_IP)"
             exit 1
           fi

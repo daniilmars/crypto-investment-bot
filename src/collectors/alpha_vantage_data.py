@@ -6,6 +6,13 @@ from src.config import app_config
 from src.collectors.binance_data import save_price_data
 from src.logger import log
 
+# yfinance fallback (free, no API key)
+try:
+    import yfinance as yf
+    _HAS_YFINANCE = True
+except ImportError:
+    _HAS_YFINANCE = False
+
 # Stock symbols: 1-10 alphanumeric chars, may include dots/hyphens (e.g. BRK.B)
 _STOCK_SYMBOL_RE = re.compile(r'^[A-Za-z0-9.\-]{1,10}$')
 
@@ -106,8 +113,8 @@ def get_stock_price(symbol):
     })
 
     if not data or 'Global Quote' not in data:
-        log.warning(f"No quote data returned for {symbol}.")
-        return None
+        log.warning(f"No quote data from Alpha Vantage for {symbol}. Trying yfinance fallback.")
+        return _get_stock_price_yfinance(symbol)
 
     quote = data['Global Quote']
     try:
@@ -135,6 +142,32 @@ def get_stock_price(symbol):
     }
 
 
+def _get_stock_price_yfinance(symbol):
+    """Fallback: fetch stock price via yfinance (no API key needed)."""
+    if not _HAS_YFINANCE:
+        log.warning("yfinance not installed, cannot use fallback.")
+        return None
+    try:
+        ticker = yf.Ticker(symbol)
+        hist = ticker.history(period="2d")
+        if hist.empty:
+            log.warning(f"yfinance returned no data for {symbol}.")
+            return None
+        price = float(hist['Close'].iloc[-1])
+        volume = float(hist['Volume'].iloc[-1])
+        if len(hist) >= 2:
+            prev_close = float(hist['Close'].iloc[-2])
+            change_percent = ((price - prev_close) / prev_close) * 100
+        else:
+            change_percent = 0.0
+        save_price_data({'symbol': symbol, 'price': price})
+        log.info(f"[yfinance] Fetched stock price for {symbol}: ${price:.2f}")
+        return {'symbol': symbol, 'price': price, 'volume': volume, 'change_percent': change_percent}
+    except Exception as e:
+        log.error(f"[yfinance] Error fetching {symbol}: {e}")
+        return None
+
+
 def get_daily_prices(symbol):
     """
     Fetches daily time series data for local SMA/RSI calculation.
@@ -152,8 +185,8 @@ def get_daily_prices(symbol):
     })
 
     if not data or 'Time Series (Daily)' not in data:
-        log.warning(f"No daily time series data returned for {symbol}.")
-        return None
+        log.warning(f"No daily data from Alpha Vantage for {symbol}. Trying yfinance fallback.")
+        return _get_daily_prices_yfinance(symbol)
 
     time_series = data['Time Series (Daily)']
     # Sort by date ascending (oldest first)
@@ -171,6 +204,26 @@ def get_daily_prices(symbol):
 
     log.info(f"Fetched {len(prices)} daily prices for {symbol}.")
     return {'prices': prices, 'volumes': volumes}
+
+
+def _get_daily_prices_yfinance(symbol):
+    """Fallback: fetch daily prices via yfinance."""
+    if not _HAS_YFINANCE:
+        log.warning("yfinance not installed, cannot use fallback.")
+        return None
+    try:
+        ticker = yf.Ticker(symbol)
+        hist = ticker.history(period="6mo")
+        if hist.empty:
+            log.warning(f"[yfinance] No daily data for {symbol}.")
+            return None
+        prices = hist['Close'].tolist()
+        volumes = hist['Volume'].tolist()
+        log.info(f"[yfinance] Fetched {len(prices)} daily prices for {symbol}.")
+        return {'prices': prices, 'volumes': volumes}
+    except Exception as e:
+        log.error(f"[yfinance] Error fetching daily data for {symbol}: {e}")
+        return None
 
 
 def get_company_overview(symbol):
