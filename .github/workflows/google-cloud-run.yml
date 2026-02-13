@@ -137,10 +137,10 @@ jobs:
 
             paper_trading: false
             paper_trading_initial_capital: 10000.0
-            trade_risk_percentage: 0.01
-            stop_loss_percentage: 0.02
-            take_profit_percentage: 0.05
-            max_concurrent_positions: 3
+            trade_risk_percentage: 0.03
+            stop_loss_percentage: 0.03
+            take_profit_percentage: 0.08
+            max_concurrent_positions: 5
 
             regular_status_update:
               enabled: true
@@ -158,10 +158,10 @@ jobs:
               enabled: true
               mode: "testnet"
               initial_capital: 100.0
-              max_concurrent_positions: 2
-              trade_risk_percentage: 0.05
+              max_concurrent_positions: 3
+              trade_risk_percentage: 0.03
               stop_loss_percentage: 0.03
-              take_profit_percentage: 0.06
+              take_profit_percentage: 0.08
               daily_loss_limit_pct: 0.10
               max_drawdown_pct: 0.25
               balance_floor_usd: 70.0
