@@ -9,10 +9,54 @@ def generate_stock_signal(symbol, market_data, volume_data=None, fundamental_dat
                           volume_spike_multiplier=1.5,
                           news_sentiment_data=None,
                           historical_prices=None,
-                          signal_threshold=3):
+                          signal_threshold=3,
+                          signal_mode="scoring",
+                          sentiment_config=None):
     """
-    Generates a BUY/SELL/HOLD signal for a stock using a 4-indicator scoring system.
-    Requires 2+ indicators to agree for a BUY or SELL signal.
+    Generates a BUY/SELL/HOLD signal for a stock.
+
+    Args:
+        signal_mode: "scoring" (legacy multi-indicator) or "sentiment" (Gemini-first).
+        sentiment_config: dict with min_gemini_confidence, min_vader_score,
+                          rsi_buy_veto_threshold, rsi_sell_veto_threshold,
+                          pe_buy_veto_threshold.
+    """
+    if signal_mode == "sentiment":
+        return _generate_stock_sentiment_signal(
+            symbol=symbol,
+            market_data=market_data,
+            fundamental_data=fundamental_data or {},
+            news_sentiment_data=news_sentiment_data,
+            sentiment_config=sentiment_config or {},
+        )
+    else:
+        return _generate_stock_scoring_signal(
+            symbol=symbol,
+            market_data=market_data,
+            volume_data=volume_data,
+            fundamental_data=fundamental_data,
+            rsi_overbought_threshold=rsi_overbought_threshold,
+            rsi_oversold_threshold=rsi_oversold_threshold,
+            pe_ratio_buy_threshold=pe_ratio_buy_threshold,
+            pe_ratio_sell_threshold=pe_ratio_sell_threshold,
+            earnings_growth_sell_threshold=earnings_growth_sell_threshold,
+            volume_spike_multiplier=volume_spike_multiplier,
+            news_sentiment_data=news_sentiment_data,
+            historical_prices=historical_prices,
+            signal_threshold=signal_threshold,
+        )
+
+
+def _generate_stock_scoring_signal(symbol, market_data, volume_data=None, fundamental_data=None,
+                                    rsi_overbought_threshold=70, rsi_oversold_threshold=30,
+                                    pe_ratio_buy_threshold=25, pe_ratio_sell_threshold=40,
+                                    earnings_growth_sell_threshold=-10,
+                                    volume_spike_multiplier=1.5,
+                                    news_sentiment_data=None,
+                                    historical_prices=None,
+                                    signal_threshold=3):
+    """
+    Legacy multi-indicator scoring system for stocks. Zero behavior change from original.
 
     Scoring:
     | Indicator    | +1 BUY                              | +1 SELL                                  |
@@ -181,4 +225,115 @@ def generate_stock_signal(symbol, market_data, volume_data=None, fundamental_dat
 
     log.info(f"[{symbol}] Stock HOLD. {reason_str}")
     return {"signal": "HOLD", "symbol": symbol, "reason": reason_str,
+            "current_price": current_price}
+
+
+def _generate_stock_sentiment_signal(symbol, market_data, fundamental_data=None,
+                                      news_sentiment_data=None, sentiment_config=None):
+    """
+    Sentiment-first signal for stocks: Gemini is the primary trigger, with SMA trend
+    filter, RSI sanity check, and P/E veto as gatekeepers.
+
+    Flow:
+        1. Gemini direction + confidence >= threshold (primary trigger)
+           - Fallback: VADER score >= threshold
+        2. SMA trend must agree (don't trade against the trend)
+        3. RSI must not veto (don't buy overbought, don't sell oversold)
+        4. P/E must not veto BUY (don't buy overvalued stocks)
+    """
+    if sentiment_config is None:
+        sentiment_config = {}
+    if fundamental_data is None:
+        fundamental_data = {}
+
+    current_price = market_data.get('current_price')
+    sma = market_data.get('sma')
+    rsi = market_data.get('rsi')
+
+    log.debug(f"[{symbol}] Stock Sentiment Signal Check: Price={current_price}, SMA={sma}, RSI={rsi}")
+
+    if current_price is None:
+        return {"signal": "HOLD", "symbol": symbol, "reason": "Missing current price data.",
+                "current_price": 0}
+
+    if sma is None or rsi is None:
+        return {"signal": "HOLD", "symbol": symbol, "reason": "Missing market data (SMA or RSI).",
+                "current_price": current_price}
+
+    min_gemini_conf = sentiment_config.get('min_gemini_confidence', 0.7)
+    min_vader_score = sentiment_config.get('min_vader_score', 0.3)
+    rsi_buy_veto = sentiment_config.get('rsi_buy_veto_threshold', 75)
+    rsi_sell_veto = sentiment_config.get('rsi_sell_veto_threshold', 25)
+    pe_buy_veto = sentiment_config.get('pe_buy_veto_threshold', 40)
+
+    # --- Step 1: Sentiment trigger (Gemini primary, VADER fallback) ---
+    direction = None
+    sentiment_reason = ""
+
+    if news_sentiment_data:
+        gemini = news_sentiment_data.get('gemini_assessment')
+
+        if gemini and gemini.get('confidence', 0) >= min_gemini_conf:
+            g_direction = gemini.get('direction', 'neutral')
+            g_confidence = gemini.get('confidence', 0)
+            g_reasoning = gemini.get('reasoning', '')
+            if g_direction in ('bullish', 'bearish'):
+                direction = g_direction
+                sentiment_reason = f"Gemini {g_direction} ({g_confidence:.2f}): {g_reasoning}"
+
+        # VADER fallback
+        if direction is None:
+            avg_sentiment = news_sentiment_data.get('avg_sentiment_score', 0)
+            if avg_sentiment >= min_vader_score:
+                direction = 'bullish'
+                sentiment_reason = f"VADER bullish ({avg_sentiment:.3f})"
+            elif avg_sentiment <= -min_vader_score:
+                direction = 'bearish'
+                sentiment_reason = f"VADER bearish ({avg_sentiment:.3f})"
+
+    if direction is None:
+        reason = f"No sentiment trigger. Price: ${current_price:,.2f}, SMA: ${sma:,.2f}, RSI: {rsi:.2f}."
+        log.debug(f"[{symbol}] Stock HOLD: {reason}")
+        return {"signal": "HOLD", "symbol": symbol, "reason": reason,
+                "current_price": current_price}
+
+    # --- Step 2: SMA trend filter (don't trade against the trend) ---
+    if direction == 'bullish' and current_price < sma:
+        reason = f"Sentiment bullish but price ${current_price:,.2f} < SMA ${sma:,.2f} (downtrend). {sentiment_reason}."
+        log.debug(f"[{symbol}] Stock HOLD: {reason}")
+        return {"signal": "HOLD", "symbol": symbol, "reason": reason,
+                "current_price": current_price}
+
+    if direction == 'bearish' and current_price > sma:
+        reason = f"Sentiment bearish but price ${current_price:,.2f} > SMA ${sma:,.2f} (uptrend). {sentiment_reason}."
+        log.debug(f"[{symbol}] Stock HOLD: {reason}")
+        return {"signal": "HOLD", "symbol": symbol, "reason": reason,
+                "current_price": current_price}
+
+    # --- Step 3: RSI veto (don't buy overbought, don't sell oversold) ---
+    if direction == 'bullish' and rsi > rsi_buy_veto:
+        reason = f"Sentiment bullish but RSI {rsi:.2f} > {rsi_buy_veto} (overbought veto). {sentiment_reason}."
+        log.debug(f"[{symbol}] Stock HOLD: {reason}")
+        return {"signal": "HOLD", "symbol": symbol, "reason": reason,
+                "current_price": current_price}
+
+    if direction == 'bearish' and rsi < rsi_sell_veto:
+        reason = f"Sentiment bearish but RSI {rsi:.2f} < {rsi_sell_veto} (oversold veto). {sentiment_reason}."
+        log.debug(f"[{symbol}] Stock HOLD: {reason}")
+        return {"signal": "HOLD", "symbol": symbol, "reason": reason,
+                "current_price": current_price}
+
+    # --- Step 4: P/E veto for BUY (don't buy overvalued stocks) ---
+    pe_ratio = fundamental_data.get('pe_ratio')
+    if direction == 'bullish' and pe_ratio is not None and pe_ratio > pe_buy_veto:
+        reason = f"Sentiment bullish but P/E {pe_ratio:.1f} > {pe_buy_veto} (overvalued veto). {sentiment_reason}."
+        log.debug(f"[{symbol}] Stock HOLD: {reason}")
+        return {"signal": "HOLD", "symbol": symbol, "reason": reason,
+                "current_price": current_price}
+
+    # --- All gates passed: generate signal ---
+    signal_type = "BUY" if direction == 'bullish' else "SELL"
+    reason = f"{sentiment_reason}. Price: ${current_price:,.2f}, SMA: ${sma:,.2f}, RSI: {rsi:.2f}."
+    log.info(f"[{symbol}] Stock {signal_type} signal (sentiment mode). {reason}")
+    return {"signal": signal_type, "symbol": symbol, "reason": reason,
             "current_price": current_price}

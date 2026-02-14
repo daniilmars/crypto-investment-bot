@@ -24,8 +24,8 @@ def test_initialize_database_creates_tables(mock_get_db_connection, mock_release
     initialize_database()
 
     # Assert: Check if CREATE TABLE + ALTER TABLE statements were executed
-    # 7 CREATE TABLEs + 6 ALTER TABLE (new trade columns incl. asset_type) = 13
-    assert mock_cursor.execute.call_count == 13
+    # 8 CREATE TABLEs + 1 CREATE INDEX + 6 ALTER TABLE (new trade columns incl. asset_type) = 15
+    assert mock_cursor.execute.call_count == 15
 
     # Check the SQL statements (case-insensitive and ignoring whitespace)
     executed_queries = [' '.join(call[0][0].split()) for call in mock_cursor.execute.call_args_list]
@@ -35,6 +35,8 @@ def test_initialize_database_creates_tables(mock_get_db_connection, mock_release
     assert any("CREATE TABLE IF NOT EXISTS trades" in query for query in executed_queries)
     assert any("CREATE TABLE IF NOT EXISTS optimization_results" in query for query in executed_queries)
     assert any("CREATE TABLE IF NOT EXISTS news_sentiment" in query for query in executed_queries)
+    assert any("CREATE TABLE IF NOT EXISTS scraped_articles" in query for query in executed_queries)
+    assert any("idx_scraped_articles_title_hash" in query for query in executed_queries)
 
     mock_conn.commit.assert_called_once()
     mock_release.assert_called_once_with(mock_conn)
@@ -89,3 +91,105 @@ def test_get_transaction_timestamps_since(mock_get_db_connection, mock_release):
     mock_cursor_context.execute.assert_called_once()
     assert timestamps == [1672531200, 1672534800]
     mock_release.assert_called_once_with(mock_conn)
+
+
+# --- Article Archive Tests ---
+
+class TestArticleArchive:
+    """Tests for the scraped_articles archive functions."""
+
+    @patch('src.database.release_db_connection')
+    @patch('src.database.get_db_connection')
+    def test_save_articles_batch_inserts(self, mock_get_db_connection, mock_release):
+        """Verify INSERT calls with correct params."""
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_get_db_connection.return_value = mock_conn
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_cursor.__exit__ = MagicMock(return_value=False)
+
+        from src.database import save_articles_batch
+
+        articles = [
+            {
+                'title': 'Bitcoin hits new high',
+                'title_hash': 'abc123',
+                'source': 'CoinDesk',
+                'source_url': 'https://coindesk.com/1',
+                'description': 'BTC surged today.',
+                'symbol': 'BTC',
+                'vader_score': 0.75,
+            },
+            {
+                'title': 'Ethereum upgrade',
+                'title_hash': 'def456',
+                'source': 'CoinTelegraph',
+                'source_url': 'https://cointelegraph.com/2',
+                'description': 'ETH protocol change.',
+                'symbol': 'ETH',
+                'vader_score': 0.3,
+            },
+        ]
+
+        save_articles_batch(articles)
+
+        assert mock_cursor.execute.call_count == 2
+        mock_conn.commit.assert_called_once()
+        mock_release.assert_called_once_with(mock_conn)
+
+    @patch('src.database.release_db_connection')
+    @patch('src.database.get_db_connection')
+    def test_save_articles_batch_empty(self, mock_get_db_connection, mock_release):
+        """Empty list = no DB interaction."""
+        from src.database import save_articles_batch
+
+        save_articles_batch([])
+
+        mock_get_db_connection.assert_not_called()
+        mock_release.assert_not_called()
+
+    @patch('src.database.release_db_connection')
+    @patch('src.database.get_db_connection')
+    def test_get_recent_articles(self, mock_get_db_connection, mock_release):
+        """Mock cursor, verify query and return."""
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_get_db_connection.return_value = mock_conn
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_cursor.__exit__ = MagicMock(return_value=False)
+
+        mock_row1 = MagicMock()
+        mock_row1.keys.return_value = ['title', 'source', 'vader_score', 'collected_at']
+        mock_row1.__iter__ = MagicMock(return_value=iter(['BTC breaks record', 'CoinDesk', 0.8, '2026-02-14']))
+        mock_row1.__getitem__ = lambda self, key: {'title': 'BTC breaks record', 'source': 'CoinDesk',
+                                                    'vader_score': 0.8, 'collected_at': '2026-02-14'}[key]
+
+        mock_cursor.fetchall.return_value = [
+            {'title': 'BTC breaks record', 'source': 'CoinDesk', 'vader_score': 0.8, 'collected_at': '2026-02-14'},
+        ]
+
+        from src.database import get_recent_articles
+
+        result = get_recent_articles('BTC', hours=24)
+
+        mock_cursor.execute.assert_called_once()
+        assert len(result) == 1
+        assert result[0]['title'] == 'BTC breaks record'
+        mock_release.assert_called_once_with(mock_conn)
+
+    def test_title_hash_consistency(self):
+        """Same title -> same hash regardless of case/whitespace."""
+        from src.database import compute_title_hash
+
+        hash1 = compute_title_hash("Bitcoin Hits New High")
+        hash2 = compute_title_hash("  bitcoin hits new high  ")
+        hash3 = compute_title_hash("BITCOIN HITS NEW HIGH")
+
+        assert hash1 == hash2
+        assert hash2 == hash3
+
+        # Different title = different hash
+        hash4 = compute_title_hash("Ethereum upgrade")
+        assert hash1 != hash4

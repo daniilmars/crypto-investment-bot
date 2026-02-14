@@ -94,6 +94,40 @@ async def send_telegram_alert(signal: dict):
 
     await send_telegram_message(bot, CHAT_ID, message)
 
+async def send_position_health_alert(symbol: str, current_price: float,
+                                     pnl_pct: float, health: dict, position: dict):
+    """Sends a position health alert when Gemini recommends exiting a position."""
+    if not telegram_config.get('enabled') or not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
+        log.warning("Telegram bot is not configured. Skipping position health alert.")
+        return
+    bot = Bot(token=TOKEN)
+
+    recommendation = health.get('recommendation', 'unknown')
+    confidence = health.get('confidence', 0)
+    reasoning = health.get('reasoning', 'No reasoning provided.')
+    entry_price = position.get('entry_price', 0)
+
+    if recommendation == 'exit':
+        emoji = "🔴"
+    elif confidence >= 0.5:
+        emoji = "🟡"
+    else:
+        emoji = "🟢"
+
+    message = (
+        f"{emoji} *Position Health Alert* {emoji}\n\n"
+        f"*{symbol}*\n"
+        f"- Entry: ${entry_price:,.2f}\n"
+        f"- Current: ${current_price:,.2f}\n"
+        f"- PnL: {pnl_pct:+.2f}%\n\n"
+        f"*Recommendation:* {recommendation.upper()}\n"
+        f"*Confidence:* {confidence:.0%}\n"
+        f"*Reasoning:* {reasoning}"
+    )
+
+    await send_telegram_message(bot, CHAT_ID, message)
+
+
 async def send_news_alert(triggered_symbols, sentiment_data, gemini_assessments=None):
     """Sends a breaking news alert when news volume spikes or sentiment shifts."""
     if not telegram_config.get('enabled') or not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":

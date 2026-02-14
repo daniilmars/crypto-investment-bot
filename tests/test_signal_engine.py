@@ -165,3 +165,158 @@ def test_no_volatility_warning_signal(whales_bullish):
     signal = generate_signal(symbol='BTCUSDT', whale_transactions=whales_bullish, market_data=market_data, velocity_data=velocity_data, velocity_threshold_multiplier=5.0)
     assert signal['signal'] == 'BUY'
 
+
+# --- Tests for Sentiment Signal Mode ---
+
+class TestSentimentMode:
+    """Tests for signal_mode='sentiment' in the crypto signal engine."""
+
+    BULLISH_GEMINI = {
+        'gemini_assessment': {'direction': 'bullish', 'confidence': 0.85, 'reasoning': 'ETF inflows strong'},
+        'avg_sentiment_score': 0,
+    }
+    BEARISH_GEMINI = {
+        'gemini_assessment': {'direction': 'bearish', 'confidence': 0.80, 'reasoning': 'Regulatory crackdown'},
+        'avg_sentiment_score': 0,
+    }
+    SENTIMENT_CONFIG = {
+        'min_gemini_confidence': 0.7,
+        'min_vader_score': 0.3,
+        'rsi_buy_veto_threshold': 75,
+        'rsi_sell_veto_threshold': 25,
+    }
+
+    def test_bullish_uptrend_generates_buy(self):
+        """Gemini bullish + price > SMA + normal RSI = BUY."""
+        market_data = {'current_price': 105, 'sma': 100, 'rsi': 50}
+        signal = generate_signal(
+            symbol='BTCUSDT', whale_transactions=[], market_data=market_data,
+            news_sentiment_data=self.BULLISH_GEMINI,
+            signal_mode='sentiment', sentiment_config=self.SENTIMENT_CONFIG,
+        )
+        assert signal['signal'] == 'BUY'
+        assert 'Gemini bullish' in signal['reason']
+
+    def test_bearish_downtrend_generates_sell(self):
+        """Gemini bearish + price < SMA + normal RSI = SELL."""
+        market_data = {'current_price': 95, 'sma': 100, 'rsi': 50}
+        signal = generate_signal(
+            symbol='BTCUSDT', whale_transactions=[], market_data=market_data,
+            news_sentiment_data=self.BEARISH_GEMINI,
+            signal_mode='sentiment', sentiment_config=self.SENTIMENT_CONFIG,
+        )
+        assert signal['signal'] == 'SELL'
+        assert 'Gemini bearish' in signal['reason']
+
+    def test_bullish_blocked_by_downtrend(self):
+        """Gemini bullish but price < SMA = HOLD (don't trade against trend)."""
+        market_data = {'current_price': 95, 'sma': 100, 'rsi': 50}
+        signal = generate_signal(
+            symbol='BTCUSDT', whale_transactions=[], market_data=market_data,
+            news_sentiment_data=self.BULLISH_GEMINI,
+            signal_mode='sentiment', sentiment_config=self.SENTIMENT_CONFIG,
+        )
+        assert signal['signal'] == 'HOLD'
+        assert 'downtrend' in signal['reason']
+
+    def test_bearish_blocked_by_uptrend(self):
+        """Gemini bearish but price > SMA = HOLD."""
+        market_data = {'current_price': 105, 'sma': 100, 'rsi': 50}
+        signal = generate_signal(
+            symbol='BTCUSDT', whale_transactions=[], market_data=market_data,
+            news_sentiment_data=self.BEARISH_GEMINI,
+            signal_mode='sentiment', sentiment_config=self.SENTIMENT_CONFIG,
+        )
+        assert signal['signal'] == 'HOLD'
+        assert 'uptrend' in signal['reason']
+
+    def test_rsi_veto_blocks_buy(self):
+        """Gemini bullish + uptrend but RSI > 75 = HOLD (overbought veto)."""
+        market_data = {'current_price': 105, 'sma': 100, 'rsi': 80}
+        signal = generate_signal(
+            symbol='BTCUSDT', whale_transactions=[], market_data=market_data,
+            news_sentiment_data=self.BULLISH_GEMINI,
+            signal_mode='sentiment', sentiment_config=self.SENTIMENT_CONFIG,
+        )
+        assert signal['signal'] == 'HOLD'
+        assert 'overbought veto' in signal['reason']
+
+    def test_rsi_veto_blocks_sell(self):
+        """Gemini bearish + downtrend but RSI < 25 = HOLD (oversold veto)."""
+        market_data = {'current_price': 95, 'sma': 100, 'rsi': 20}
+        signal = generate_signal(
+            symbol='BTCUSDT', whale_transactions=[], market_data=market_data,
+            news_sentiment_data=self.BEARISH_GEMINI,
+            signal_mode='sentiment', sentiment_config=self.SENTIMENT_CONFIG,
+        )
+        assert signal['signal'] == 'HOLD'
+        assert 'oversold veto' in signal['reason']
+
+    def test_no_sentiment_data_holds(self):
+        """No news data at all = HOLD in sentiment mode."""
+        market_data = {'current_price': 105, 'sma': 100, 'rsi': 50}
+        signal = generate_signal(
+            symbol='BTCUSDT', whale_transactions=[], market_data=market_data,
+            news_sentiment_data=None,
+            signal_mode='sentiment', sentiment_config=self.SENTIMENT_CONFIG,
+        )
+        assert signal['signal'] == 'HOLD'
+        assert 'No sentiment trigger' in signal['reason']
+
+    def test_low_confidence_gemini_falls_back_to_vader(self):
+        """Gemini confidence below threshold, VADER takes over."""
+        news_data = {
+            'gemini_assessment': {'direction': 'bullish', 'confidence': 0.5, 'reasoning': 'Low conf'},
+            'avg_sentiment_score': 0.4,
+        }
+        market_data = {'current_price': 105, 'sma': 100, 'rsi': 50}
+        signal = generate_signal(
+            symbol='BTCUSDT', whale_transactions=[], market_data=market_data,
+            news_sentiment_data=news_data,
+            signal_mode='sentiment', sentiment_config=self.SENTIMENT_CONFIG,
+        )
+        assert signal['signal'] == 'BUY'
+        assert 'VADER bullish' in signal['reason']
+
+    def test_vader_below_threshold_holds(self):
+        """VADER score below min_vader_score = HOLD."""
+        news_data = {
+            'gemini_assessment': {'direction': 'bullish', 'confidence': 0.3, 'reasoning': 'Low conf'},
+            'avg_sentiment_score': 0.1,  # Below 0.3 threshold
+        }
+        market_data = {'current_price': 105, 'sma': 100, 'rsi': 50}
+        signal = generate_signal(
+            symbol='BTCUSDT', whale_transactions=[], market_data=market_data,
+            news_sentiment_data=news_data,
+            signal_mode='sentiment', sentiment_config=self.SENTIMENT_CONFIG,
+        )
+        assert signal['signal'] == 'HOLD'
+
+    def test_high_priority_bypass_still_works(self):
+        """High-priority wallet signal overrides sentiment mode."""
+        market_data = {'current_price': 95, 'sma': 100, 'rsi': 50}
+        high_priority_tx = [{
+            'from': {'owner': 'Grayscale', 'owner_type': 'institution'},
+            'to': {'owner': 'Coinbase', 'owner_type': 'exchange'},
+            'amount_usd': 50000000,
+            'symbol': 'BTC'
+        }]
+        signal = generate_signal(
+            symbol='BTCUSDT', whale_transactions=high_priority_tx,
+            market_data=market_data,
+            high_interest_wallets=['Grayscale'],
+            signal_mode='sentiment', sentiment_config=self.SENTIMENT_CONFIG,
+        )
+        assert signal['signal'] == 'SELL'
+        assert 'High-priority signal' in signal['reason']
+
+    def test_scoring_mode_backward_compatible(self):
+        """Explicit signal_mode='scoring' works identically to the default."""
+        market_data = {'current_price': 105, 'sma': 100, 'rsi': 25}
+        whales = [{'from': {'owner_type': 'exchange'}, 'to': {'owner_type': 'wallet'}, 'amount_usd': 5000000, 'symbol': 'BTC'}]
+        signal = generate_signal(
+            symbol='BTCUSDT', whale_transactions=whales, market_data=market_data,
+            signal_mode='scoring',
+        )
+        assert signal['signal'] == 'BUY'
+

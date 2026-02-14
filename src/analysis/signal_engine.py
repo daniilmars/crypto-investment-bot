@@ -2,10 +2,15 @@ import pandas as pd
 from src.logger import log
 from src.analysis.technical_indicators import calculate_macd, calculate_bollinger_bands
 
-def generate_signal(symbol, whale_transactions, market_data, high_interest_wallets=None, stablecoin_data=None, stablecoin_threshold=100000000, velocity_data=None, velocity_threshold_multiplier=5.0, rsi_overbought_threshold=70, rsi_oversold_threshold=30, news_sentiment_data=None, historical_prices=None, volume_data=None, order_book_data=None, signal_threshold=3):
+def generate_signal(symbol, whale_transactions, market_data, high_interest_wallets=None, stablecoin_data=None, stablecoin_threshold=100000000, velocity_data=None, velocity_threshold_multiplier=5.0, rsi_overbought_threshold=70, rsi_oversold_threshold=30, news_sentiment_data=None, historical_prices=None, volume_data=None, order_book_data=None, signal_threshold=3, signal_mode="scoring", sentiment_config=None):
     """
     Generates a trading signal based on on-chain data and technical indicators.
     Prioritizes anomalies and high-priority events.
+
+    Args:
+        signal_mode: "scoring" (legacy 8-indicator system) or "sentiment" (Gemini-first).
+        sentiment_config: dict with min_gemini_confidence, min_vader_score,
+                          rsi_buy_veto_threshold, rsi_sell_veto_threshold.
     """
     if high_interest_wallets is None: high_interest_wallets = []
     if stablecoin_data is None: stablecoin_data = {}
@@ -46,10 +51,39 @@ def generate_signal(symbol, whale_transactions, market_data, high_interest_walle
                 reason = f"High-interest wallet '{to_owner}' received ${amount_usd:,.2f} of {symbol} from {from_owner}."
                 return {"signal": "BUY", "symbol": symbol, "reason": "High-priority signal: " + reason}
 
-    # --- 4. Standard Technical and On-Chain Analysis ---
+    # --- 4. Route to signal mode ---
+    if signal_mode == "sentiment":
+        return _generate_sentiment_signal(
+            symbol=symbol,
+            market_data=market_data,
+            whale_transactions=whale_transactions,
+            news_sentiment_data=news_sentiment_data,
+            sentiment_config=sentiment_config or {},
+        )
+    else:
+        return _generate_scoring_signal(
+            symbol=symbol,
+            whale_transactions=whale_transactions,
+            market_data=market_data,
+            rsi_overbought_threshold=rsi_overbought_threshold,
+            rsi_oversold_threshold=rsi_oversold_threshold,
+            news_sentiment_data=news_sentiment_data,
+            historical_prices=historical_prices,
+            volume_data=volume_data,
+            order_book_data=order_book_data,
+            signal_threshold=signal_threshold,
+        )
+
+
+def _generate_scoring_signal(symbol, whale_transactions, market_data,
+                              rsi_overbought_threshold=70, rsi_oversold_threshold=30,
+                              news_sentiment_data=None, historical_prices=None,
+                              volume_data=None, order_book_data=None, signal_threshold=3):
+    """Legacy 8-indicator scoring system. Zero behavior change from original."""
     current_price = market_data.get('current_price')
     sma = market_data.get('sma')
     rsi = market_data.get('rsi')
+    base_symbol = symbol.replace('USDT', '')
 
     log.debug(f"[{symbol}] Signal Check: Price={current_price}, SMA={sma}, RSI={rsi}")
 
@@ -80,7 +114,7 @@ def generate_signal(symbol, whale_transactions, market_data, high_interest_walle
         exchange_inflow = sum(tx['amount_usd'] for tx in symbol_whale_transactions if tx.get('to', {}).get('owner_type', '') == 'exchange')
         exchange_outflow = sum(tx['amount_usd'] for tx in symbol_whale_transactions if tx.get('from', {}).get('owner_type', '') == 'exchange')
         net_flow = exchange_inflow - exchange_outflow
-    
+
     log.debug(f"[{symbol}] Whale Net Flow: ${net_flow:,.2f}")
 
     if net_flow < 0: # More leaving exchanges than entering
@@ -187,3 +221,92 @@ def generate_signal(symbol, whale_transactions, market_data, high_interest_walle
 
     log.debug(f"[{symbol}] HOLD: No strong signal detected. {reason}")
     return {"signal": "HOLD", "symbol": symbol, "reason": "No strong signal detected. " + reason}
+
+
+def _generate_sentiment_signal(symbol, market_data, whale_transactions=None,
+                                news_sentiment_data=None, sentiment_config=None):
+    """
+    Sentiment-first signal: Gemini is the primary trigger, with SMA trend filter
+    and RSI sanity check as gatekeepers.
+
+    Flow:
+        1. Gemini direction + confidence >= threshold (primary trigger)
+           - Fallback: VADER score >= threshold
+        2. SMA trend must agree (don't trade against the trend)
+        3. RSI must not veto (don't buy overbought, don't sell oversold)
+    """
+    if sentiment_config is None:
+        sentiment_config = {}
+
+    current_price = market_data.get('current_price')
+    sma = market_data.get('sma')
+    rsi = market_data.get('rsi')
+
+    log.debug(f"[{symbol}] Sentiment Signal Check: Price={current_price}, SMA={sma}, RSI={rsi}")
+
+    if current_price is None or sma is None or rsi is None:
+        log.debug(f"[{symbol}] HOLD: Missing market data (price, SMA, or RSI).")
+        return {"signal": "HOLD", "symbol": symbol, "reason": "Missing market data (price, SMA, or RSI)."}
+
+    min_gemini_conf = sentiment_config.get('min_gemini_confidence', 0.7)
+    min_vader_score = sentiment_config.get('min_vader_score', 0.3)
+    rsi_buy_veto = sentiment_config.get('rsi_buy_veto_threshold', 75)
+    rsi_sell_veto = sentiment_config.get('rsi_sell_veto_threshold', 25)
+
+    # --- Step 1: Sentiment trigger (Gemini primary, VADER fallback) ---
+    direction = None
+    sentiment_reason = ""
+
+    if news_sentiment_data:
+        gemini = news_sentiment_data.get('gemini_assessment')
+
+        if gemini and gemini.get('confidence', 0) >= min_gemini_conf:
+            g_direction = gemini.get('direction', 'neutral')
+            g_confidence = gemini.get('confidence', 0)
+            g_reasoning = gemini.get('reasoning', '')
+            if g_direction in ('bullish', 'bearish'):
+                direction = g_direction
+                sentiment_reason = f"Gemini {g_direction} ({g_confidence:.2f}): {g_reasoning}"
+
+        # VADER fallback
+        if direction is None:
+            avg_sentiment = news_sentiment_data.get('avg_sentiment_score', 0)
+            if avg_sentiment >= min_vader_score:
+                direction = 'bullish'
+                sentiment_reason = f"VADER bullish ({avg_sentiment:.3f})"
+            elif avg_sentiment <= -min_vader_score:
+                direction = 'bearish'
+                sentiment_reason = f"VADER bearish ({avg_sentiment:.3f})"
+
+    if direction is None:
+        reason = f"No sentiment trigger. Price: ${current_price:,.2f}, SMA: ${sma:,.2f}, RSI: {rsi:.2f}."
+        log.debug(f"[{symbol}] HOLD: {reason}")
+        return {"signal": "HOLD", "symbol": symbol, "reason": reason}
+
+    # --- Step 2: SMA trend filter (don't trade against the trend) ---
+    if direction == 'bullish' and current_price < sma:
+        reason = f"Sentiment bullish but price ${current_price:,.2f} < SMA ${sma:,.2f} (downtrend). {sentiment_reason}."
+        log.debug(f"[{symbol}] HOLD: {reason}")
+        return {"signal": "HOLD", "symbol": symbol, "reason": reason}
+
+    if direction == 'bearish' and current_price > sma:
+        reason = f"Sentiment bearish but price ${current_price:,.2f} > SMA ${sma:,.2f} (uptrend). {sentiment_reason}."
+        log.debug(f"[{symbol}] HOLD: {reason}")
+        return {"signal": "HOLD", "symbol": symbol, "reason": reason}
+
+    # --- Step 3: RSI veto (don't buy overbought, don't sell oversold) ---
+    if direction == 'bullish' and rsi > rsi_buy_veto:
+        reason = f"Sentiment bullish but RSI {rsi:.2f} > {rsi_buy_veto} (overbought veto). {sentiment_reason}."
+        log.debug(f"[{symbol}] HOLD: {reason}")
+        return {"signal": "HOLD", "symbol": symbol, "reason": reason}
+
+    if direction == 'bearish' and rsi < rsi_sell_veto:
+        reason = f"Sentiment bearish but RSI {rsi:.2f} < {rsi_sell_veto} (oversold veto). {sentiment_reason}."
+        log.debug(f"[{symbol}] HOLD: {reason}")
+        return {"signal": "HOLD", "symbol": symbol, "reason": reason}
+
+    # --- All gates passed: generate signal ---
+    signal_type = "BUY" if direction == 'bullish' else "SELL"
+    reason = f"{sentiment_reason}. Price: ${current_price:,.2f}, SMA: ${sma:,.2f}, RSI: {rsi:.2f}."
+    log.info(f"[{symbol}] {signal_type} signal (sentiment mode). {reason}")
+    return {"signal": signal_type, "symbol": symbol, "reason": reason, "current_price": current_price}

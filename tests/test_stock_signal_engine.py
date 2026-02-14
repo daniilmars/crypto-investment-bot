@@ -166,3 +166,120 @@ class TestEdgeCases:
             signal_threshold=2,
         )
         assert signal['signal'] == "BUY"
+
+
+# --- Tests for Stock Sentiment Signal Mode ---
+
+class TestStockSentimentMode:
+    """Tests for signal_mode='sentiment' in the stock signal engine."""
+
+    BULLISH_GEMINI = {
+        'gemini_assessment': {'direction': 'bullish', 'confidence': 0.85, 'reasoning': 'Strong earnings'},
+        'avg_sentiment_score': 0,
+    }
+    BEARISH_GEMINI = {
+        'gemini_assessment': {'direction': 'bearish', 'confidence': 0.80, 'reasoning': 'Revenue miss'},
+        'avg_sentiment_score': 0,
+    }
+    SENTIMENT_CONFIG = {
+        'min_gemini_confidence': 0.7,
+        'min_vader_score': 0.3,
+        'rsi_buy_veto_threshold': 75,
+        'rsi_sell_veto_threshold': 25,
+        'pe_buy_veto_threshold': 40,
+    }
+
+    def test_bullish_uptrend_generates_buy(self):
+        """Gemini bullish + price > SMA + normal RSI = BUY."""
+        signal = generate_stock_signal(
+            symbol="AAPL", market_data=_market(price=150, sma=140, rsi=50),
+            news_sentiment_data=self.BULLISH_GEMINI,
+            signal_mode='sentiment', sentiment_config=self.SENTIMENT_CONFIG,
+        )
+        assert signal['signal'] == "BUY"
+        assert 'Gemini bullish' in signal['reason']
+
+    def test_bearish_downtrend_generates_sell(self):
+        """Gemini bearish + price < SMA + normal RSI = SELL."""
+        signal = generate_stock_signal(
+            symbol="AAPL", market_data=_market(price=130, sma=140, rsi=50),
+            news_sentiment_data=self.BEARISH_GEMINI,
+            signal_mode='sentiment', sentiment_config=self.SENTIMENT_CONFIG,
+        )
+        assert signal['signal'] == "SELL"
+        assert 'Gemini bearish' in signal['reason']
+
+    def test_bullish_blocked_by_downtrend(self):
+        """Gemini bullish but price < SMA = HOLD."""
+        signal = generate_stock_signal(
+            symbol="AAPL", market_data=_market(price=130, sma=140, rsi=50),
+            news_sentiment_data=self.BULLISH_GEMINI,
+            signal_mode='sentiment', sentiment_config=self.SENTIMENT_CONFIG,
+        )
+        assert signal['signal'] == "HOLD"
+        assert 'downtrend' in signal['reason']
+
+    def test_rsi_veto_blocks_buy(self):
+        """Gemini bullish + uptrend but RSI > 75 = HOLD."""
+        signal = generate_stock_signal(
+            symbol="AAPL", market_data=_market(price=150, sma=140, rsi=80),
+            news_sentiment_data=self.BULLISH_GEMINI,
+            signal_mode='sentiment', sentiment_config=self.SENTIMENT_CONFIG,
+        )
+        assert signal['signal'] == "HOLD"
+        assert 'overbought veto' in signal['reason']
+
+    def test_pe_veto_blocks_buy(self):
+        """Gemini bullish + uptrend + good RSI but P/E > 40 = HOLD."""
+        signal = generate_stock_signal(
+            symbol="TSLA", market_data=_market(price=250, sma=240, rsi=50),
+            fundamental_data=_fundamentals(pe=55),
+            news_sentiment_data=self.BULLISH_GEMINI,
+            signal_mode='sentiment', sentiment_config=self.SENTIMENT_CONFIG,
+        )
+        assert signal['signal'] == "HOLD"
+        assert 'overvalued veto' in signal['reason']
+
+    def test_pe_veto_does_not_block_sell(self):
+        """P/E veto only applies to BUY, not SELL."""
+        signal = generate_stock_signal(
+            symbol="TSLA", market_data=_market(price=230, sma=240, rsi=50),
+            fundamental_data=_fundamentals(pe=55),
+            news_sentiment_data=self.BEARISH_GEMINI,
+            signal_mode='sentiment', sentiment_config=self.SENTIMENT_CONFIG,
+        )
+        assert signal['signal'] == "SELL"
+
+    def test_no_sentiment_holds(self):
+        """No news data = HOLD in sentiment mode."""
+        signal = generate_stock_signal(
+            symbol="AAPL", market_data=_market(price=150, sma=140, rsi=50),
+            news_sentiment_data=None,
+            signal_mode='sentiment', sentiment_config=self.SENTIMENT_CONFIG,
+        )
+        assert signal['signal'] == "HOLD"
+        assert 'No sentiment trigger' in signal['reason']
+
+    def test_vader_fallback(self):
+        """Gemini below threshold, VADER bullish takes over."""
+        news_data = {
+            'gemini_assessment': {'direction': 'bullish', 'confidence': 0.5, 'reasoning': 'Low conf'},
+            'avg_sentiment_score': 0.5,
+        }
+        signal = generate_stock_signal(
+            symbol="AAPL", market_data=_market(price=150, sma=140, rsi=50),
+            news_sentiment_data=news_data,
+            signal_mode='sentiment', sentiment_config=self.SENTIMENT_CONFIG,
+        )
+        assert signal['signal'] == "BUY"
+        assert 'VADER bullish' in signal['reason']
+
+    def test_scoring_mode_backward_compatible(self):
+        """Explicit signal_mode='scoring' works identically to the default."""
+        signal = generate_stock_signal(
+            symbol="AAPL",
+            market_data=_market(price=150, sma=140, rsi=25),
+            signal_mode='scoring',
+            signal_threshold=2,
+        )
+        assert signal['signal'] == "BUY"

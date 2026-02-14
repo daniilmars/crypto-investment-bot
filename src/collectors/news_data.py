@@ -6,7 +6,10 @@ import requests
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 from src.config import app_config
-from src.database import get_latest_news_sentiment, save_news_sentiment_batch
+from src.database import (
+    get_latest_news_sentiment, save_news_sentiment_batch,
+    save_articles_batch, compute_title_hash,
+)
 from src.logger import log
 
 # --- Constants ---
@@ -181,13 +184,23 @@ def collect_news_sentiment(symbols):
     volume_spike_multiplier = news_config.get('volume_spike_multiplier', 3.0)
     sentiment_shift_threshold = news_config.get('sentiment_shift_threshold', 0.3)
 
-    # 1. Fetch from both sources
+    # 1. Fetch from all sources (NewsAPI + RSS + web scraping)
     query = _build_query_string(symbols)
     newsapi_articles = _fetch_newsapi_articles(query)
     rss_articles = _fetch_rss_feeds()
 
+    # Web scraping for richer content beyond RSS
+    web_articles = []
+    web_scraping_enabled = news_config.get('web_scraping', {}).get('enabled', False)
+    if web_scraping_enabled:
+        try:
+            from src.collectors.web_news_scraper import scrape_all_sources
+            web_articles = scrape_all_sources()
+        except Exception as e:
+            log.warning(f"Web scraping failed, continuing with RSS: {e}")
+
     # 2. Combine and deduplicate
-    all_articles = _deduplicate_articles(newsapi_articles + rss_articles)
+    all_articles = _deduplicate_articles(newsapi_articles + rss_articles + web_articles)
 
     if not all_articles:
         log.info("No news articles found.")
@@ -195,6 +208,7 @@ def collect_news_sentiment(symbols):
 
     # 3. VADER score each headline and match to symbols
     symbol_articles = {symbol: [] for symbol in symbols}
+    archive_rows = []
 
     for article in all_articles:
         title = article.get('title', '')
@@ -216,11 +230,32 @@ def collect_news_sentiment(symbols):
         else:
             score = desc_score
 
+        title_hash = compute_title_hash(title) if title else None
+
         for symbol in matched_symbols:
             symbol_articles[symbol].append({
                 'title': title,
                 'score': score,
             })
+
+            # Accumulate archive rows for DB storage
+            if title_hash:
+                archive_rows.append({
+                    'title': title,
+                    'title_hash': title_hash,
+                    'source': article.get('source', ''),
+                    'source_url': article.get('source_url', ''),
+                    'description': description,
+                    'symbol': symbol,
+                    'vader_score': score,
+                })
+
+    # Archive articles to DB
+    if archive_rows:
+        try:
+            save_articles_batch(archive_rows)
+        except Exception as e:
+            log.warning(f"Failed to archive articles: {e}")
 
     # 4. Compute aggregates per symbol
     per_symbol = {}

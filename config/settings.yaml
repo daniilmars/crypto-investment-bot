@@ -81,6 +81,18 @@ settings:
   # RSI oversold threshold (e.g., 30 for oversold).
   rsi_oversold_threshold: 30
 
+  # -- Signal Mode --
+  # "sentiment" = Gemini-first with technical filters (recommended)
+  # "scoring"   = legacy 8-indicator scoring system
+  signal_mode: "sentiment"
+
+  # -- Sentiment Signal Settings (used when signal_mode = "sentiment") --
+  sentiment_signal:
+    min_gemini_confidence: 0.7
+    min_vader_score: 0.3
+    rsi_buy_veto_threshold: 75
+    rsi_sell_veto_threshold: 25
+
   # -- Signal Quality Settings --
   # Minimum number of indicators that must agree for a BUY or SELL signal.
   signal_threshold: 3
@@ -144,6 +156,13 @@ settings:
   # -- News Analysis Settings --
   news_analysis:
     enabled: true
+    # Use Google Search grounding ($0.035/call) — set false to use cheap RSS+scraping path
+    use_grounded_search: false
+    # Web scraping supplements RSS feeds with direct page content
+    web_scraping:
+      enabled: true
+    # Cache Gemini responses to halve API calls (~96/day -> ~48/day)
+    cache_ttl_minutes: 30
     # Volume spike: trigger Gemini if current_volume > previous_volume * multiplier
     volume_spike_multiplier: 3.0
     # Sentiment shift: trigger Gemini if abs(current - previous) >= threshold
@@ -192,3 +211,11 @@ settings:
     pe_ratio_sell_threshold: 40
     earnings_growth_sell_threshold: -10
     volume_spike_multiplier: 1.5
+
+  # -- Position Monitor Settings --
+  # Sub-bot that monitors open positions and asks Gemini "hold or exit?"
+  position_monitor:
+    enabled: true
+    min_position_age_hours: 4
+    exit_confidence_threshold: 0.8
+    auto_exit: false    # false = alert only, true = auto-sell

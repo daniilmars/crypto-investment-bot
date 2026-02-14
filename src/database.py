@@ -1,3 +1,4 @@
+import hashlib
 import os
 import sqlite3
 from contextlib import contextmanager
@@ -23,7 +24,7 @@ def _cursor(conn):
 # --- Connection Pool (for PostgreSQL) ---
 _pg_pool = None
 
-ALLOWED_TABLES = frozenset({"market_prices", "whale_transactions", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events"})
+ALLOWED_TABLES = frozenset({"market_prices", "whale_transactions", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles"})
 
 # --- Database Connection Management ---
 
@@ -240,6 +241,39 @@ def initialize_database(db_url=None):
                 resolved_at TIMESTAMP
             )'''
         cursor.execute(circuit_breaker_sql)
+
+        # Scraped Articles (article archive)
+        scraped_articles_sql = '''
+            CREATE TABLE IF NOT EXISTS scraped_articles (
+                id SERIAL PRIMARY KEY,
+                title TEXT NOT NULL,
+                title_hash TEXT NOT NULL,
+                source TEXT,
+                source_url TEXT,
+                description TEXT,
+                symbol TEXT,
+                vader_score REAL,
+                collected_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )''' if is_postgres_conn else '''
+            CREATE TABLE IF NOT EXISTS scraped_articles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                title_hash TEXT NOT NULL,
+                source TEXT,
+                source_url TEXT,
+                description TEXT,
+                symbol TEXT,
+                vader_score REAL,
+                collected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )'''
+        cursor.execute(scraped_articles_sql)
+
+        # Unique index on title_hash to deduplicate articles
+        scraped_articles_idx_sql = (
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_scraped_articles_title_hash "
+            "ON scraped_articles (title_hash)"
+        )
+        cursor.execute(scraped_articles_idx_sql)
 
         # --- Migrate trades table: add live trading columns if missing ---
         new_trade_columns = [
@@ -759,5 +793,113 @@ def get_latest_news_sentiment(symbols: list) -> dict:
     except (sqlite3.Error, psycopg2.Error) as e:
         log.error(f"Database error in get_latest_news_sentiment: {e}", exc_info=True)
         return {}
+    finally:
+        release_db_connection(conn)
+
+
+def compute_title_hash(title: str) -> str:
+    """Computes a SHA-256 hash of a lowercased, stripped title for deduplication."""
+    return hashlib.sha256(title.lower().strip().encode('utf-8')).hexdigest()
+
+
+def save_articles_batch(articles: list):
+    """
+    Saves a batch of scraped articles to the database, skipping duplicates.
+
+    Each article dict should have: title, title_hash, source, source_url,
+    description, symbol, vader_score.
+    """
+    if not articles:
+        return
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            for article in articles:
+                if is_postgres_conn:
+                    query = '''
+                        INSERT INTO scraped_articles
+                            (title, title_hash, source, source_url, description, symbol, vader_score)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (title_hash) DO NOTHING
+                    '''
+                else:
+                    query = '''
+                        INSERT OR IGNORE INTO scraped_articles
+                            (title, title_hash, source, source_url, description, symbol, vader_score)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    '''
+                cursor.execute(query, (
+                    article.get('title', ''),
+                    article.get('title_hash', ''),
+                    article.get('source', ''),
+                    article.get('source_url', ''),
+                    article.get('description', ''),
+                    article.get('symbol'),
+                    article.get('vader_score'),
+                ))
+        conn.commit()
+        log.info(f"Saved batch of {len(articles)} articles to archive.")
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in save_articles_batch: {e}", exc_info=True)
+        if conn:
+            conn.rollback()
+    finally:
+        release_db_connection(conn)
+
+
+def get_recent_articles(symbol: str, hours: int = 24, limit: int = 20) -> list:
+    """
+    Returns recent archived articles for a symbol, ordered by newest first.
+
+    Returns list of dicts with keys: title, source, vader_score, collected_at.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            if is_postgres_conn:
+                query = '''
+                    SELECT title, source, vader_score, collected_at
+                    FROM scraped_articles
+                    WHERE symbol = %s AND collected_at >= NOW() - INTERVAL '%s hours'
+                    ORDER BY collected_at DESC LIMIT %s
+                '''
+                cursor.execute(query, (symbol, hours, limit))
+            else:
+                query = '''
+                    SELECT title, source, vader_score, collected_at
+                    FROM scraped_articles
+                    WHERE symbol = ? AND collected_at >= datetime('now', ? || ' hours')
+                    ORDER BY collected_at DESC LIMIT ?
+                '''
+                cursor.execute(query, (symbol, f'-{hours}', limit))
+            return [dict(row) for row in cursor.fetchall()]
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in get_recent_articles: {e}", exc_info=True)
+        return []
+    finally:
+        release_db_connection(conn)
+
+
+def get_article_count(hours: int = 24) -> int:
+    """Returns the total number of archived articles collected in the last N hours."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            if is_postgres_conn:
+                query = "SELECT COUNT(*) FROM scraped_articles WHERE collected_at >= NOW() - INTERVAL '%s hours'"
+                cursor.execute(query, (hours,))
+            else:
+                query = "SELECT COUNT(*) FROM scraped_articles WHERE collected_at >= datetime('now', ? || ' hours')"
+                cursor.execute(query, (f'-{hours}',))
+            return cursor.fetchone()[0]
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in get_article_count: {e}", exc_info=True)
+        return 0
     finally:
         release_db_connection(conn)

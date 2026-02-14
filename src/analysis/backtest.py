@@ -254,6 +254,8 @@ class Strategy:
             rsi_oversold_threshold=self.params.rsi_oversold_threshold,
             historical_prices=price_list,
             signal_threshold=getattr(self.params, 'signal_threshold', 3),
+            signal_mode=getattr(self.params, 'signal_mode', 'scoring'),
+            sentiment_config=getattr(self.params, 'sentiment_config', None),
         )
 
         # --- Market Regime Detection ---
@@ -679,6 +681,13 @@ def main():
 
     # Data
     parser.add_argument('--bar-interval-minutes', type=int, default=60, help='Bar interval in minutes (15 for 15m, 60 for 1h)')
+
+    # Signal mode
+    parser.add_argument('--signal-mode', type=str, default='scoring',
+                        choices=['scoring', 'sentiment'],
+                        help='Signal generation mode (default: scoring). '
+                             'Note: sentiment mode requires live Gemini data, '
+                             'so backtests default to scoring.')
 
     # Mode
     parser.add_argument('--walk-forward', action='store_true', help='Run walk-forward validation instead of single backtest')

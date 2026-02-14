@@ -15,7 +15,9 @@ import uvicorn
 from fastapi import FastAPI, Request
 from telegram import Update
 
-from src.analysis.gemini_news_analyzer import analyze_news_impact, analyze_news_with_search
+from src.analysis.gemini_news_analyzer import (
+    analyze_news_impact, analyze_news_with_search, analyze_position_health,
+)
 from src.analysis.signal_engine import generate_signal
 from src.analysis.stock_signal_engine import generate_stock_signal
 from src.analysis.technical_indicators import (calculate_rsi, calculate_sma,
@@ -31,7 +33,7 @@ from src.collectors.news_data import collect_news_sentiment
 from src.collectors.whale_alert import (get_stablecoin_flows,
                                         get_whale_transactions)
 from src.config import app_config
-from src.database import (get_historical_prices,
+from src.database import (get_historical_prices, get_recent_articles,
                           get_trade_history_stats,
                           get_transaction_timestamps_since, initialize_database,
                           save_signal)
@@ -45,8 +47,8 @@ from src.execution.stock_trader import (
     _is_market_open, _check_pdt_rule,
 )
 from src.logger import log
-from src.notify.telegram_bot import (send_news_alert, send_telegram_alert,
-                                     start_bot)
+from src.notify.telegram_bot import (send_news_alert, send_position_health_alert,
+                                     send_telegram_alert, start_bot)
 from src.state import bot_is_running
 
 # Initialize the database at the start of the application
@@ -107,6 +109,16 @@ async def run_bot_cycle():
     volume_gate_period = settings.get('volume_gate_period', 20)
     stoploss_cooldown_hours = settings.get('stoploss_cooldown_hours', 6)
 
+    # Signal mode and sentiment config
+    signal_mode = settings.get('signal_mode', 'scoring')
+    sentiment_signal_cfg = settings.get('sentiment_signal', {})
+    sentiment_config = {
+        'min_gemini_confidence': sentiment_signal_cfg.get('min_gemini_confidence', 0.7),
+        'min_vader_score': sentiment_signal_cfg.get('min_vader_score', 0.3),
+        'rsi_buy_veto_threshold': sentiment_signal_cfg.get('rsi_buy_veto_threshold', 75),
+        'rsi_sell_veto_threshold': sentiment_signal_cfg.get('rsi_sell_veto_threshold', 25),
+    }
+
     # Paper trading and risk management settings
     paper_trading = settings.get('paper_trading', True)
     paper_trading_initial_capital = settings.get('paper_trading_initial_capital', 10000.0)
@@ -153,36 +165,57 @@ async def run_bot_cycle():
     news_config = settings.get('news_analysis', {})
     gemini_assessments = None
     news_per_symbol = {}
+    use_grounded_search = news_config.get('use_grounded_search', False)
 
-    # --- Primary path: Gemini with Google Search grounding ---
+    # Build current prices dict for all symbols
+    current_prices_dict = {}
     if news_config.get('enabled', False):
-        # Build current prices dict from Binance for crypto symbols
-        current_prices_dict = {}
         for sym in all_symbols:
             api_sym = sym if "USDT" in sym else f"{sym}USDT"
             pd = get_current_price(api_sym)
             if pd and pd.get('price'):
                 current_prices_dict[sym] = float(pd['price'])
 
-        gemini_assessments = analyze_news_with_search(all_symbols, current_prices_dict)
+    # --- Optional: Gemini with Google Search grounding (expensive, $0.035/call) ---
+    if news_config.get('enabled', False) and use_grounded_search:
+        cache_ttl = news_config.get('cache_ttl_minutes', 30)
+        gemini_assessments = analyze_news_with_search(all_symbols, current_prices_dict,
+                                                       cache_ttl_minutes=cache_ttl)
 
-    # --- Fallback: RSS + VADER + old Gemini pipeline ---
+    # --- Primary path: RSS + web scraping + VADER + plain Gemini (cheap) ---
     if gemini_assessments is None:
-        log.info("Grounded news analysis unavailable — falling back to RSS+VADER pipeline.")
+        if use_grounded_search:
+            log.info("Grounded search unavailable — falling back to RSS+scraping pipeline.")
         news_result = collect_news_sentiment(all_symbols)
         news_per_symbol = news_result.get('per_symbol', {})
         triggered_symbols = news_result.get('triggered_symbols', [])
 
-        if triggered_symbols and news_config.get('enabled', False):
+        # Send all symbols with news to Gemini for analysis (not just triggered ones)
+        symbols_with_news = [sym for sym in all_symbols if sym in news_per_symbol]
+        if symbols_with_news and news_config.get('enabled', False):
             headlines_by_symbol = {}
             current_prices_for_news = {}
-            for sym in triggered_symbols:
+            for sym in symbols_with_news:
                 sym_data = news_per_symbol.get(sym, {})
                 headlines_by_symbol[sym] = sym_data.get('headlines', [])
-                current_prices_for_news[sym] = sym_data.get('current_price', 0)
+                current_prices_for_news[sym] = current_prices_dict.get(sym, sym_data.get('current_price', 0))
 
-            gemini_assessments = analyze_news_impact(headlines_by_symbol, current_prices_for_news)
-            await send_news_alert(triggered_symbols, news_per_symbol, gemini_assessments=gemini_assessments)
+            # Enrich Gemini prompt with archived articles from DB
+            archived_articles_by_symbol = {}
+            for sym in symbols_with_news:
+                try:
+                    archived = get_recent_articles(sym, hours=24)
+                    if archived:
+                        archived_articles_by_symbol[sym] = archived
+                except Exception as e:
+                    log.warning(f"Failed to fetch archived articles for {sym}: {e}")
+
+            gemini_assessments = analyze_news_impact(
+                headlines_by_symbol, current_prices_for_news,
+                archived_articles_by_symbol=archived_articles_by_symbol or None,
+            )
+            if triggered_symbols:
+                await send_news_alert(triggered_symbols, news_per_symbol, gemini_assessments=gemini_assessments)
 
     # Process each symbol in the watch list
     for symbol in watch_list:
@@ -265,6 +298,69 @@ async def run_bot_cycle():
                         await send_telegram_alert({"signal": "SELL", "symbol": symbol, "current_price": current_price,
                                                    "reason": f"Take-profit hit ({take_profit_percentage * 100:.2f}% gain)."})
 
+                    # --- Position Health Monitor (Gemini sub-bot) ---
+                    else:
+                        pos_monitor_cfg = settings.get('position_monitor', {})
+                        if pos_monitor_cfg.get('enabled', False):
+                            min_age_hours = pos_monitor_cfg.get('min_position_age_hours', 4)
+                            entry_ts = position.get('entry_timestamp')
+                            if entry_ts:
+                                from datetime import datetime, timezone
+                                try:
+                                    if isinstance(entry_ts, str):
+                                        entry_dt = datetime.fromisoformat(entry_ts.replace('Z', '+00:00'))
+                                    else:
+                                        entry_dt = entry_ts
+                                    if entry_dt.tzinfo is None:
+                                        entry_dt = entry_dt.replace(tzinfo=timezone.utc)
+                                    age_hours = (datetime.now(timezone.utc) - entry_dt).total_seconds() / 3600
+                                    if age_hours >= min_age_hours:
+                                        # Gather headlines for this symbol
+                                        pos_headlines = []
+                                        sym_news = news_per_symbol.get(symbol, {})
+                                        if sym_news:
+                                            pos_headlines.extend(sym_news.get('headlines', [])[:5])
+                                        try:
+                                            archived = get_recent_articles(symbol, hours=24)
+                                            pos_headlines.extend([a.get('title', '') for a in archived[:5]])
+                                        except Exception:
+                                            pass
+
+                                        # Compute quick technicals from klines if available
+                                        quick_rsi = calculate_rsi(klines_close, period=rsi_period) if klines_close and len(klines_close) >= rsi_period else None
+                                        quick_sma = sum(klines_close[-sma_period:]) / sma_period if klines_close and len(klines_close) >= sma_period else None
+                                        quick_regime = detect_market_regime(klines_close, prices_high=klines_high, prices_low=klines_low) if klines_close and len(klines_close) >= 30 else {}
+                                        tech_data = {
+                                            'rsi': quick_rsi,
+                                            'sma': quick_sma,
+                                            'regime': quick_regime.get('regime', 'unknown'),
+                                        }
+                                        health = analyze_position_health(
+                                            position, current_price, pos_headlines, tech_data
+                                        )
+                                        if health:
+                                            exit_threshold = pos_monitor_cfg.get('exit_confidence_threshold', 0.8)
+                                            if health.get('recommendation') == 'exit' and health.get('confidence', 0) >= exit_threshold:
+                                                if pos_monitor_cfg.get('auto_exit', False):
+                                                    log.info(f"[{mode_label}] Position monitor auto-exiting {symbol}.")
+                                                    place_order(symbol, "SELL", position['quantity'], current_price,
+                                                                existing_order_id=order_id)
+                                                    _clear_trailing_stop(order_id)
+                                                    await send_telegram_alert({
+                                                        "signal": "SELL", "symbol": symbol,
+                                                        "current_price": current_price,
+                                                        "reason": f"Position monitor exit (confidence {health.get('confidence', 0):.0%}): {health.get('reasoning', '')}"
+                                                    })
+                                                else:
+                                                    await send_position_health_alert(
+                                                        symbol, current_price, pnl_percentage * 100, health, position
+                                                    )
+                                            elif health.get('recommendation') == 'exit':
+                                                log.info(f"[{symbol}] Position monitor suggests exit but confidence "
+                                                         f"{health.get('confidence', 0):.2f} < threshold {exit_threshold}")
+                                except Exception as e:
+                                    log.warning(f"Position monitor error for {symbol}: {e}")
+
         # --- Pause Check ---
         if not bot_is_running.is_set():
             log.info("Bot is paused. Skipping new signal generation and trading.")
@@ -345,6 +441,8 @@ async def run_bot_cycle():
             volume_data=crypto_volume_data,
             order_book_data=order_book,
             signal_threshold=signal_threshold,
+            signal_mode=signal_mode,
+            sentiment_config=sentiment_config,
         )
         log.info(f"Generated Signal for {symbol}: {signal}")
 
@@ -472,10 +570,14 @@ async def run_bot_cycle():
     # --- Run Stock Trading Cycle ---
     await run_stock_cycle(settings, news_per_symbol=news_per_symbol,
                           news_config=news_config,
-                          gemini_assessments=gemini_assessments)
+                          gemini_assessments=gemini_assessments,
+                          signal_mode=signal_mode,
+                          sentiment_config=sentiment_config)
 
 
-async def run_stock_cycle(settings, news_per_symbol=None, news_config=None, gemini_assessments=None):
+async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
+                          gemini_assessments=None, signal_mode="scoring",
+                          sentiment_config=None):
     """
     Executes one cycle of stock trading analysis for all configured stock symbols.
     """
@@ -590,6 +692,56 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None, gemi
                                                    "current_price": current_price, "asset_type": "stock",
                                                    "reason": f"Take-profit hit ({take_profit_percentage * 100:.2f}% gain)."})
 
+                    # --- Stock Position Health Monitor (Gemini sub-bot) ---
+                    else:
+                        pos_monitor_cfg = settings.get('position_monitor', {})
+                        if pos_monitor_cfg.get('enabled', False):
+                            min_age_hours = pos_monitor_cfg.get('min_position_age_hours', 4)
+                            entry_ts = position.get('entry_timestamp')
+                            if entry_ts:
+                                from datetime import datetime, timezone
+                                try:
+                                    if isinstance(entry_ts, str):
+                                        entry_dt = datetime.fromisoformat(entry_ts.replace('Z', '+00:00'))
+                                    else:
+                                        entry_dt = entry_ts
+                                    if entry_dt.tzinfo is None:
+                                        entry_dt = entry_dt.replace(tzinfo=timezone.utc)
+                                    age_hours = (datetime.now(timezone.utc) - entry_dt).total_seconds() / 3600
+                                    if age_hours >= min_age_hours:
+                                        pos_headlines = []
+                                        sym_news = news_per_symbol.get(symbol, {})
+                                        if sym_news:
+                                            pos_headlines.extend(sym_news.get('headlines', [])[:5])
+                                        try:
+                                            archived = get_recent_articles(symbol, hours=24)
+                                            pos_headlines.extend([a.get('title', '') for a in archived[:5]])
+                                        except Exception:
+                                            pass
+                                        tech_data = {'rsi': None, 'sma': None, 'regime': 'unknown'}
+                                        health = analyze_position_health(
+                                            position, current_price, pos_headlines, tech_data
+                                        )
+                                        if health:
+                                            exit_threshold = pos_monitor_cfg.get('exit_confidence_threshold', 0.8)
+                                            if health.get('recommendation') == 'exit' and health.get('confidence', 0) >= exit_threshold:
+                                                if pos_monitor_cfg.get('auto_exit', False):
+                                                    log.info(f"[PAPER TRADE] Position monitor auto-exiting stock {symbol}.")
+                                                    place_order(symbol, "SELL", position['quantity'], current_price,
+                                                                existing_order_id=order_id, asset_type='stock')
+                                                    _clear_trailing_stop(order_id)
+                                                    await send_telegram_alert({
+                                                        "signal": "SELL", "symbol": symbol,
+                                                        "current_price": current_price, "asset_type": "stock",
+                                                        "reason": f"Position monitor exit (confidence {health.get('confidence', 0):.0%}): {health.get('reasoning', '')}"
+                                                    })
+                                                else:
+                                                    await send_position_health_alert(
+                                                        symbol, current_price, pnl_percentage * 100, health, position
+                                                    )
+                                except Exception as e:
+                                    log.warning(f"Stock position monitor error for {symbol}: {e}")
+
         # --- Pause Check ---
         if not bot_is_running.is_set():
             log.info("Bot is paused. Skipping new stock signal generation.")
@@ -648,6 +800,10 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None, gemi
             if ga:
                 stock_news_data['gemini_assessment'] = ga
 
+        # Build stock-specific sentiment config (adds P/E veto)
+        stock_sentiment_config = dict(sentiment_config or {})
+        stock_sentiment_config['pe_buy_veto_threshold'] = pe_sell  # reuse pe_ratio_sell_threshold
+
         # Generate stock signal
         signal = generate_stock_signal(
             symbol=symbol,
@@ -663,6 +819,8 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None, gemi
             news_sentiment_data=stock_news_data,
             historical_prices=prices,
             signal_threshold=signal_threshold,
+            signal_mode=signal_mode,
+            sentiment_config=stock_sentiment_config,
         )
         signal['asset_type'] = 'stock'
         log.info(f"Generated Stock Signal for {symbol}: {signal}")
