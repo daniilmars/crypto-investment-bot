@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timezone
 from functools import wraps
 from typing import Callable, Optional
@@ -89,7 +90,7 @@ async def send_signal_for_confirmation(signal: dict) -> int:
     signal_type = signal.get('signal', 'N/A')
     symbol = signal.get('symbol', 'N/A').upper()
     price = signal.get('current_price', 0)
-    reason = signal.get('reason', 'No reason provided.')
+    reason = _escape_md(signal.get('reason', 'No reason provided.'))
     asset_type = signal.get('asset_type', 'crypto')
     quantity = signal.get('quantity', 0)
 
@@ -136,6 +137,23 @@ async def send_signal_for_confirmation(signal: dict) -> int:
         return -1
 
 
+def _escape_md(text: str) -> str:
+    """Escape Telegram Markdown v1 special characters in user-facing text."""
+    return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', str(text))
+
+
+async def _safe_edit(query, text: str):
+    """Edit a callback message, falling back to plain text if Markdown fails."""
+    try:
+        await query.edit_message_text(text, parse_mode='Markdown')
+    except Exception as md_err:
+        log.warning(f"Markdown edit failed ({md_err}), retrying as plain text")
+        try:
+            await query.edit_message_text(text, parse_mode=None)
+        except Exception as plain_err:
+            log.error(f"Message edit failed completely: {plain_err}")
+
+
 async def _handle_signal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles Approve/Reject button presses for pending signals."""
     query = update.callback_query
@@ -167,7 +185,7 @@ async def _handle_signal_callback(update: Update, context: ContextTypes.DEFAULT_
     signal_type = signal.get('signal', 'N/A')
     symbol = signal.get('symbol', 'N/A').upper()
     price = signal.get('current_price', 0)
-    reason = signal.get('reason', 'No reason provided.')
+    reason = _escape_md(signal.get('reason', 'No reason provided.'))
     quantity = signal.get('quantity', 0)
 
     if action == "a":
@@ -183,9 +201,9 @@ async def _handle_signal_callback(update: Update, context: ContextTypes.DEFAULT_
                     f"⚠️ *EXECUTION FAILED: {signal_type} {symbol}*\n\n"
                     f"💰 *Price:* ${price:,.2f}\n"
                     f"📈 *Reason:* {reason}\n\n"
-                    f"*Error:* {str(e)[:200]}"
+                    f"*Error:* {_escape_md(str(e)[:200])}"
                 )
-                await query.edit_message_text(error_msg, parse_mode='Markdown')
+                await _safe_edit(query, error_msg)
                 return
 
         # Build success message
@@ -207,7 +225,7 @@ async def _handle_signal_callback(update: Update, context: ContextTypes.DEFAULT_
                 message += f"*PnL:* ${pnl:,.2f}\n"
         message += "\n_Approved by user_"
 
-        await query.edit_message_text(message, parse_mode='Markdown')
+        await _safe_edit(query, message)
         log.info(f"Signal #{signal_id} approved: {signal_type} {symbol}")
 
     elif action == "r":
@@ -219,7 +237,7 @@ async def _handle_signal_callback(update: Update, context: ContextTypes.DEFAULT_
             f"📈 *Reason:* {reason}\n\n"
             f"_Rejected by user_"
         )
-        await query.edit_message_text(message, parse_mode='Markdown')
+        await _safe_edit(query, message)
         log.info(f"Signal #{signal_id} rejected: {signal_type} {symbol}")
     else:
         await query.answer("Unknown action.")
