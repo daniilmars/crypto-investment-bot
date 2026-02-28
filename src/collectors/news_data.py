@@ -3,13 +3,13 @@ import statistics
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import feedparser
-import requests
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 from src.config import app_config
 from src.database import (
     get_latest_news_sentiment, save_news_sentiment_batch,
     save_articles_batch, compute_title_hash,
+    get_gemini_scores_for_hashes, update_gemini_scores_batch,
 )
 from src.logger import log
 
@@ -188,39 +188,6 @@ RSS_FETCH_TIMEOUT = 15
 
 # --- Internal Functions ---
 
-def _fetch_newsapi_articles(query):
-    """Fetches articles from NewsAPI using a batched OR-joined query."""
-    api_key = app_config.get('api_keys', {}).get('newsapi')
-    if not api_key or api_key == 'YOUR_NEWSAPI_ORG_KEY':
-        log.warning("NewsAPI key not configured. Skipping NewsAPI fetch.")
-        return []
-
-    try:
-        url = 'https://newsapi.org/v2/everything'
-        params = {
-            'q': query,
-            'language': 'en',
-            'sortBy': 'publishedAt',
-            'pageSize': 100,
-            'apiKey': api_key,
-        }
-        response = requests.get(url, params=params, timeout=15)
-        response.raise_for_status()
-        data = response.json()
-        articles = []
-        for article in data.get('articles', []):
-            articles.append({
-                'title': article.get('title', ''),
-                'description': article.get('description', ''),
-                'published_at': article.get('publishedAt', ''),
-                'source': article.get('source', {}).get('name', 'NewsAPI'),
-            })
-        log.info(f"Fetched {len(articles)} articles from NewsAPI.")
-        return articles
-    except Exception as e:
-        log.error(f"Error fetching from NewsAPI: {e}")
-        return []
-
 
 def _fetch_single_rss_feed(feed_info):
     """Fetches and parses a single RSS feed."""
@@ -311,26 +278,49 @@ def _match_article_to_symbols(title, description, symbols):
     return matched
 
 
-def _build_query_string(symbols):
-    """Builds an OR-joined query string from symbol keywords for NewsAPI.
 
-    NewsAPI has a ~500 char query limit. Only includes symbols that have
-    SYMBOL_KEYWORDS entries (major names with recognizable keywords).
-    Symbols without keyword mappings are covered by RSS feeds instead.
+def _score_with_gemini(articles_with_hashes: list) -> dict:
+    """Scores articles with Gemini, using DB cache for previously scored articles.
+
+    Args:
+        articles_with_hashes: list of dicts with 'title', 'description', 'title_hash'.
+
+    Returns:
+        {title_hash: score} for all articles that could be scored (cached + new).
     """
-    all_keywords = []
-    for symbol in symbols:
-        if symbol in SYMBOL_KEYWORDS:
-            keywords = SYMBOL_KEYWORDS[symbol]
-            all_keywords.extend(keywords)
-    query = ' OR '.join(all_keywords)
-    # NewsAPI max query length is ~500 chars; truncate at last complete OR term
-    if len(query) > 500:
-        truncated = query[:500]
-        last_or = truncated.rfind(' OR ')
-        if last_or > 0:
-            query = truncated[:last_or]
-    return query
+    if not articles_with_hashes:
+        return {}
+
+    all_hashes = [a['title_hash'] for a in articles_with_hashes]
+
+    # Check DB cache for existing scores
+    cached_scores = get_gemini_scores_for_hashes(all_hashes)
+    log.info(f"Gemini article score cache: {len(cached_scores)}/{len(all_hashes)} hits.")
+
+    # Filter to unscored articles
+    unscored = [a for a in articles_with_hashes if a['title_hash'] not in cached_scores]
+
+    if not unscored:
+        return cached_scores
+
+    # Score new articles with Gemini
+    try:
+        from src.analysis.gemini_news_analyzer import score_articles_batch
+        new_scores = score_articles_batch(unscored)
+    except Exception as e:
+        log.warning(f"Gemini article scoring failed: {e}")
+        new_scores = {}
+
+    # Persist new scores to DB
+    if new_scores:
+        try:
+            update_gemini_scores_batch(new_scores)
+        except Exception as e:
+            log.warning(f"Failed to persist Gemini article scores: {e}")
+
+    # Merge cached + new
+    merged = {**cached_scores, **new_scores}
+    return merged
 
 
 def collect_news_sentiment(symbols):
@@ -352,9 +342,7 @@ def collect_news_sentiment(symbols):
     volume_spike_multiplier = news_config.get('volume_spike_multiplier', 3.0)
     sentiment_shift_threshold = news_config.get('sentiment_shift_threshold', 0.3)
 
-    # 1. Fetch from all sources (NewsAPI + RSS + web scraping)
-    query = _build_query_string(symbols)
-    newsapi_articles = _fetch_newsapi_articles(query)
+    # 1. Fetch from all sources (RSS + web scraping)
     rss_articles = _fetch_rss_feeds()
 
     # Web scraping for richer content beyond RSS
@@ -368,7 +356,7 @@ def collect_news_sentiment(symbols):
             log.warning(f"Web scraping failed, continuing with RSS: {e}")
 
     # 2. Combine and deduplicate
-    all_articles = _deduplicate_articles(newsapi_articles + rss_articles + web_articles)
+    all_articles = _deduplicate_articles(rss_articles + web_articles)
 
     if not all_articles:
         log.info("No news articles found.")
@@ -382,7 +370,26 @@ def collect_news_sentiment(symbols):
         except Exception as e:
             log.warning(f"Deep scraping failed, continuing with original articles: {e}")
 
-    # 3. VADER score each headline and match to symbols
+    # 2c. Gemini per-article scoring (DB-cached, batched)
+    use_gemini_scoring = news_config.get('use_gemini_scoring', True)
+    gemini_article_scores = {}
+    if use_gemini_scoring:
+        articles_for_scoring = []
+        for article in all_articles:
+            title = article.get('title', '')
+            if not title:
+                continue
+            title_hash = compute_title_hash(title)
+            matched = _match_article_to_symbols(title, article.get('description', ''), symbols)
+            if matched:
+                articles_for_scoring.append({
+                    'title': title,
+                    'description': article.get('description', ''),
+                    'title_hash': title_hash,
+                })
+        gemini_article_scores = _score_with_gemini(articles_for_scoring)
+
+    # 3. VADER score each headline, use Gemini score when available, match to symbols
     symbol_articles = {symbol: [] for symbol in symbols}
     archive_rows = []
 
@@ -394,24 +401,27 @@ def collect_news_sentiment(symbols):
         if not matched_symbols:
             continue
 
-        # Score title and description separately, then combine with weighted average.
-        # Title carries more weight as it's the editorial summary of the article.
+        # VADER scoring (always runs, serves as fallback)
         title_score = _vader_analyzer.polarity_scores(title)['compound'] if title else 0
         desc_score = _vader_analyzer.polarity_scores(description)['compound'] if description else 0
 
         if title and description:
-            score = title_score * 0.6 + desc_score * 0.4
+            vader_score = title_score * 0.6 + desc_score * 0.4
         elif title:
-            score = title_score
+            vader_score = title_score
         else:
-            score = desc_score
+            vader_score = desc_score
 
         title_hash = compute_title_hash(title) if title else None
+
+        # Use Gemini score when available, fall back to VADER
+        gemini_score = gemini_article_scores.get(title_hash) if title_hash else None
+        effective_score = gemini_score if gemini_score is not None else vader_score
 
         for symbol in matched_symbols:
             symbol_articles[symbol].append({
                 'title': title,
-                'score': score,
+                'score': effective_score,
             })
 
             # Accumulate archive rows for DB storage
@@ -423,7 +433,8 @@ def collect_news_sentiment(symbols):
                     'source_url': article.get('source_url', ''),
                     'description': description,
                     'symbol': symbol,
-                    'vader_score': score,
+                    'vader_score': vader_score,
+                    'gemini_score': gemini_score,
                     'category': article.get('category', 'unknown'),
                 })
 

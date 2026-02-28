@@ -4,9 +4,7 @@ from unittest.mock import patch, MagicMock
 from src.collectors.news_data import (
     RSS_FEEDS,
     SYMBOL_KEYWORDS,
-    _build_query_string,
     _deduplicate_articles,
-    _fetch_newsapi_articles,
     _fetch_rss_feeds,
     _fetch_single_rss_feed,
     _match_article_to_symbols,
@@ -286,30 +284,6 @@ class TestFeedParserCompatibility:
         assert result[0]['source_url'] == 'https://news.google.com/articles/ipo-stripe'
 
 
-class TestBuildQueryString:
-    def test_single_symbol(self):
-        query = _build_query_string(['BTC'])
-        assert 'BTC' in query
-        assert 'Bitcoin' in query
-
-    def test_multiple_symbols(self):
-        query = _build_query_string(['BTC', 'ETH'])
-        assert 'BTC' in query
-        assert 'Ethereum' in query
-        assert ' OR ' in query
-
-    def test_unknown_symbol_skipped(self):
-        """Symbols without SYMBOL_KEYWORDS entries are excluded from NewsAPI query."""
-        query = _build_query_string(['UNKNOWN'])
-        assert query == ''
-
-    def test_query_truncated_at_500_chars(self):
-        """Query is truncated to 500 chars at last complete OR term."""
-        all_symbols = list(SYMBOL_KEYWORDS.keys())
-        query = _build_query_string(all_symbols)
-        assert len(query) <= 500
-
-
 class TestDeduplicateArticles:
     def test_removes_duplicates(self):
         articles = [
@@ -412,46 +386,6 @@ class TestMatchArticleToSymbols:
         assert result == []
 
 
-class TestFetchNewsAPIArticles:
-    @patch('src.collectors.news_data.app_config', {'api_keys': {'newsapi': None}})
-    def test_missing_api_key_returns_empty(self):
-        result = _fetch_newsapi_articles('Bitcoin')
-        assert result == []
-
-    @patch('src.collectors.news_data.app_config', {'api_keys': {'newsapi': 'YOUR_NEWSAPI_ORG_KEY'}})
-    def test_placeholder_api_key_returns_empty(self):
-        result = _fetch_newsapi_articles('Bitcoin')
-        assert result == []
-
-    @patch('src.collectors.news_data.requests.get')
-    @patch('src.collectors.news_data.app_config', {'api_keys': {'newsapi': 'real-key'}})
-    def test_successful_fetch(self, mock_get):
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            'articles': [
-                {
-                    'title': 'Bitcoin price up',
-                    'description': 'BTC rose 5%',
-                    'publishedAt': '2025-01-01T00:00:00Z',
-                    'source': {'name': 'CoinDesk'},
-                }
-            ]
-        }
-        mock_response.raise_for_status = MagicMock()
-        mock_get.return_value = mock_response
-
-        result = _fetch_newsapi_articles('Bitcoin')
-        assert len(result) == 1
-        assert result[0]['title'] == 'Bitcoin price up'
-        assert result[0]['source'] == 'CoinDesk'
-
-    @patch('src.collectors.news_data.requests.get', side_effect=Exception('Network error'))
-    @patch('src.collectors.news_data.app_config', {'api_keys': {'newsapi': 'real-key'}})
-    def test_network_error_returns_empty(self, mock_get):
-        result = _fetch_newsapi_articles('Bitcoin')
-        assert result == []
-
-
 class TestFetchRSSFeeds:
     @patch('src.collectors.news_data.feedparser.parse')
     def test_parses_rss_entries(self, mock_parse):
@@ -467,6 +401,113 @@ class TestFetchRSSFeeds:
         assert result[0]['title'] == 'RSS Article 1'
 
 
+class TestGeminiArticleScoring:
+    """Tests for Gemini per-article scoring integration in collect_news_sentiment."""
+
+    @patch('src.collectors.news_data.get_latest_news_sentiment', return_value={})
+    @patch('src.collectors.news_data.save_news_sentiment_batch')
+    @patch('src.collectors.news_data.save_articles_batch')
+    @patch('src.collectors.news_data._score_with_gemini', return_value={'hash_btc': 0.8})
+    @patch('src.collectors.news_data._fetch_rss_feeds', return_value=[
+        {'title': 'Bitcoin ETF approved by SEC', 'description': 'Major milestone for BTC',
+         'published_at': '', 'source': 'Reuters'},
+    ])
+    @patch('src.collectors.news_data.app_config', {
+        'settings': {'news_analysis': {'enabled': True, 'use_gemini_scoring': True,
+                                        'volume_spike_multiplier': 3.0, 'sentiment_shift_threshold': 0.3}},
+    })
+    def test_collect_uses_gemini_score_when_available(
+        self, mock_rss, mock_gemini, mock_save_articles, mock_save_sent, mock_prev
+    ):
+        """When Gemini score is available, it's used instead of VADER."""
+        # Patch compute_title_hash to return our known hash
+        with patch('src.collectors.news_data.compute_title_hash', return_value='hash_btc'):
+            result = collect_news_sentiment(['BTC'])
+
+        assert 'BTC' in result['per_symbol']
+        # Gemini score of 0.8 should be used (VADER would give something different)
+        assert result['per_symbol']['BTC']['avg_sentiment_score'] == 0.8
+
+    @patch('src.collectors.news_data.get_latest_news_sentiment', return_value={})
+    @patch('src.collectors.news_data.save_news_sentiment_batch')
+    @patch('src.collectors.news_data.save_articles_batch')
+    @patch('src.collectors.news_data._score_with_gemini', return_value={})
+    @patch('src.collectors.news_data._fetch_rss_feeds', return_value=[
+        {'title': 'Bitcoin amazing surge wonderful', 'description': 'BTC great',
+         'published_at': '', 'source': 'Test'},
+    ])
+    @patch('src.collectors.news_data.app_config', {
+        'settings': {'news_analysis': {'enabled': True, 'use_gemini_scoring': True,
+                                        'volume_spike_multiplier': 3.0, 'sentiment_shift_threshold': 0.3}},
+    })
+    def test_collect_falls_back_to_vader(
+        self, mock_rss, mock_gemini, mock_save_articles, mock_save_sent, mock_prev
+    ):
+        """When Gemini returns no score, VADER is used as fallback."""
+        result = collect_news_sentiment(['BTC'])
+
+        assert 'BTC' in result['per_symbol']
+        # VADER should produce a positive score for "amazing surge wonderful"
+        assert result['per_symbol']['BTC']['avg_sentiment_score'] > 0
+
+    @patch('src.collectors.news_data.get_latest_news_sentiment', return_value={})
+    @patch('src.collectors.news_data.save_news_sentiment_batch')
+    @patch('src.collectors.news_data.save_articles_batch')
+    @patch('src.collectors.news_data._fetch_rss_feeds', return_value=[
+        {'title': 'Bitcoin price update', 'description': 'BTC moved',
+         'published_at': '', 'source': 'Test'},
+    ])
+    @patch('src.collectors.news_data.app_config', {
+        'settings': {'news_analysis': {'enabled': True, 'use_gemini_scoring': False,
+                                        'volume_spike_multiplier': 3.0, 'sentiment_shift_threshold': 0.3}},
+    })
+    def test_gemini_scoring_disabled_by_config(
+        self, mock_rss, mock_save_articles, mock_save_sent, mock_prev
+    ):
+        """When use_gemini_scoring is False, _score_with_gemini is not called."""
+        with patch('src.collectors.news_data._score_with_gemini') as mock_gemini:
+            result = collect_news_sentiment(['BTC'])
+            mock_gemini.assert_not_called()
+
+
+class TestScoreWithGemini:
+    """Tests for the _score_with_gemini helper function."""
+
+    @patch('src.collectors.news_data.update_gemini_scores_batch')
+    @patch('src.collectors.news_data.get_gemini_scores_for_hashes', return_value={'hash_a': 0.5})
+    def test_returns_cached_scores(self, mock_get, mock_update):
+        """Cached scores are returned without calling Gemini API."""
+        from src.collectors.news_data import _score_with_gemini
+
+        articles = [{'title': 'Test', 'description': '', 'title_hash': 'hash_a'}]
+        result = _score_with_gemini(articles)
+
+        assert result == {'hash_a': 0.5}
+        mock_update.assert_not_called()
+
+    @patch('src.collectors.news_data.update_gemini_scores_batch')
+    @patch('src.collectors.news_data.get_gemini_scores_for_hashes', return_value={})
+    def test_scores_uncached_articles(self, mock_get, mock_update):
+        """Uncached articles are sent to Gemini and persisted."""
+        from src.collectors.news_data import _score_with_gemini
+
+        articles = [{'title': 'Test', 'description': '', 'title_hash': 'hash_b'}]
+
+        with patch('src.analysis.gemini_news_analyzer.score_articles_batch', return_value={'hash_b': 0.3}) as mock_score:
+            result = _score_with_gemini(articles)
+
+        assert result == {'hash_b': 0.3}
+        mock_score.assert_called_once()
+        mock_update.assert_called_once_with({'hash_b': 0.3})
+
+    def test_empty_input_returns_empty(self):
+        """Empty input returns empty dict."""
+        from src.collectors.news_data import _score_with_gemini
+
+        result = _score_with_gemini([])
+        assert result == {}
+
+
 class TestCollectNewsSentiment:
     @patch('src.collectors.news_data.app_config', {'settings': {'news_analysis': {'enabled': False}}})
     def test_disabled_returns_empty(self):
@@ -476,12 +517,10 @@ class TestCollectNewsSentiment:
     @patch('src.collectors.news_data.get_latest_news_sentiment', return_value={})
     @patch('src.collectors.news_data.save_news_sentiment_batch')
     @patch('src.collectors.news_data._fetch_rss_feeds', return_value=[])
-    @patch('src.collectors.news_data._fetch_newsapi_articles', return_value=[])
     @patch('src.collectors.news_data.app_config', {
         'settings': {'news_analysis': {'enabled': True, 'volume_spike_multiplier': 3.0, 'sentiment_shift_threshold': 0.3}},
-        'api_keys': {'newsapi': 'key'}
     })
-    def test_no_articles_returns_empty(self, mock_newsapi, mock_rss, mock_save, mock_prev):
+    def test_no_articles_returns_empty(self, mock_rss, mock_save, mock_prev):
         result = collect_news_sentiment(['BTC'])
         assert result['per_symbol'] == {}
         assert result['triggered_symbols'] == []
@@ -490,8 +529,7 @@ class TestCollectNewsSentiment:
         'BTC': {'news_volume': 2, 'avg_sentiment_score': 0.0}
     })
     @patch('src.collectors.news_data.save_news_sentiment_batch')
-    @patch('src.collectors.news_data._fetch_rss_feeds', return_value=[])
-    @patch('src.collectors.news_data._fetch_newsapi_articles', return_value=[
+    @patch('src.collectors.news_data._fetch_rss_feeds', return_value=[
         {'title': 'Bitcoin price surges to new ATH', 'description': 'BTC up', 'published_at': '', 'source': 'Test'},
         {'title': 'Bitcoin rally continues strong', 'description': 'BTC gains', 'published_at': '', 'source': 'Test'},
         {'title': 'Bitcoin momentum bullish signals', 'description': 'BTC positive', 'published_at': '', 'source': 'Test'},
@@ -502,9 +540,8 @@ class TestCollectNewsSentiment:
     ])
     @patch('src.collectors.news_data.app_config', {
         'settings': {'news_analysis': {'enabled': True, 'volume_spike_multiplier': 3.0, 'sentiment_shift_threshold': 0.3}},
-        'api_keys': {'newsapi': 'key'}
     })
-    def test_volume_spike_triggers(self, mock_newsapi, mock_rss, mock_save, mock_prev):
+    def test_volume_spike_triggers(self, mock_rss, mock_save, mock_prev):
         result = collect_news_sentiment(['BTC'])
         assert 'BTC' in result['per_symbol']
         assert 'BTC' in result['triggered_symbols']
@@ -513,8 +550,7 @@ class TestCollectNewsSentiment:
         'BTC': {'news_volume': 5, 'avg_sentiment_score': -0.5}
     })
     @patch('src.collectors.news_data.save_news_sentiment_batch')
-    @patch('src.collectors.news_data._fetch_rss_feeds', return_value=[])
-    @patch('src.collectors.news_data._fetch_newsapi_articles', return_value=[
+    @patch('src.collectors.news_data._fetch_rss_feeds', return_value=[
         {'title': 'Bitcoin amazing surge wonderful', 'description': 'BTC great', 'published_at': '', 'source': 'T'},
         {'title': 'Bitcoin excellent performance superb', 'description': 'BTC good', 'published_at': '', 'source': 'T'},
         {'title': 'Bitcoin fantastic rally incredible', 'description': 'BTC nice', 'published_at': '', 'source': 'T'},
@@ -523,9 +559,8 @@ class TestCollectNewsSentiment:
     ])
     @patch('src.collectors.news_data.app_config', {
         'settings': {'news_analysis': {'enabled': True, 'volume_spike_multiplier': 3.0, 'sentiment_shift_threshold': 0.3}},
-        'api_keys': {'newsapi': 'key'}
     })
-    def test_sentiment_shift_triggers(self, mock_newsapi, mock_rss, mock_save, mock_prev):
+    def test_sentiment_shift_triggers(self, mock_rss, mock_save, mock_prev):
         result = collect_news_sentiment(['BTC'])
         # With very positive headlines vs previous -0.5, shift should exceed 0.3
         assert 'BTC' in result['per_symbol']

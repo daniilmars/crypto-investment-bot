@@ -205,11 +205,9 @@ class TestNewsDataIntegration:
     @patch('src.collectors.news_data.save_news_sentiment_batch')
     @patch('src.collectors.news_data.get_latest_news_sentiment')
     @patch('src.collectors.news_data._fetch_rss_feeds')
-    @patch('src.collectors.news_data._fetch_newsapi_articles')
     @patch('src.collectors.web_news_scraper.scrape_all_sources')
-    def test_web_scraping_supplements_rss(self, mock_scrape, mock_newsapi,
+    def test_web_scraping_supplements_rss(self, mock_scrape,
                                            mock_rss, mock_prev, mock_save):
-        mock_newsapi.return_value = []
         mock_rss.return_value = [
             {'title': 'Bitcoin hits 100k from RSS', 'description': 'BTC milestone'},
         ]
@@ -242,10 +240,8 @@ class TestNewsDataIntegration:
     @patch('src.collectors.news_data.save_news_sentiment_batch')
     @patch('src.collectors.news_data.get_latest_news_sentiment')
     @patch('src.collectors.news_data._fetch_rss_feeds')
-    @patch('src.collectors.news_data._fetch_newsapi_articles')
-    def test_web_scraping_disabled_by_default(self, mock_newsapi, mock_rss,
+    def test_web_scraping_disabled_by_default(self, mock_rss,
                                                mock_prev, mock_save):
-        mock_newsapi.return_value = []
         mock_rss.return_value = [
             {'title': 'Bitcoin news from RSS only', 'description': 'BTC'},
         ]

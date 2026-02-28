@@ -24,8 +24,9 @@ def test_initialize_database_creates_tables(mock_get_db_connection, mock_release
     initialize_database()
 
     # Assert: Check if CREATE TABLE + ALTER TABLE statements were executed
-    # 8 CREATE TABLEs + 1 CREATE INDEX + 6 ALTER TABLE (trade columns) + 1 ALTER TABLE (trailing_stop_peak) + 1 ALTER TABLE (scraped_articles category) = 17
-    assert mock_cursor.execute.call_count == 17
+    # 8 CREATE TABLEs + 1 CREATE INDEX + 6 ALTER TABLE (trade columns) + 1 ALTER TABLE (trailing_stop_peak)
+    # + 1 ALTER TABLE (scraped_articles category) + 1 ALTER TABLE (scraped_articles gemini_score) = 18
+    assert mock_cursor.execute.call_count == 18
 
     # Check the SQL statements (case-insensitive and ignoring whitespace)
     executed_queries = [' '.join(call[0][0].split()) for call in mock_cursor.execute.call_args_list]
@@ -260,3 +261,120 @@ class TestTrailingStopPersistence:
         assert mock_cursor.execute.call_count == 2
         last_call = mock_cursor.execute.call_args
         assert last_call[0][1] == (51000.0, 'order_1')
+
+
+# --- Gemini Score DB Tests ---
+
+class TestGeminiScoreDB:
+    """Tests for Gemini per-article score DB functions."""
+
+    @patch('src.database.release_db_connection')
+    @patch('src.database.get_db_connection')
+    def test_gemini_score_column_in_migration(self, mock_get_db_connection, mock_release):
+        """Migration includes ALTER TABLE for gemini_score column."""
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_get_db_connection.return_value = mock_conn
+        mock_conn.cursor.return_value = mock_cursor
+
+        from src.database import initialize_database
+        initialize_database()
+
+        executed_queries = [' '.join(call[0][0].split()) for call in mock_cursor.execute.call_args_list]
+        assert any("gemini_score" in query for query in executed_queries)
+
+    @patch('src.database.release_db_connection')
+    @patch('src.database.get_db_connection')
+    def test_get_gemini_scores_for_hashes(self, mock_get_db_connection, mock_release):
+        """Returns {title_hash: score} for cached scores."""
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_get_db_connection.return_value = mock_conn
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_cursor.__exit__ = MagicMock(return_value=False)
+        mock_cursor.fetchall.return_value = [
+            ('hash_a', 0.7),
+            ('hash_b', -0.3),
+        ]
+
+        from src.database import get_gemini_scores_for_hashes
+
+        result = get_gemini_scores_for_hashes(['hash_a', 'hash_b', 'hash_c'])
+
+        assert result == {'hash_a': 0.7, 'hash_b': -0.3}
+        mock_cursor.execute.assert_called_once()
+        query = mock_cursor.execute.call_args[0][0]
+        assert 'gemini_score IS NOT NULL' in query
+
+    @patch('src.database.release_db_connection')
+    @patch('src.database.get_db_connection')
+    def test_get_gemini_scores_empty_input(self, mock_get_db_connection, mock_release):
+        """Empty hash list returns empty dict without DB call."""
+        from src.database import get_gemini_scores_for_hashes
+
+        result = get_gemini_scores_for_hashes([])
+        assert result == {}
+        mock_get_db_connection.assert_not_called()
+
+    @patch('src.database.release_db_connection')
+    @patch('src.database.get_db_connection')
+    def test_update_gemini_scores_batch(self, mock_get_db_connection, mock_release):
+        """Updates gemini_score for each title_hash."""
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_get_db_connection.return_value = mock_conn
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_cursor.__exit__ = MagicMock(return_value=False)
+
+        from src.database import update_gemini_scores_batch
+
+        update_gemini_scores_batch({'hash_a': 0.5, 'hash_b': -0.2})
+
+        assert mock_cursor.execute.call_count == 2
+        mock_conn.commit.assert_called_once()
+
+        # Verify UPDATE query
+        query = mock_cursor.execute.call_args_list[0][0][0]
+        assert 'UPDATE scraped_articles SET gemini_score' in query
+
+    @patch('src.database.release_db_connection')
+    @patch('src.database.get_db_connection')
+    def test_update_gemini_scores_empty(self, mock_get_db_connection, mock_release):
+        """Empty scores dict skips DB call."""
+        from src.database import update_gemini_scores_batch
+
+        update_gemini_scores_batch({})
+        mock_get_db_connection.assert_not_called()
+
+    @patch('src.database.release_db_connection')
+    @patch('src.database.get_db_connection')
+    def test_save_articles_batch_includes_gemini_score(self, mock_get_db_connection, mock_release):
+        """save_articles_batch includes gemini_score in INSERT."""
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_get_db_connection.return_value = mock_conn
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_cursor.__exit__ = MagicMock(return_value=False)
+
+        from src.database import save_articles_batch
+
+        articles = [{
+            'title': 'Test',
+            'title_hash': 'abc',
+            'source': 'Test',
+            'source_url': '',
+            'description': '',
+            'symbol': 'BTC',
+            'vader_score': 0.5,
+            'category': 'crypto',
+            'gemini_score': 0.7,
+        }]
+        save_articles_batch(articles)
+
+        query = mock_cursor.execute.call_args[0][0]
+        assert 'gemini_score' in query
+        params = mock_cursor.execute.call_args[0][1]
+        assert 0.7 in params

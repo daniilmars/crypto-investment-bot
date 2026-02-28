@@ -321,6 +321,18 @@ def initialize_database(db_url=None):
             if is_postgres_conn:
                 conn.rollback()
 
+        # --- Migrate scraped_articles table: add gemini_score column if missing ---
+        try:
+            cursor.execute("ALTER TABLE scraped_articles ADD COLUMN gemini_score REAL")
+            log.info("Added column 'gemini_score' to scraped_articles table.")
+        except (sqlite3.OperationalError, psycopg2.errors.DuplicateColumn):
+            if is_postgres_conn:
+                conn.rollback()
+        except Exception as e:
+            log.warning(f"Could not add column 'gemini_score' to scraped_articles: {e}")
+            if is_postgres_conn:
+                conn.rollback()
+
         conn.commit()
     except (sqlite3.Error, psycopg2.Error) as e:
         log.error(f"Error during database initialization: {e}", exc_info=True)
@@ -800,15 +812,15 @@ def save_articles_batch(articles: list):
                 if is_postgres_conn:
                     query = '''
                         INSERT INTO scraped_articles
-                            (title, title_hash, source, source_url, description, symbol, vader_score, category)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                            (title, title_hash, source, source_url, description, symbol, vader_score, category, gemini_score)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (title_hash) DO NOTHING
                     '''
                 else:
                     query = '''
                         INSERT OR IGNORE INTO scraped_articles
-                            (title, title_hash, source, source_url, description, symbol, vader_score, category)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            (title, title_hash, source, source_url, description, symbol, vader_score, category, gemini_score)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     '''
                 cursor.execute(query, (
                     article.get('title', ''),
@@ -819,11 +831,71 @@ def save_articles_batch(articles: list):
                     article.get('symbol'),
                     article.get('vader_score'),
                     article.get('category', ''),
+                    article.get('gemini_score'),
                 ))
         conn.commit()
         log.info(f"Saved batch of {len(articles)} articles to archive.")
     except (sqlite3.Error, psycopg2.Error) as e:
         log.error(f"Database error in save_articles_batch: {e}", exc_info=True)
+        if conn:
+            conn.rollback()
+    finally:
+        release_db_connection(conn)
+
+
+def get_gemini_scores_for_hashes(title_hashes: list) -> dict:
+    """Looks up cached Gemini scores for a list of title hashes.
+
+    Returns {title_hash: gemini_score} for rows that have a non-null gemini_score.
+    """
+    if not title_hashes:
+        return {}
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            if is_pg:
+                query = ("SELECT title_hash, gemini_score FROM scraped_articles "
+                         "WHERE title_hash = ANY(%s) AND gemini_score IS NOT NULL")
+                cursor.execute(query, (title_hashes,))
+            else:
+                placeholders = ','.join('?' for _ in title_hashes)
+                query = (f"SELECT title_hash, gemini_score FROM scraped_articles "
+                         f"WHERE title_hash IN ({placeholders}) AND gemini_score IS NOT NULL")
+                cursor.execute(query, title_hashes)
+            return {row[0]: row[1] for row in cursor.fetchall()}
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in get_gemini_scores_for_hashes: {e}", exc_info=True)
+        return {}
+    finally:
+        release_db_connection(conn)
+
+
+def update_gemini_scores_batch(scores: dict):
+    """Persists Gemini per-article scores to the scraped_articles table.
+
+    Args:
+        scores: {title_hash: gemini_score} mapping.
+    """
+    if not scores:
+        return
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            for title_hash, score in scores.items():
+                query = (
+                    "UPDATE scraped_articles SET gemini_score = %s WHERE title_hash = %s"
+                    if is_pg else
+                    "UPDATE scraped_articles SET gemini_score = ? WHERE title_hash = ?"
+                )
+                cursor.execute(query, (score, title_hash))
+        conn.commit()
+        log.info(f"Updated Gemini scores for {len(scores)} articles.")
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in update_gemini_scores_batch: {e}", exc_info=True)
         if conn:
             conn.rollback()
     finally:
@@ -844,7 +916,7 @@ def get_recent_articles(symbol: str, hours: int = 24, limit: int = 20) -> list:
             if is_postgres_conn:
                 query = '''
                     SELECT title, source, vader_score, collected_at,
-                           source_url, description, category
+                           source_url, description, category, gemini_score
                     FROM scraped_articles
                     WHERE symbol = %s AND collected_at >= NOW() - INTERVAL '%s hours'
                     ORDER BY collected_at DESC LIMIT %s
@@ -853,7 +925,7 @@ def get_recent_articles(symbol: str, hours: int = 24, limit: int = 20) -> list:
             else:
                 query = '''
                     SELECT title, source, vader_score, collected_at,
-                           source_url, description, category
+                           source_url, description, category, gemini_score
                     FROM scraped_articles
                     WHERE symbol = ? AND collected_at >= datetime('now', ? || ' hours')
                     ORDER BY collected_at DESC LIMIT ?

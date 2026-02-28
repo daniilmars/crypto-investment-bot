@@ -29,7 +29,6 @@ def _load_api_keys(base_config):
     binance['api_secret'] = _get_env('BINANCE_API_SECRET', binance.get('api_secret'))
     keys['binance'] = binance
     keys['alpha_vantage'] = _get_env('ALPHA_VANTAGE_API_KEY', keys.get('alpha_vantage'))
-    keys['newsapi'] = _get_env('NEWSAPI_ORG_KEY', keys.get('newsapi'))
     alpaca = keys.get('alpaca', {})
     alpaca['api_key'] = _get_env('ALPACA_API_KEY', alpaca.get('api_key'))
     alpaca['api_secret'] = _get_env('ALPACA_API_SECRET', alpaca.get('api_secret'))

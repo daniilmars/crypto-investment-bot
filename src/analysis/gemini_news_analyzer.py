@@ -46,6 +46,121 @@ def clear_gemini_cache():
     _gemini_cache.clear()
 
 
+_gemini_article_cache: dict[str, float] = {}
+
+
+def clear_gemini_article_cache():
+    """Clears the per-article Gemini score cache. Useful for tests."""
+    _gemini_article_cache.clear()
+
+
+def _score_single_batch(model, articles: list) -> list | None:
+    """Sends a single batch of articles to Gemini and returns a list of scores.
+
+    Returns None on any failure (parse error, count mismatch, API error).
+    """
+    numbered_lines = []
+    for i, art in enumerate(articles, 1):
+        title = art.get('title', '')
+        desc = (art.get('description', '') or '')[:200]
+        numbered_lines.append(f"{i}. {title} | {desc}")
+
+    articles_text = "\n".join(numbered_lines)
+
+    prompt = (
+        "Score each article's financial/crypto market sentiment from -1.0 "
+        "(very bearish) to +1.0 (very bullish). 0.0 = neutral or irrelevant.\n\n"
+        "Consider:\n"
+        "- Positive catalysts (ETF approvals, partnerships, earnings beats) → positive\n"
+        "- Negative catalysts (hacks, regulatory bans, earnings misses) → negative\n"
+        "- Opinion pieces, vague predictions, irrelevant news → near 0.0\n\n"
+        f"Articles:\n{articles_text}\n\n"
+        "Respond ONLY with a JSON array of numbers in the same order:\n"
+        f"[0.6, -0.3, 0.0, ...]"
+    )
+
+    try:
+        response = model.generate_content(prompt)
+        text = response.text.strip()
+        scores = _parse_gemini_json(text)
+
+        if not isinstance(scores, list):
+            log.warning(f"Gemini article scoring returned non-list: {type(scores)}")
+            return None
+
+        if len(scores) != len(articles):
+            log.warning(f"Gemini article scoring count mismatch: "
+                        f"expected {len(articles)}, got {len(scores)}")
+            return None
+
+        # Validate and clamp each score
+        clamped = []
+        for s in scores:
+            try:
+                val = float(s)
+                val = max(-1.0, min(1.0, val))
+                clamped.append(val)
+            except (TypeError, ValueError):
+                log.warning(f"Invalid score value from Gemini: {s}")
+                return None
+
+        return clamped
+
+    except json.JSONDecodeError as e:
+        log.error(f"Failed to parse Gemini article scores as JSON: {e}")
+        return None
+    except Exception as e:
+        log.error(f"Gemini article scoring batch failed: {e}")
+        return None
+
+
+def score_articles_batch(articles: list, batch_size: int = 50) -> dict:
+    """Scores a list of articles using Gemini 2.0 Flash in batches.
+
+    Args:
+        articles: list of dicts with 'title', 'description', 'title_hash' keys.
+        batch_size: number of articles per Gemini API call.
+
+    Returns:
+        {title_hash: float} mapping of scores for successfully scored articles.
+        Returns empty dict if GCP_PROJECT_ID is not set or on total failure.
+    """
+    if not articles:
+        return {}
+
+    project_id = os.environ.get('GCP_PROJECT_ID')
+    if not project_id:
+        log.warning("GCP_PROJECT_ID not set — skipping Gemini article scoring.")
+        return {}
+
+    location = os.environ.get('GCP_LOCATION', 'us-central1')
+
+    try:
+        vertexai.init(project=project_id, location=location)
+        model = GenerativeModel('gemini-2.0-flash')
+    except Exception as e:
+        log.error(f"Failed to initialize Gemini for article scoring: {e}")
+        return {}
+
+    all_scores = {}
+
+    for i in range(0, len(articles), batch_size):
+        batch = articles[i:i + batch_size]
+        scores = _score_single_batch(model, batch)
+
+        if scores is None:
+            log.warning(f"Gemini article scoring batch {i // batch_size + 1} failed, skipping.")
+            continue
+
+        for art, score in zip(batch, scores):
+            title_hash = art.get('title_hash')
+            if title_hash:
+                all_scores[title_hash] = score
+
+    log.info(f"Gemini article scoring complete: {len(all_scores)}/{len(articles)} articles scored.")
+    return all_scores
+
+
 def analyze_news_with_search(symbols: list, current_prices: dict,
                              cache_ttl_minutes: int = 30) -> dict | None:
     """
