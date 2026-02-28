@@ -104,8 +104,8 @@ RSS_FEEDS = [
     {'url': 'https://apnews.com/business.rss', 'category': 'wire'},
     {'url': 'https://feeds.marketwatch.com/marketwatch/topstories/', 'category': 'financial'},
     # Press release wire feeds (origin point of corporate news)
-    {'url': 'https://www.globenewswire.com/RssFeed/subjectcode/01-MNA/feedTitle/GlobeNewsWire - Mergers and Acquisitions', 'category': 'press_release'},
-    {'url': 'https://www.globenewswire.com/RssFeed/subjectcode/25-PER/feedTitle/GlobeNewsWire - Public Companies', 'category': 'press_release'},
+    {'url': 'https://www.globenewswire.com/RssFeed/subjectcode/01-MNA/feedTitle/GlobeNewsWire%20-%20Mergers%20and%20Acquisitions', 'category': 'press_release'},
+    {'url': 'https://www.globenewswire.com/RssFeed/subjectcode/25-PER/feedTitle/GlobeNewsWire%20-%20Public%20Companies', 'category': 'press_release'},
     {'url': 'https://www.prnewswire.com/rss/news-releases-list.rss', 'category': 'press_release'},
     {'url': 'https://www.prnewswire.com/rss/financial-services-latest-news/financial-services-latest-news-list.rss', 'category': 'press_release'},
     # Google News sector-grouped feeds (one per sector, when:1d filter)
@@ -211,13 +211,18 @@ def _fetch_rss_feeds():
     all_articles = []
     with ThreadPoolExecutor(max_workers=14) as executor:
         futures = {executor.submit(_fetch_single_rss_feed, feed): feed for feed in RSS_FEEDS}
-        for future in as_completed(futures, timeout=RSS_FETCH_TIMEOUT + 5):
-            try:
-                articles = future.result(timeout=RSS_FETCH_TIMEOUT)
-                all_articles.extend(articles)
-            except Exception as e:
-                feed = futures[future]
-                log.warning(f"RSS feed timed out or failed: {feed['url']}: {e}")
+        try:
+            done_iter = as_completed(futures, timeout=RSS_FETCH_TIMEOUT + 5)
+            for future in done_iter:
+                try:
+                    articles = future.result(timeout=RSS_FETCH_TIMEOUT)
+                    all_articles.extend(articles)
+                except Exception as e:
+                    feed = futures[future]
+                    log.warning(f"RSS feed timed out or failed: {feed['url']}: {e}")
+        except TimeoutError:
+            n_unfinished = sum(1 for fut in futures if not fut.done())
+            log.warning(f"RSS fetch global timeout — {n_unfinished} feeds did not finish in time.")
     log.info(f"Fetched {len(all_articles)} articles from {len(RSS_FEEDS)} RSS feeds.")
     return all_articles
 
@@ -250,12 +255,25 @@ def _match_article_to_symbols(title, description, symbols):
 
 
 def _build_query_string(symbols):
-    """Builds an OR-joined query string from symbol keywords for NewsAPI."""
+    """Builds an OR-joined query string from symbol keywords for NewsAPI.
+
+    NewsAPI has a ~500 char query limit. Only includes symbols that have
+    SYMBOL_KEYWORDS entries (major names with recognizable keywords).
+    Symbols without keyword mappings are covered by RSS feeds instead.
+    """
     all_keywords = []
     for symbol in symbols:
-        keywords = SYMBOL_KEYWORDS.get(symbol, [symbol])
-        all_keywords.extend(keywords)
-    return ' OR '.join(all_keywords)
+        if symbol in SYMBOL_KEYWORDS:
+            keywords = SYMBOL_KEYWORDS[symbol]
+            all_keywords.extend(keywords)
+    query = ' OR '.join(all_keywords)
+    # NewsAPI max query length is ~500 chars; truncate at last complete OR term
+    if len(query) > 500:
+        truncated = query[:500]
+        last_or = truncated.rfind(' OR ')
+        if last_or > 0:
+            query = truncated[:last_or]
+    return query
 
 
 def collect_news_sentiment(symbols):

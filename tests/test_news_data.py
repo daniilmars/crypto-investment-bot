@@ -3,6 +3,7 @@ from unittest.mock import patch, MagicMock
 
 from src.collectors.news_data import (
     RSS_FEEDS,
+    SYMBOL_KEYWORDS,
     _build_query_string,
     _deduplicate_articles,
     _fetch_newsapi_articles,
@@ -289,9 +290,16 @@ class TestBuildQueryString:
         assert 'Ethereum' in query
         assert ' OR ' in query
 
-    def test_unknown_symbol_uses_itself(self):
+    def test_unknown_symbol_skipped(self):
+        """Symbols without SYMBOL_KEYWORDS entries are excluded from NewsAPI query."""
         query = _build_query_string(['UNKNOWN'])
-        assert 'UNKNOWN' in query
+        assert query == ''
+
+    def test_query_truncated_at_500_chars(self):
+        """Query is truncated to 500 chars at last complete OR term."""
+        all_symbols = list(SYMBOL_KEYWORDS.keys())
+        query = _build_query_string(all_symbols)
+        assert len(query) <= 500
 
 
 class TestDeduplicateArticles:
