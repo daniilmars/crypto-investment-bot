@@ -18,7 +18,7 @@ class TestRSSFeedConfig:
     """Validates the RSS_FEEDS list structure and category distribution."""
 
     def test_total_feed_count(self):
-        assert len(RSS_FEEDS) == 47
+        assert len(RSS_FEEDS) == 46
 
     def test_all_feeds_have_required_keys(self):
         for feed in RSS_FEEDS:
@@ -58,7 +58,7 @@ class TestRSSFeedConfig:
 
     def test_kol_feed_count(self):
         kol_feeds = [f for f in RSS_FEEDS if f['category'] == 'kol']
-        assert len(kol_feeds) == 5
+        assert len(kol_feeds) == 4
 
     def test_ipo_feed_count(self):
         ipo_feeds = [f for f in RSS_FEEDS if f['category'] == 'ipo']
@@ -332,6 +332,18 @@ class TestDeduplicateArticles:
     def test_empty_list(self):
         assert _deduplicate_articles([]) == []
 
+    def test_filters_non_english(self):
+        """Non-English articles (German, Chinese, etc.) are filtered out."""
+        articles = [
+            {'title': 'Bitcoin hits new high', 'description': ''},
+            {'title': 'PU Prime sichert sich CMA-Lizenz in den VAE und erweitert', 'description': ''},
+            {'title': 'PU Prime 获得阿联酋 CMA 牌照，进一步拓展全球监管布局', 'description': ''},
+        ]
+        result = _deduplicate_articles(articles)
+        assert len(result) == 2  # German passes (mostly ASCII), Chinese doesn't
+        titles = [a['title'] for a in result]
+        assert 'PU Prime 获得阿联酋 CMA 牌照，进一步拓展全球监管布局' not in titles
+
 
 class TestMatchArticleToSymbols:
     def test_matches_ticker(self):
@@ -359,6 +371,37 @@ class TestMatchArticleToSymbols:
     def test_stock_symbol_match(self):
         result = _match_article_to_symbols('Apple stock rises after earnings', '', ['AAPL', 'MSFT'])
         assert 'AAPL' in result
+
+    def test_no_substring_false_positive(self):
+        """Short tickers must not match as substrings of longer words."""
+        # "GE" should not match "general", "BA" should not match "back"
+        result = _match_article_to_symbols(
+            'A general back and forth discussion', '', ['GE', 'BA', 'CAT', 'DIS'])
+        assert result == []
+
+    def test_no_sol_in_solution(self):
+        """SOL should not match 'solution' — only 'Solana' keyword."""
+        result = _match_article_to_symbols(
+            'New solution for enterprise problems', '', ['SOL'])
+        assert result == []
+
+    def test_solana_matches_sol(self):
+        """SOL matches via its 'Solana' keyword."""
+        result = _match_article_to_symbols(
+            'Solana hits new all-time high', '', ['SOL'])
+        assert result == ['SOL']
+
+    def test_word_boundary_ticker_match(self):
+        """Tickers like AAPL/NVDA still match as standalone words."""
+        result = _match_article_to_symbols(
+            'AAPL and NVDA lead tech rally', '', ['AAPL', 'NVDA'])
+        assert 'AAPL' in result
+        assert 'NVDA' in result
+
+    def test_unknown_symbol_skipped(self):
+        """Symbols without SYMBOL_KEYWORDS entries are silently skipped."""
+        result = _match_article_to_symbols('UNKNOWN token rallies', '', ['UNKNOWN'])
+        assert result == []
 
 
 class TestFetchNewsAPIArticles:

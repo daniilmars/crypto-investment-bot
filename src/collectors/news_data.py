@@ -1,3 +1,4 @@
+import re
 import statistics
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -14,79 +15,105 @@ from src.logger import log
 
 # --- Constants ---
 
+# Keywords for symbol matching. Each keyword is matched with word boundaries
+# (\b) to prevent false positives from substrings. Short/ambiguous tickers
+# (GE, BA, SO, etc.) are excluded — only multi-word phrases are used for those.
 SYMBOL_KEYWORDS = {
-    # Crypto
+    # Crypto — tickers are distinctive enough for word-boundary matching
     'BTC': ['BTC', 'Bitcoin'],
     'ETH': ['ETH', 'Ethereum'],
-    'SOL': ['SOL', 'Solana'],
+    'SOL': ['Solana'],  # "SOL" too short — matches "solution", "solar"
     'XRP': ['XRP', 'Ripple'],
-    'ADA': ['ADA', 'Cardano'],
-    'AVAX': ['AVAX', 'Avalanche'],
+    'ADA': ['Cardano'],  # "ADA" matches Americans with Disabilities Act
+    'AVAX': ['AVAX', 'Avalanche crypto'],
     'DOGE': ['DOGE', 'Dogecoin'],
-    'MATIC': ['MATIC', 'Polygon'],
+    'MATIC': ['MATIC', 'Polygon crypto'],
     'BNB': ['BNB', 'Binance Coin'],
-    'TRX': ['TRX', 'Tron'],
-    # Stocks
+    'TRX': ['TRON crypto', 'TRX crypto'],  # "TRX" matches exercise abbreviation
+    'LINK': ['Chainlink'],  # "LINK" too common
+    'DOT': ['Polkadot'],  # "DOT" too common
+    'UNI': ['Uniswap'],  # "UNI" too common
+    'ATOM': ['Cosmos crypto'],  # "ATOM" too common
+    'NEAR': ['NEAR Protocol'],  # "NEAR" too common
+    'AAVE': ['AAVE', 'Aave'],
+    'MKR': ['MakerDAO', 'Maker crypto'],
+    'HBAR': ['HBAR', 'Hedera'],
+    'ICP': ['Internet Computer'],
+    'PEPE': ['PEPE coin', 'PEPE crypto'],
+    'SHIB': ['SHIB', 'Shiba Inu'],
+    'TON': ['Toncoin'],  # "TON" too common
+    'SUI': ['SUI crypto', 'Sui blockchain'],
+    'ARB': ['Arbitrum'],
+    'OP': ['Optimism crypto'],  # "OP" too common
+    # Stocks — use full company names; short tickers only if 4+ chars
     'AAPL': ['AAPL', 'Apple stock', 'Apple Inc'],
     'MSFT': ['MSFT', 'Microsoft stock', 'Microsoft Corp'],
-    'GOOGL': ['GOOGL', 'Google stock', 'Alphabet'],
+    'GOOGL': ['GOOGL', 'Google stock', 'Alphabet stock'],
     'AMZN': ['AMZN', 'Amazon stock', 'Amazon.com'],
     'NVDA': ['NVDA', 'Nvidia stock', 'NVIDIA'],
-    'META': ['META', 'Meta stock', 'Meta Platforms', 'Facebook'],
+    'META': ['Meta Platforms', 'Meta stock'],  # "META" alone too common
     'TSLA': ['TSLA', 'Tesla stock', 'Tesla Inc'],
     'AVGO': ['AVGO', 'Broadcom stock', 'Broadcom Inc'],
-    'CRM': ['CRM', 'Salesforce stock', 'Salesforce Inc'],
+    'CRM': ['Salesforce stock', 'Salesforce Inc'],  # "CRM" too common
     'ORCL': ['ORCL', 'Oracle stock', 'Oracle Corp'],
-    'AMD': ['AMD', 'AMD stock', 'Advanced Micro Devices'],
+    'AMD': ['AMD stock', 'Advanced Micro Devices'],  # "AMD" needs context
     'ADBE': ['ADBE', 'Adobe stock', 'Adobe Inc'],
     'INTC': ['INTC', 'Intel stock', 'Intel Corp'],
     # Financials
-    'JPM': ['JPM', 'JPMorgan', 'JP Morgan'],
-    'BAC': ['BAC', 'Bank of America'],
-    'GS': ['GS', 'Goldman Sachs'],
-    'MS': ['MS', 'Morgan Stanley'],
+    'JPM': ['JPMorgan', 'JP Morgan'],
+    'BAC': ['Bank of America'],  # "BAC" matches "back"
+    'GS': ['Goldman Sachs'],  # "GS" too short
+    'MS': ['Morgan Stanley'],  # "MS" too short
     'V': ['Visa stock', 'Visa Inc'],
     'MA': ['Mastercard stock', 'Mastercard Inc'],
     'BRK-B': ['BRK-B', 'Berkshire Hathaway', 'Warren Buffett'],
-    'WFC': ['WFC', 'Wells Fargo'],
+    'WFC': ['Wells Fargo'],
     # Healthcare
-    'UNH': ['UNH', 'UnitedHealth', 'UnitedHealth Group'],
-    'JNJ': ['JNJ', 'Johnson & Johnson', 'Johnson and Johnson'],
-    'LLY': ['LLY', 'Eli Lilly'],
-    'PFE': ['PFE', 'Pfizer stock', 'Pfizer Inc'],
+    'UNH': ['UnitedHealth', 'UnitedHealth Group'],
+    'JNJ': ['Johnson & Johnson', 'Johnson and Johnson'],
+    'LLY': ['Eli Lilly'],  # "LLY" too short
+    'PFE': ['Pfizer stock', 'Pfizer Inc'],
     'ABBV': ['ABBV', 'AbbVie stock', 'AbbVie Inc'],
-    'MRK': ['MRK', 'Merck stock', 'Merck & Co'],
-    'TMO': ['TMO', 'Thermo Fisher', 'Thermo Fisher Scientific'],
+    'MRK': ['Merck stock', 'Merck & Co'],
+    'TMO': ['Thermo Fisher', 'Thermo Fisher Scientific'],
     # Energy
-    'XOM': ['XOM', 'Exxon', 'ExxonMobil'],
-    'CVX': ['CVX', 'Chevron stock', 'Chevron Corp'],
-    'COP': ['COP', 'ConocoPhillips'],
-    'SLB': ['SLB', 'Schlumberger'],
+    'XOM': ['Exxon', 'ExxonMobil'],
+    'CVX': ['Chevron stock', 'Chevron Corp'],
+    'COP': ['ConocoPhillips'],  # "COP" matches police
+    'SLB': ['Schlumberger'],
     # Consumer Discretionary
-    'HD': ['HD', 'Home Depot'],
-    'MCD': ['MCD', 'McDonald\'s stock', 'McDonalds'],
-    'NKE': ['NKE', 'Nike stock', 'Nike Inc'],
+    'HD': ['Home Depot'],  # "HD" too short
+    'MCD': ['McDonald\'s stock', 'McDonalds'],
+    'NKE': ['Nike stock', 'Nike Inc'],
     'SBUX': ['SBUX', 'Starbucks stock', 'Starbucks Corp'],
     # Consumer Staples
-    'WMT': ['WMT', 'Walmart stock', 'Walmart Inc'],
-    'COST': ['COST', 'Costco stock', 'Costco Wholesale'],
-    'KO': ['KO', 'Coca-Cola stock', 'Coca Cola'],
+    'WMT': ['Walmart stock', 'Walmart Inc'],
+    'COST': ['Costco stock', 'Costco Wholesale'],  # "COST" too common
+    'KO': ['Coca-Cola stock', 'Coca Cola'],  # "KO" too short
     # Industrials
-    'CAT': ['CAT', 'Caterpillar stock', 'Caterpillar Inc'],
-    'BA': ['BA', 'Boeing stock', 'Boeing Co'],
-    'GE': ['GE', 'General Electric', 'GE Aerospace'],
-    'HON': ['HON', 'Honeywell stock', 'Honeywell International'],
-    'RTX': ['RTX', 'RTX Corp', 'Raytheon'],
+    'CAT': ['Caterpillar stock', 'Caterpillar Inc'],  # "CAT" too common
+    'BA': ['Boeing stock', 'Boeing Co'],  # "BA" too short
+    'GE': ['General Electric', 'GE Aerospace'],  # "GE" too short
+    'HON': ['Honeywell stock', 'Honeywell International'],  # "HON" too short
+    'RTX': ['RTX Corp', 'Raytheon'],
     # Communication
-    'DIS': ['DIS', 'Disney stock', 'Walt Disney'],
+    'DIS': ['Disney stock', 'Walt Disney'],  # "DIS" too short
     'NFLX': ['NFLX', 'Netflix stock', 'Netflix Inc'],
     'CMCSA': ['CMCSA', 'Comcast stock', 'Comcast Corp'],
     # Utilities
-    'NEE': ['NEE', 'NextEra Energy', 'NextEra'],
+    'NEE': ['NextEra Energy', 'NextEra'],
     'SO': ['Southern Company stock', 'Southern Co'],
     # REITs
-    'AMT': ['AMT', 'American Tower', 'American Tower Corp'],
+    'AMT': ['American Tower Corp'],  # "AMT" too short
 }
+
+# Pre-compile regex patterns for each keyword (word-boundary matching)
+_KEYWORD_PATTERNS = {}
+for _sym, _kws in SYMBOL_KEYWORDS.items():
+    _KEYWORD_PATTERNS[_sym] = [
+        re.compile(r'\b' + re.escape(kw) + r'\b', re.IGNORECASE)
+        for kw in _kws
+    ]
 
 RSS_FEEDS = [
     {'url': 'https://feeds.reuters.com/reuters/businessNews', 'category': 'financial'},
@@ -134,7 +161,6 @@ RSS_FEEDS = [
     {'url': 'https://www.eetimes.com/feed/', 'category': 'sector'},
     {'url': 'https://deadline.com/feed/', 'category': 'sector'},
     # Layer C — KOL / Key person feeds
-    {'url': 'https://trumpstruth.org/feed', 'category': 'kol'},
     {'url': 'https://decrypt.co/feed', 'category': 'kol'},
     {'url': 'https://blockworks.co/feed', 'category': 'kol'},
     {'url': 'https://rekt.news/feed/', 'category': 'kol'},
@@ -227,13 +253,26 @@ def _fetch_rss_feeds():
     return all_articles
 
 
+def _is_likely_english(text):
+    """Fast heuristic: reject text with >15% non-ASCII chars (non-English)."""
+    if not text:
+        return False
+    non_ascii = sum(1 for c in text if ord(c) > 127)
+    return non_ascii / len(text) < 0.15
+
+
 def _deduplicate_articles(articles):
-    """Removes near-duplicate headlines by comparing lowercased stripped titles."""
+    """Removes near-duplicate and non-English headlines."""
     seen = set()
     unique = []
     for article in articles:
-        key = article.get('title', '').lower().strip()
-        if not key or key in seen:
+        title = article.get('title', '').strip()
+        if not title:
+            continue
+        key = title.lower()
+        if key in seen:
+            continue
+        if not _is_likely_english(title):
             continue
         seen.add(key)
         unique.append(article)
@@ -242,13 +281,20 @@ def _deduplicate_articles(articles):
 
 
 def _match_article_to_symbols(title, description, symbols):
-    """Matches an article to symbols based on keyword presence in title/description."""
+    """Matches an article to symbols using word-boundary regex matching.
+
+    Only matches against keywords defined in SYMBOL_KEYWORDS with pre-compiled
+    regex patterns. Symbols without keyword entries are skipped (they rely on
+    RSS feeds for coverage instead of text matching).
+    """
     matched = []
-    text = f"{title} {description}".upper()
+    text = f"{title} {description}"
     for symbol in symbols:
-        keywords = SYMBOL_KEYWORDS.get(symbol, [symbol])
-        for keyword in keywords:
-            if keyword.upper() in text:
+        patterns = _KEYWORD_PATTERNS.get(symbol)
+        if not patterns:
+            continue
+        for pattern in patterns:
+            if pattern.search(text):
                 matched.append(symbol)
                 break
     return matched
