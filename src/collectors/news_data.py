@@ -123,11 +123,13 @@ RSS_FEEDS = [
     {'url': 'https://feeds.a.dj.com/rss/RSSMarketsMain.xml', 'category': 'financial'},
     {'url': 'https://www.handelsblatt.com/contentexport/feed/', 'category': 'european'},
     {'url': 'https://www.faz.net/rss/aktuell/finanzen/', 'category': 'european'},
+    {'url': 'https://feeds.bbci.co.uk/news/business/rss.xml', 'category': 'european'},
+    {'url': 'https://www.cityam.com/feed/', 'category': 'european'},
     {'url': 'https://www.coindesk.com/arc/outboundfeeds/rss/', 'category': 'crypto'},
     {'url': 'https://cointelegraph.com/rss', 'category': 'crypto'},
     {'url': 'https://www.theblock.co/rss.xml', 'category': 'crypto'},
-    {'url': 'https://feeds.feedburner.com/TechCrunch/', 'category': 'tech'},
-    {'url': 'https://www.theverge.com/rss/index.xml', 'category': 'tech'},
+    {'url': 'https://feeds.arstechnica.com/arstechnica/technology-lab', 'category': 'tech'},
+    {'url': 'https://www.wired.com/feed/category/business/latest/rss', 'category': 'tech'},
     {'url': 'https://apnews.com/business.rss', 'category': 'wire'},
     {'url': 'https://feeds.marketwatch.com/marketwatch/topstories/', 'category': 'financial'},
     # Press release wire feeds (origin point of corporate news)
@@ -165,6 +167,15 @@ RSS_FEEDS = [
     {'url': 'https://blockworks.co/feed', 'category': 'kol'},
     {'url': 'https://rekt.news/feed/', 'category': 'kol'},
     {'url': 'https://bitcoinmagazine.com/feed', 'category': 'kol'},
+    # Layer E — Asia-Pacific market feeds (English-language)
+    {'url': 'https://asia.nikkei.com/rss/feed/nar', 'category': 'asia'},
+    {'url': 'https://www.scmp.com/rss/5/feed', 'category': 'asia'},
+    {'url': 'https://www.straitstimes.com/news/business/rss.xml', 'category': 'asia'},
+    {'url': 'https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml&category=6511', 'category': 'asia'},
+    {'url': 'https://www.abc.net.au/news/feed/51120/rss.xml', 'category': 'asia'},
+    {'url': 'https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms', 'category': 'asia'},
+    # Layer F — Asia-Pacific central bank feeds
+    {'url': 'https://www.boj.or.jp/en/rss/whatsnew.xml', 'category': 'regulatory'},
     # Layer D — IPO / New listings feeds
     {'url': 'https://news.google.com/rss/search?q=IPO+%22initial+public+offering%22+stock+when:1d&hl=en-US&gl=US&ceid=US:en', 'category': 'ipo'},
     {'url': 'https://news.google.com/rss/search?q=Binance+OR+Coinbase+%22new+listing%22+crypto+when:1d&hl=en-US&gl=US&ceid=US:en', 'category': 'ipo'},
