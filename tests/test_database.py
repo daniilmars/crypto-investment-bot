@@ -24,13 +24,12 @@ def test_initialize_database_creates_tables(mock_get_db_connection, mock_release
     initialize_database()
 
     # Assert: Check if CREATE TABLE + ALTER TABLE statements were executed
-    # 8 CREATE TABLEs + 1 CREATE INDEX + 6 ALTER TABLE (new trade columns incl. asset_type) = 15
-    assert mock_cursor.execute.call_count == 15
+    # 8 CREATE TABLEs + 1 CREATE INDEX + 6 ALTER TABLE (trade columns) + 1 ALTER TABLE (trailing_stop_peak) + 1 ALTER TABLE (scraped_articles category) = 17
+    assert mock_cursor.execute.call_count == 17
 
     # Check the SQL statements (case-insensitive and ignoring whitespace)
     executed_queries = [' '.join(call[0][0].split()) for call in mock_cursor.execute.call_args_list]
     assert any("CREATE TABLE IF NOT EXISTS market_prices" in query for query in executed_queries)
-    assert any("CREATE TABLE IF NOT EXISTS whale_transactions" in query for query in executed_queries)
     assert any("CREATE TABLE IF NOT EXISTS signals" in query for query in executed_queries)
     assert any("CREATE TABLE IF NOT EXISTS trades" in query for query in executed_queries)
     assert any("CREATE TABLE IF NOT EXISTS optimization_results" in query for query in executed_queries)
@@ -68,31 +67,6 @@ def test_get_historical_prices(mock_get_db_connection, mock_release):
     mock_release.assert_called_once_with(mock_conn)
 
 
-@patch('src.database.release_db_connection')
-@patch('src.database.get_db_connection')
-def test_get_transaction_timestamps_since(mock_get_db_connection, mock_release):
-    """
-    Tests the get_transaction_timestamps_since function.
-    """
-    # Arrange
-    mock_conn = MagicMock()
-    mock_cursor_context = MagicMock()
-    mock_get_db_connection.return_value = mock_conn
-    mock_conn.cursor.return_value = mock_cursor_context
-    mock_cursor_context.__enter__.return_value = mock_cursor_context # For 'with' statement
-
-    mock_cursor_context.fetchall.return_value = [(1672531200,), (1672534800,)] # Example timestamps
-
-    # Act
-    from src.database import get_transaction_timestamps_since
-    timestamps = get_transaction_timestamps_since('btc', hours_ago=4)
-
-    # Assert
-    mock_cursor_context.execute.assert_called_once()
-    assert timestamps == [1672531200, 1672534800]
-    mock_release.assert_called_once_with(mock_conn)
-
-
 # --- Article Archive Tests ---
 
 class TestArticleArchive:
@@ -120,6 +94,7 @@ class TestArticleArchive:
                 'description': 'BTC surged today.',
                 'symbol': 'BTC',
                 'vader_score': 0.75,
+                'category': 'crypto',
             },
             {
                 'title': 'Ethereum upgrade',
@@ -129,6 +104,7 @@ class TestArticleArchive:
                 'description': 'ETH protocol change.',
                 'symbol': 'ETH',
                 'vader_score': 0.3,
+                'category': 'crypto',
             },
         ]
 
@@ -193,3 +169,94 @@ class TestArticleArchive:
         # Different title = different hash
         hash4 = compute_title_hash("Ethereum upgrade")
         assert hash1 != hash4
+
+
+# --- Trailing Stop Persistence Tests ---
+
+class TestTrailingStopPersistence:
+    """Tests for trailing stop peak DB persistence functions."""
+
+    @patch('src.database.release_db_connection')
+    @patch('src.database.get_db_connection')
+    def test_save_and_load_trailing_stop_peak(self, mock_get_db_connection, mock_release):
+        """Save a peak, load it back, verify the value."""
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_get_db_connection.return_value = mock_conn
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_cursor.__exit__ = MagicMock(return_value=False)
+
+        from src.database import save_trailing_stop_peak
+
+        save_trailing_stop_peak('order_123', 50500.0)
+
+        mock_cursor.execute.assert_called_once()
+        call_args = mock_cursor.execute.call_args
+        assert 'trailing_stop_peak' in call_args[0][0]
+        assert call_args[0][1] == (50500.0, 'order_123')
+        mock_conn.commit.assert_called_once()
+
+    @patch('src.database.release_db_connection')
+    @patch('src.database.get_db_connection')
+    def test_load_peaks_only_open_positions(self, mock_get_db_connection, mock_release):
+        """Only OPEN positions with non-null peaks are returned."""
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_get_db_connection.return_value = mock_conn
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_cursor.__exit__ = MagicMock(return_value=False)
+
+        mock_cursor.fetchall.return_value = [
+            ('order_1', 50500.0),
+            ('order_2', 3200.0),
+        ]
+
+        from src.database import load_trailing_stop_peaks
+
+        result = load_trailing_stop_peaks()
+
+        assert result == {'order_1': 50500.0, 'order_2': 3200.0}
+        # Verify the query filters for OPEN and NOT NULL
+        query = mock_cursor.execute.call_args[0][0]
+        assert "status = 'OPEN'" in query
+        assert 'trailing_stop_peak IS NOT NULL' in query
+
+    @patch('src.database.release_db_connection')
+    @patch('src.database.get_db_connection')
+    def test_load_peaks_empty(self, mock_get_db_connection, mock_release):
+        """No open positions with peaks returns empty dict."""
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_get_db_connection.return_value = mock_conn
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_cursor.__exit__ = MagicMock(return_value=False)
+
+        mock_cursor.fetchall.return_value = []
+
+        from src.database import load_trailing_stop_peaks
+
+        result = load_trailing_stop_peaks()
+        assert result == {}
+
+    @patch('src.database.release_db_connection')
+    @patch('src.database.get_db_connection')
+    def test_save_peak_updates_existing(self, mock_get_db_connection, mock_release):
+        """Second save overwrites first (UPDATE semantics)."""
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_get_db_connection.return_value = mock_conn
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_cursor.__exit__ = MagicMock(return_value=False)
+
+        from src.database import save_trailing_stop_peak
+
+        save_trailing_stop_peak('order_1', 50000.0)
+        save_trailing_stop_peak('order_1', 51000.0)
+
+        assert mock_cursor.execute.call_count == 2
+        last_call = mock_cursor.execute.call_args
+        assert last_call[0][1] == (51000.0, 'order_1')

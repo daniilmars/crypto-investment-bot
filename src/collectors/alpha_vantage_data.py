@@ -13,8 +13,8 @@ try:
 except ImportError:
     _HAS_YFINANCE = False
 
-# Stock symbols: 1-10 alphanumeric chars, may include dots/hyphens (e.g. BRK.B)
-_STOCK_SYMBOL_RE = re.compile(r'^[A-Za-z0-9.\-]{1,10}$')
+# Stock symbols: 1-15 alphanumeric chars, may include dots/hyphens (e.g. BRK.B, ICICIBANK.NS)
+_STOCK_SYMBOL_RE = re.compile(r'^[A-Za-z0-9.\-]{1,15}$')
 
 
 def _validate_stock_symbol(symbol: str) -> bool:
@@ -224,6 +224,120 @@ def _get_daily_prices_yfinance(symbol):
     except Exception as e:
         log.error(f"[yfinance] Error fetching daily data for {symbol}: {e}")
         return None
+
+
+def get_batch_stock_prices(symbols):
+    """Fetches current prices for multiple stocks in one yfinance batch call.
+
+    Args:
+        symbols: list of ticker strings (e.g. ['AAPL', 'SAP.DE', '7203.T'])
+
+    Returns:
+        dict {symbol: {'symbol': str, 'price': float, 'volume': float, 'change_percent': float}}
+        Symbols that fail are silently skipped.
+    """
+    if not _HAS_YFINANCE or not symbols:
+        return {}
+
+    try:
+        import pandas as pd
+        data = yf.download(symbols, period="2d", group_by="ticker", threads=True, progress=False)
+        if data.empty:
+            log.warning("[yfinance batch] No data returned for any symbols.")
+            return {}
+
+        results = {}
+        for sym in symbols:
+            try:
+                if len(symbols) == 1:
+                    sym_data = data
+                else:
+                    sym_data = data[sym]
+
+                if sym_data.empty or sym_data['Close'].dropna().empty:
+                    continue
+
+                close_vals = sym_data['Close'].dropna()
+                price = float(close_vals.iloc[-1])
+                volume = float(sym_data['Volume'].dropna().iloc[-1]) if not sym_data['Volume'].dropna().empty else 0.0
+
+                if len(close_vals) >= 2:
+                    prev_close = float(close_vals.iloc[-2])
+                    change_percent = ((price - prev_close) / prev_close) * 100 if prev_close > 0 else 0.0
+                else:
+                    change_percent = 0.0
+
+                if price > 0:
+                    save_price_data({'symbol': sym, 'price': price})
+                    results[sym] = {
+                        'symbol': sym,
+                        'price': price,
+                        'volume': volume,
+                        'change_percent': change_percent,
+                    }
+            except (KeyError, IndexError, TypeError) as e:
+                log.warning(f"[yfinance batch] Skipping {sym}: {e}")
+                continue
+
+        log.info(f"[yfinance batch] Fetched prices for {len(results)}/{len(symbols)} stocks.")
+        return results
+
+    except Exception as e:
+        log.error(f"[yfinance batch] Error fetching batch prices: {e}")
+        return {}
+
+
+def get_batch_daily_prices(symbols):
+    """Fetches 6-month daily prices for multiple stocks in one yfinance batch call.
+
+    Args:
+        symbols: list of ticker strings
+
+    Returns:
+        dict {symbol: {'prices': [float...], 'volumes': [float...]}}
+        Oldest-to-newest ordering. Symbols with insufficient data are skipped.
+    """
+    if not _HAS_YFINANCE or not symbols:
+        return {}
+
+    try:
+        data = yf.download(symbols, period="6mo", group_by="ticker", threads=True, progress=False)
+        if data.empty:
+            log.warning("[yfinance batch daily] No data returned for any symbols.")
+            return {}
+
+        results = {}
+        for sym in symbols:
+            try:
+                if len(symbols) == 1:
+                    sym_data = data
+                else:
+                    sym_data = data[sym]
+
+                if sym_data.empty:
+                    continue
+
+                close_vals = sym_data['Close'].dropna()
+                vol_vals = sym_data['Volume'].dropna()
+
+                if len(close_vals) < 20:
+                    log.warning(f"[yfinance batch daily] Insufficient data for {sym} ({len(close_vals)} days).")
+                    continue
+
+                results[sym] = {
+                    'prices': close_vals.tolist(),
+                    'volumes': vol_vals.tolist(),
+                }
+            except (KeyError, IndexError, TypeError) as e:
+                log.warning(f"[yfinance batch daily] Skipping {sym}: {e}")
+                continue
+
+        log.info(f"[yfinance batch daily] Fetched daily data for {len(results)}/{len(symbols)} stocks.")
+        return results
+
+    except Exception as e:
+        log.error(f"[yfinance batch daily] Error fetching batch daily prices: {e}")
+        return {}
 
 
 def get_company_overview(symbol):

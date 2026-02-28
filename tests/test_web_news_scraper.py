@@ -13,6 +13,7 @@ from src.collectors.web_news_scraper import (
     scrape_yahoo_finance,
     scrape_all_sources,
     _fetch_page,
+    _generic_article_fallback,
 )
 
 
@@ -174,6 +175,28 @@ class TestScrapeAllSources:
         # Should not raise — failed scrapers are skipped
         articles = scrape_all_sources()
         assert len(articles) >= 1
+
+
+class TestGenericFallback:
+
+    def test_fallback_extracts_headlines(self):
+        """Generic fallback scraper extracts headlines from standard HTML patterns."""
+        from bs4 import BeautifulSoup
+        html = """
+        <html><body>
+            <h2><a href="/article/breaking-news">Breaking: Major Crypto Exchange Announces New Feature</a></h2>
+            <h3><a href="/article/market-update">Market Update for Today Shows Growth</a></h3>
+            <article><a href="/post/deep-dive">Deep Dive into DeFi Lending Protocols</a></article>
+            <a href="/short">Short</a>
+        </body></html>
+        """
+        soup = BeautifulSoup(html, 'html.parser')
+        articles = _generic_article_fallback(soup, 'TestSource', 'https://example.com')
+        assert len(articles) >= 2
+        titles = [a['title'] for a in articles]
+        assert any('Breaking' in t for t in titles)
+        assert all(a['source'] == 'TestSource' for a in articles)
+        assert all(a['source_url'].startswith('https://') for a in articles)
 
 
 class TestNewsDataIntegration:

@@ -4,7 +4,7 @@ This document outlines the architecture and data processing pipeline for a new, 
 
 ## 1. Problem Statement
 
-Our previous, XGBoost-based models have been hampered by extreme data sparsity. This is due to the asynchronous nature of our data sources (prices, whale transactions, and news sentiment).
+Our previous, XGBoost-based models have been hampered by extreme data sparsity. This is due to the asynchronous nature of our data sources (prices and news sentiment).
 
 This new approach will use a Long Short-Term Memory (LSTM) network, a type of Recurrent Neural Network (RNN) that is purpose-built for time-series data. This will allow us to handle the asynchronous data in a more robust and sophisticated way.
 
@@ -24,13 +24,12 @@ The model will be built using the TensorFlow/Keras library. The architecture wil
 
 This is the most critical part of the new pipeline. We will transform our sparse, event-based data into a dense, continuous set of sequences.
 
-1.  **Load Data:** For a given currency, we will load the market prices and whale transaction data.
+1.  **Load Data:** For a given currency, we will load the market prices and news sentiment data.
 
 2.  **Rolling Window Aggregations:** For each hourly price point, we will create a rich set of features that summarize the events of the preceding `N` hours (e.g., 24 hours). This will include features like:
-    *   `sum_of_whale_inflows_last_6_hours`
-    *   `max_whale_outflow_last_3_hours`
-    *   `number_of_whale_transactions_last_12_hours`
     *   `price_volatility_last_24_hours`
+    *   `avg_sentiment_last_6_hours`
+    *   `news_volume_last_12_hours`
 
 3.  **Sequence Creation:** This process will result in a dense DataFrame where each row represents an hour and contains a complete set of features. We will then use a sliding window to create our sequences. For example, with a sequence length of 24, the first sequence would be the feature sets for hours 1-24, the second would be for hours 2-25, and so on.
 
@@ -47,5 +46,5 @@ This is the most critical part of the new pipeline. We will transform our sparse
 ## 5. Implementation Plan
 
 1.  **Create a new script:** `scripts/train_lstm_model.py`.
-2.  **Initial Focus:** The initial implementation will focus on just the **price and whale alert data**. This will allow us to build and validate the core pipeline without the added complexity of the news sentiment data.
+2.  **Initial Focus:** The initial implementation will focus on just the **price and news sentiment data**. This will allow us to build and validate the core pipeline before adding more complex features.
 3.  **Future Expansion:** Once the core pipeline is working, we can easily incorporate the news sentiment data by adding it to the "Rolling Window Aggregations" step.

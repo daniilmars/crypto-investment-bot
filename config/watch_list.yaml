@@ -1,21 +1,23 @@
-# A list of cryptocurrency symbols to monitor for trading signals.
+# =============================================================
+# Watch List Configuration
+# =============================================================
+# Primary source for all trading symbols. Loaded by src/config.py.
+# Env vars WATCH_LIST / STOCK_WATCH_LIST still override at runtime.
+
+# --- Cryptocurrency symbols (Binance USDT pairs) ---
 symbols:
-  # Tier 1 — Large caps with strong whale data
+  # Tier 1 — Top 10 by market cap
   - BTC
   - ETH
   - XRP
-  - TRX
-  # Tier 2 — Major alts
   - SOL
   - BNB
   - ADA
-  - AVAX
+  - TRX
   - DOGE
-  - MATIC
+  - AVAX
   - LINK
-  - XLM
-  - SHIB
-  # Tier 3 — Top-25 by market cap (price + news, no whale data)
+  # Tier 2 — 11-30
   - DOT
   - UNI
   - ATOM
@@ -30,8 +32,82 @@ symbols:
   - ICP
   - HBAR
   - RENDER
+  - MATIC
+  - XLM
+  - SHIB
+  - TON
+  - AAVE
+  - MKR
+  # Tier 3 — 31-100
+  - IMX
+  - INJ
+  - SEI
+  - TIA
+  - JUP
+  - WIF
+  - BONK
+  - FET
+  - RNDR
+  - GRT
+  - SAND
+  - MANA
+  - AXS
+  - GALA
+  - ALGO
+  - VET
+  - FTM
+  - THETA
+  - EGLD
+  - FLOW
+  - CRV
+  - SNX
+  - COMP
+  - LDO
+  - RPL
+  - SSV
+  - ENS
+  - PENDLE
+  - DYDX
+  - GMX
+  - STX
+  - KAS
+  - TAO
+  - WLD
+  - PYTH
+  - ONDO
+  - ENA
+  - ETHFI
+  - NOT
+  - DOGS
+  - FLOKI
+  - 1000SATS
+  - ORDI
+  - RUNE
+  - CAKE
+  - CHZ
+  - ENJ
+  - CELO
+  - ZIL
+  - ONE
+  - ROSE
+  - KAVA
+  - ZEC
+  - DASH
+  - EOS
+  - XTZ
+  - NEO
+  - IOTA
+  - QTUM
+  - WAVES
+  - BAT
+  - ANKR
+  - SKL
+  - STORJ
+  - GLM
+  - OCEAN
+  - NMR
 
-# A list of stablecoin symbols (lowercase) to monitor for exchange inflows.
+# --- Stablecoins (lowercase) for exchange inflow monitoring ---
 stablecoins:
   - usdt
   - usdc
@@ -41,8 +117,9 @@ stablecoins:
   - fdusd
   - pyusd
 
-# A list of stock ticker symbols to monitor for trading signals.
+# --- US Stocks ---
 stocks:
+  # Technology (20)
   - AAPL
   - MSFT
   - GOOGL
@@ -50,3 +127,242 @@ stocks:
   - NVDA
   - META
   - TSLA
+  - AVGO
+  - CRM
+  - ORCL
+  - AMD
+  - ADBE
+  - INTC
+  - QCOM
+  - MU
+  - SHOP
+  - SQ
+  - PLTR
+  - SNOW
+  - NET
+  # Financials (12)
+  - JPM
+  - BAC
+  - GS
+  - MS
+  - V
+  - MA
+  - BRK-B
+  - WFC
+  - C
+  - AXP
+  - SCHW
+  - BLK
+  # Healthcare (10)
+  - UNH
+  - JNJ
+  - LLY
+  - PFE
+  - ABBV
+  - MRK
+  - TMO
+  - AMGN
+  - GILD
+  - ISRG
+  # Energy (6)
+  - XOM
+  - CVX
+  - COP
+  - SLB
+  - EOG
+  - OXY
+  # Consumer Discretionary (8)
+  - HD
+  - MCD
+  - NKE
+  - SBUX
+  - TJX
+  - LOW
+  - BKNG
+  - CMG
+  # Consumer Staples (6)
+  - WMT
+  - COST
+  - KO
+  - PG
+  - PEP
+  - PM
+  # Industrials (8)
+  - CAT
+  - BA
+  - GE
+  - HON
+  - RTX
+  - UPS
+  - DE
+  - LMT
+  # Communication (5)
+  - DIS
+  - NFLX
+  - CMCSA
+  - TMUS
+  - CHTR
+  # Utilities (3)
+  - NEE
+  - SO
+  - DUK
+  # REITs (3)
+  - AMT
+  - PLD
+  - CCI
+  # Materials (4)
+  - LIN
+  - APD
+  - SHW
+  - FCX
+  # Tech/Semis (8)
+  - MRVL
+  - LRCX
+  - KLAC
+  - AMAT
+  - SNPS
+  - CDNS
+  - PANW
+  - CRWD
+  # Fintech/Growth (7)
+  - UBER
+  - ABNB
+  - COIN
+  - DDOG
+  - ZS
+  - TTD
+  - MELI
+
+# --- European Stocks (yfinance suffix) ---
+stocks_europe:
+  # UK FTSE (15)
+  - HSBA.L
+  - BP.L
+  - SHEL.L
+  - AZN.L
+  - GSK.L
+  - ULVR.L
+  - RIO.L
+  - BARC.L
+  - LLOY.L
+  - VOD.L
+  - LSEG.L
+  - DGE.L
+  - GLEN.L
+  - AAL.L
+  - NG.L
+  # Germany DAX (12)
+  - SAP.DE
+  - SIE.DE
+  - ALV.DE
+  - DTE.DE
+  - BAS.DE
+  - MBG.DE
+  - BMW.DE
+  - VOW3.DE
+  - MUV2.DE
+  - IFX.DE
+  - ADS.DE
+  - HEN3.DE
+  # France CAC (10)
+  - MC.PA
+  - TTE.PA
+  - SAN.PA
+  - OR.PA
+  - AI.PA
+  - BNP.PA
+  - SU.PA
+  - AIR.PA
+  - SAF.PA
+  - CS.PA
+  # Netherlands (4)
+  - ASML.AS
+  - INGA.AS
+  - PHIA.AS
+  - WKL.AS
+  # Switzerland (5)
+  - NESN.SW
+  - ROG.SW
+  - NOVN.SW
+  - UBSG.SW
+  - ZURN.SW
+  # Spain (3)
+  - SAN.MC
+  - ITX.MC
+  - IBE.MC
+  # Italy (4)
+  - ENI.MI
+  - ENEL.MI
+  - UCG.MI
+  - ISP.MI
+  # Nordics (8)
+  - NOVO-B.CO
+  - MAERSK-B.CO
+  - VOLV-B.ST
+  - ERIC-B.ST
+  - ABB.ST
+  - NESTE.HE
+  - UPM.HE
+  - NOKIA.HE
+
+# --- Asian Stocks (yfinance suffix) ---
+stocks_asia:
+  # Japan Nikkei (15)
+  - 7203.T
+  - 6758.T
+  - 9984.T
+  - 6861.T
+  - 8306.T
+  - 6902.T
+  - 7741.T
+  - 4063.T
+  - 6501.T
+  - 8035.T
+  - 9432.T
+  - 6367.T
+  - 7267.T
+  - 4519.T
+  - 6954.T
+  # Hong Kong (12)
+  - 0700.HK
+  - 9988.HK
+  - 1299.HK
+  - 0005.HK
+  - 3690.HK
+  - 0941.HK
+  - 1211.HK
+  - 2318.HK
+  - 0388.HK
+  - 9618.HK
+  - 1810.HK
+  - 2020.HK
+  # South Korea (6)
+  - 005930.KS
+  - 000660.KS
+  - 373220.KS
+  - 035420.KS
+  - 005380.KS
+  - 051910.KS
+  # Australia (6)
+  - BHP.AX
+  - CBA.AX
+  - CSL.AX
+  - WBC.AX
+  - NAB.AX
+  - FMG.AX
+  # India (6)
+  - RELIANCE.NS
+  - TCS.NS
+  - INFY.NS
+  - HDFCBANK.NS
+  - ICICIBANK.NS
+  - WIPRO.NS
+  # Taiwan (4)
+  - 2330.TW
+  - 2317.TW
+  - 2454.TW
+  - 2308.TW
+  # Singapore (3)
+  - D05.SI
+  - O39.SI
+  - U11.SI

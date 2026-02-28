@@ -116,6 +116,7 @@ def run_scraper(output_path=None, archive=False):
                         'description': '',
                         'symbol': sym,
                         'vader_score': article.get('vader_score'),
+                        'category': '',
                     })
         if archive_rows:
             save_articles_batch(archive_rows)

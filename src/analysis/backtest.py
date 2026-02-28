@@ -127,15 +127,15 @@ class DataLoader:
         log.info("Loading historical data...")
         conn = get_db_connection()
         prices_df = pd.read_sql_query("SELECT * FROM market_prices ORDER BY timestamp ASC", conn)
-        whales_df = pd.read_sql_query("SELECT * FROM whale_transactions ORDER BY timestamp ASC", conn)
         conn.close()
         if not prices_df.empty:
             prices_df['timestamp'] = pd.to_datetime(prices_df['timestamp'])
             prices_df['timestamp'] = prices_df['timestamp'].dt.tz_localize('UTC')
-        if not whales_df.empty:
-            whales_df['timestamp'] = pd.to_datetime(whales_df['timestamp'], unit='s')
-        log.info(f"Loaded {len(prices_df)} price records and {len(whales_df)} whale transactions.")
-        return prices_df, whales_df
+        if not prices_df.empty:
+            assert prices_df['timestamp'].is_monotonic_increasing, \
+                "Historical prices must be sorted by timestamp ASC"
+        log.info(f"Loaded {len(prices_df)} price records.")
+        return prices_df
 
 
 # ---------------------------------------------------------------------------
@@ -228,8 +228,7 @@ class Strategy:
     def __init__(self, params):
         self.params = params
 
-    def generate_signals(self, symbol, historical_prices, whale_transactions,
-                         current_price, stablecoin_data, velocity_data):
+    def generate_signals(self, symbol, historical_prices, current_price):
         sma_period = self.params.sma_period
         rsi_period = self.params.rsi_period
         if len(historical_prices) < max(sma_period, rsi_period):
@@ -243,13 +242,7 @@ class Strategy:
 
         signal = generate_signal(
             symbol=symbol,
-            whale_transactions=whale_transactions,
             market_data=market_data,
-            high_interest_wallets=self.params.high_interest_wallets,
-            stablecoin_data=stablecoin_data,
-            stablecoin_threshold=self.params.stablecoin_inflow_threshold_usd,
-            velocity_data=velocity_data,
-            velocity_threshold_multiplier=self.params.transaction_velocity_threshold_multiplier,
             rsi_overbought_threshold=self.params.rsi_overbought_threshold,
             rsi_oversold_threshold=self.params.rsi_oversold_threshold,
             historical_prices=price_list,
@@ -291,10 +284,9 @@ class Strategy:
 
 class Backtester:
     """Orchestrates the backtesting simulation with all advanced features."""
-    def __init__(self, watch_list, prices_df, whales_df, params):
+    def __init__(self, watch_list, prices_df, params):
         self.watch_list = watch_list
         self.prices_df = prices_df
-        self.whales_df = whales_df
         self.params = params
         self.portfolio = Portfolio(
             params.initial_capital,
@@ -354,11 +346,9 @@ class Backtester:
                  f"(activation={self.trailing_stop_activation}, distance={self.trailing_stop_distance})")
         log.info(f"Slippage: {self.portfolio.slippage_bps} bps")
 
-        # Ensure whale timestamps are timezone-aware for proper comparison
-        if not self.whales_df.empty and self.whales_df['timestamp'].dt.tz is None:
-            self.whales_df['timestamp'] = self.whales_df['timestamp'].dt.tz_localize('UTC')
-
         all_prices = self.prices_df.pivot(index='timestamp', columns='symbol', values='price').ffill()
+        assert all_prices.index.is_monotonic_increasing, \
+            "Pivoted prices must maintain chronological order"
 
         # Volume data for volume gate (gracefully absent for crypto)
         self._all_volumes = None
@@ -421,22 +411,6 @@ class Backtester:
                 self._update_kelly_state(self.portfolio.trade_history[-1]['pnl'])
 
     def check_for_entries(self, current_prices, timestamp, bar_idx=0):
-        # --- Calculate point-in-time on-chain metrics ---
-        one_hour_ago = timestamp - pd.Timedelta(hours=1)
-        if not self.whales_df.empty:
-            recent_whales_df = self.whales_df[self.whales_df['timestamp'].between(one_hour_ago, timestamp)]
-            recent_whales = recent_whales_df.to_dict('records')
-        else:
-            recent_whales_df = pd.DataFrame()
-            recent_whales = []
-
-        stablecoin_inflow = sum(
-            tx['amount_usd'] for tx in recent_whales
-            if tx.get('symbol') in self.params.stablecoins_to_monitor
-            and tx.get('to_owner_type') == 'exchange'
-        )
-        stablecoin_data = {'stablecoin_inflow_usd': stablecoin_inflow}
-
         for symbol in self.watch_list:
             if symbol in self.portfolio.positions:
                 continue
@@ -450,26 +424,13 @@ class Backtester:
                     continue
                 del self._stoploss_cooldowns[symbol]
 
-            # --- Calculate Transaction Velocity ---
-            baseline_start = timestamp - pd.Timedelta(hours=self.params.transaction_velocity_baseline_hours)
-            if not self.whales_df.empty:
-                baseline_whales_df = self.whales_df[self.whales_df['timestamp'].between(baseline_start, timestamp)]
-                current_count = len(recent_whales_df[recent_whales_df['symbol'] == symbol.lower()])
-                baseline_count = len(baseline_whales_df[baseline_whales_df['symbol'] == symbol.lower()])
-            else:
-                current_count = 0
-                baseline_count = 0
-            baseline_avg = baseline_count / self.params.transaction_velocity_baseline_hours if self.params.transaction_velocity_baseline_hours > 0 else 0
-            velocity_data = {'current_count': current_count, 'baseline_avg': baseline_avg}
-
             # --- Generate Signal (with regime + MTF filtering) ---
             historical_prices = self.prices_df[
                 (self.prices_df['symbol'] == symbol) & (self.prices_df['timestamp'] <= timestamp)
             ]
 
             signal_data = self.strategy.generate_signals(
-                symbol, historical_prices, recent_whales, current_price,
-                stablecoin_data, velocity_data,
+                symbol, historical_prices, current_price,
             )
 
             signal = signal_data.get('signal')
@@ -538,14 +499,13 @@ class Backtester:
 # Walk-Forward Validation
 # ---------------------------------------------------------------------------
 
-def run_walk_forward(prices_df, whales_df, params, n_splits=3):
+def run_walk_forward(prices_df, params, n_splits=3):
     """
     Walk-forward analysis: splits data into n_splits windows, trains on each
     window, tests on the next. Prevents overfitting by validating out-of-sample.
 
     Args:
         prices_df: Full historical price DataFrame.
-        whales_df: Full whale transaction DataFrame.
         params: argparse Namespace with strategy parameters.
         n_splits: Number of train/test windows (default 3).
 
@@ -558,11 +518,6 @@ def run_walk_forward(prices_df, whales_df, params, n_splits=3):
     # Each fold: 60% train, 40% test (overlapping windows)
     fold_size = total_bars // (n_splits + 1)
     train_size = int(fold_size * 1.5)
-
-    # Ensure whale timestamps are tz-aware to match price timestamps
-    if not whales_df.empty and whales_df['timestamp'].dt.tz is None:
-        whales_df = whales_df.copy()
-        whales_df['timestamp'] = whales_df['timestamp'].dt.tz_localize('UTC')
 
     fold_results = []
     all_equity = []
@@ -580,25 +535,15 @@ def run_walk_forward(prices_df, whales_df, params, n_splits=3):
         test_start_ts = timestamps[test_start_idx]
         test_end_ts = timestamps[test_end_idx - 1]
 
-        # We only run the backtest on the TEST portion
-        # (In a full implementation, you'd optimize on train, test on test.
-        #  Here we use fixed params and measure out-of-sample consistency.)
         test_prices = prices_df[
             (prices_df['timestamp'] >= test_start_ts) & (prices_df['timestamp'] <= test_end_ts)
         ].copy()
-
-        if not whales_df.empty:
-            test_whales = whales_df[
-                (whales_df['timestamp'] >= test_start_ts) & (whales_df['timestamp'] <= test_end_ts)
-            ].copy()
-        else:
-            test_whales = whales_df.copy()
 
         if test_prices.empty:
             continue
 
         watchlist = test_prices['symbol'].unique().tolist()
-        bt = Backtester(watchlist, test_prices, test_whales, params)
+        bt = Backtester(watchlist, test_prices, params)
         fold_result = bt.run()
         fold_result['fold'] = fold + 1
         fold_result['test_start'] = str(test_start_ts)
@@ -670,15 +615,6 @@ def main():
     parser.add_argument('--rsi-overbought-threshold', type=int, default=app_config.get('settings', {}).get('rsi_overbought_threshold', 70))
     parser.add_argument('--rsi-oversold-threshold', type=int, default=app_config.get('settings', {}).get('rsi_oversold_threshold', 30))
 
-    # On-Chain & Anomaly Detection
-    parser.add_argument('--stablecoin-inflow-threshold-usd', type=float, default=app_config.get('settings', {}).get('stablecoin_inflow_threshold_usd', 100000000))
-    parser.add_argument('--transaction-velocity-baseline-hours', type=int, default=app_config.get('settings', {}).get('transaction_velocity_baseline_hours', 24))
-    parser.add_argument('--transaction-velocity-threshold-multiplier', type=float, default=app_config.get('settings', {}).get('transaction_velocity_threshold_multiplier', 5.0))
-
-    # Watch Lists (as comma-separated strings)
-    parser.add_argument('--high-interest-wallets', type=str, default=",".join(app_config.get('settings', {}).get('high_interest_wallets', [])))
-    parser.add_argument('--stablecoins-to-monitor', type=str, default=",".join(app_config.get('settings', {}).get('stablecoins_to_monitor', [])))
-
     # Data
     parser.add_argument('--bar-interval-minutes', type=int, default=60, help='Bar interval in minutes (15 for 15m, 60 for 1h)')
 
@@ -695,20 +631,16 @@ def main():
 
     args = parser.parse_args()
 
-    # Convert comma-separated strings to lists
-    args.high_interest_wallets = args.high_interest_wallets.split(',') if args.high_interest_wallets else []
-    args.stablecoins_to_monitor = args.stablecoins_to_monitor.split(',') if args.stablecoins_to_monitor else []
-
-    prices, whales = DataLoader.load_historical_data()
+    prices = DataLoader.load_historical_data()
     if prices.empty:
         log.info("No data found. Exiting backtest.")
         return
 
     if args.walk_forward:
-        run_walk_forward(prices, whales, args, n_splits=args.walk_forward_splits)
+        run_walk_forward(prices, args, n_splits=args.walk_forward_splits)
     else:
         watchlist = prices['symbol'].unique().tolist()
-        backtester = Backtester(watchlist, prices, whales, args)
+        backtester = Backtester(watchlist, prices, args)
         backtester.run()
         backtester.print_results()
 

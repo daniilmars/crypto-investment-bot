@@ -23,7 +23,6 @@ def _get_env(key, default=None):
 def _load_api_keys(base_config):
     """Loads API keys from config and environment variables."""
     keys = base_config.get('api_keys', {})
-    keys['whale_alert'] = _get_env('WHALE_ALERT_API_KEY', keys.get('whale_alert'))
     keys['gemini'] = _get_env('GEMINI_API_KEY', keys.get('gemini'))
     binance = keys.get('binance', {})
     binance['api_key'] = _get_env('BINANCE_API_KEY', binance.get('api_key'))
@@ -67,20 +66,52 @@ def _load_gcp_billing(base_config):
     billing['billing_account_id'] = _get_env('GCP_BILLING_ACCOUNT_ID', billing.get('billing_account_id'))
     return billing
 
+def _load_watch_list(settings):
+    """Loads watch lists from config/watch_list.yaml and merges into settings.
+    Called BEFORE env var overrides so env vars still take priority."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    watch_list_path = os.path.join(script_dir, '..', 'config', 'watch_list.yaml')
+    try:
+        with open(watch_list_path, 'r', encoding='utf-8') as f:
+            wl_data = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        log.info("config/watch_list.yaml not found. Using settings.yaml watch lists.")
+        return settings
+    except yaml.YAMLError as e:
+        log.error(f"Error parsing watch_list.yaml: {e}")
+        return settings
+
+    # Crypto symbols
+    crypto_symbols = wl_data.get('symbols', [])
+    if crypto_symbols:
+        settings['watch_list'] = crypto_symbols
+
+    # Stock symbols: combine US + Europe + Asia
+    us_stocks = wl_data.get('stocks', [])
+    eu_stocks = wl_data.get('stocks_europe', [])
+    asia_stocks = wl_data.get('stocks_asia', [])
+    combined_stocks = us_stocks + eu_stocks + asia_stocks
+    if combined_stocks:
+        stock_trading = settings.get('stock_trading', {})
+        stock_trading['watch_list'] = combined_stocks
+        settings['stock_trading'] = stock_trading
+
+    log.info(f"Loaded watch_list.yaml: {len(crypto_symbols)} crypto, "
+             f"{len(us_stocks)} US + {len(eu_stocks)} EU + {len(asia_stocks)} Asia stocks")
+    return settings
+
+
 def _load_settings(base_config):
     """Loads general settings from config and environment variables."""
     settings = base_config.get('settings', {})
-    min_usd_str = _get_env('MIN_WHALE_TRANSACTION_USD')
-    if min_usd_str and min_usd_str.isdigit():
-        settings['min_whale_transaction_usd'] = int(min_usd_str)
-        
+
+    # Load watch lists from watch_list.yaml first (before env var overrides)
+    settings = _load_watch_list(settings)
+
+    # Env var overrides for watch lists
     watch_list_env = _get_env('WATCH_LIST')
     if watch_list_env:
         settings['watch_list'] = [symbol.strip() for symbol in watch_list_env.split(';')]
-        
-    stablecoins_env = _get_env('STABLECOINS_TO_MONITOR')
-    if stablecoins_env:
-        settings['stablecoins_to_monitor'] = [symbol.strip() for symbol in stablecoins_env.split(';')]
 
     stock_watch_list_env = _get_env('STOCK_WATCH_LIST')
     if stock_watch_list_env:

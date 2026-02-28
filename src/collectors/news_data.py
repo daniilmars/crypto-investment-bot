@@ -34,6 +34,58 @@ SYMBOL_KEYWORDS = {
     'NVDA': ['NVDA', 'Nvidia stock', 'NVIDIA'],
     'META': ['META', 'Meta stock', 'Meta Platforms', 'Facebook'],
     'TSLA': ['TSLA', 'Tesla stock', 'Tesla Inc'],
+    'AVGO': ['AVGO', 'Broadcom stock', 'Broadcom Inc'],
+    'CRM': ['CRM', 'Salesforce stock', 'Salesforce Inc'],
+    'ORCL': ['ORCL', 'Oracle stock', 'Oracle Corp'],
+    'AMD': ['AMD', 'AMD stock', 'Advanced Micro Devices'],
+    'ADBE': ['ADBE', 'Adobe stock', 'Adobe Inc'],
+    'INTC': ['INTC', 'Intel stock', 'Intel Corp'],
+    # Financials
+    'JPM': ['JPM', 'JPMorgan', 'JP Morgan'],
+    'BAC': ['BAC', 'Bank of America'],
+    'GS': ['GS', 'Goldman Sachs'],
+    'MS': ['MS', 'Morgan Stanley'],
+    'V': ['Visa stock', 'Visa Inc'],
+    'MA': ['Mastercard stock', 'Mastercard Inc'],
+    'BRK-B': ['BRK-B', 'Berkshire Hathaway', 'Warren Buffett'],
+    'WFC': ['WFC', 'Wells Fargo'],
+    # Healthcare
+    'UNH': ['UNH', 'UnitedHealth', 'UnitedHealth Group'],
+    'JNJ': ['JNJ', 'Johnson & Johnson', 'Johnson and Johnson'],
+    'LLY': ['LLY', 'Eli Lilly'],
+    'PFE': ['PFE', 'Pfizer stock', 'Pfizer Inc'],
+    'ABBV': ['ABBV', 'AbbVie stock', 'AbbVie Inc'],
+    'MRK': ['MRK', 'Merck stock', 'Merck & Co'],
+    'TMO': ['TMO', 'Thermo Fisher', 'Thermo Fisher Scientific'],
+    # Energy
+    'XOM': ['XOM', 'Exxon', 'ExxonMobil'],
+    'CVX': ['CVX', 'Chevron stock', 'Chevron Corp'],
+    'COP': ['COP', 'ConocoPhillips'],
+    'SLB': ['SLB', 'Schlumberger'],
+    # Consumer Discretionary
+    'HD': ['HD', 'Home Depot'],
+    'MCD': ['MCD', 'McDonald\'s stock', 'McDonalds'],
+    'NKE': ['NKE', 'Nike stock', 'Nike Inc'],
+    'SBUX': ['SBUX', 'Starbucks stock', 'Starbucks Corp'],
+    # Consumer Staples
+    'WMT': ['WMT', 'Walmart stock', 'Walmart Inc'],
+    'COST': ['COST', 'Costco stock', 'Costco Wholesale'],
+    'KO': ['KO', 'Coca-Cola stock', 'Coca Cola'],
+    # Industrials
+    'CAT': ['CAT', 'Caterpillar stock', 'Caterpillar Inc'],
+    'BA': ['BA', 'Boeing stock', 'Boeing Co'],
+    'GE': ['GE', 'General Electric', 'GE Aerospace'],
+    'HON': ['HON', 'Honeywell stock', 'Honeywell International'],
+    'RTX': ['RTX', 'RTX Corp', 'Raytheon'],
+    # Communication
+    'DIS': ['DIS', 'Disney stock', 'Walt Disney'],
+    'NFLX': ['NFLX', 'Netflix stock', 'Netflix Inc'],
+    'CMCSA': ['CMCSA', 'Comcast stock', 'Comcast Corp'],
+    # Utilities
+    'NEE': ['NEE', 'NextEra Energy', 'NextEra'],
+    'SO': ['Southern Company stock', 'Southern Co'],
+    # REITs
+    'AMT': ['AMT', 'American Tower', 'American Tower Corp'],
 }
 
 RSS_FEEDS = [
@@ -51,11 +103,50 @@ RSS_FEEDS = [
     {'url': 'https://www.theverge.com/rss/index.xml', 'category': 'tech'},
     {'url': 'https://apnews.com/business.rss', 'category': 'wire'},
     {'url': 'https://feeds.marketwatch.com/marketwatch/topstories/', 'category': 'financial'},
+    # Press release wire feeds (origin point of corporate news)
+    {'url': 'https://www.globenewswire.com/RssFeed/subjectcode/01-MNA/feedTitle/GlobeNewsWire - Mergers and Acquisitions', 'category': 'press_release'},
+    {'url': 'https://www.globenewswire.com/RssFeed/subjectcode/25-PER/feedTitle/GlobeNewsWire - Public Companies', 'category': 'press_release'},
+    {'url': 'https://www.prnewswire.com/rss/news-releases-list.rss', 'category': 'press_release'},
+    {'url': 'https://www.prnewswire.com/rss/financial-services-latest-news/financial-services-latest-news-list.rss', 'category': 'press_release'},
+    # Google News sector-grouped feeds (one per sector, when:1d filter)
+    {'url': 'https://news.google.com/rss/search?q=AAPL+MSFT+GOOGL+AMZN+NVDA+META+TSLA+AVGO+CRM+ORCL+AMD+ADBE+INTC+stock+when:1d&hl=en-US&gl=US&ceid=US:en', 'category': 'google_news'},
+    {'url': 'https://news.google.com/rss/search?q=JPMorgan+%22Goldman+Sachs%22+%22Bank+of+America%22+%22Morgan+Stanley%22+Visa+Mastercard+%22Berkshire+Hathaway%22+%22Wells+Fargo%22+stock+when:1d&hl=en-US&gl=US&ceid=US:en', 'category': 'google_news'},
+    {'url': 'https://news.google.com/rss/search?q=UnitedHealth+%22Eli+Lilly%22+Pfizer+AbbVie+Merck+%22Thermo+Fisher%22+%22Johnson+%26+Johnson%22+stock+when:1d&hl=en-US&gl=US&ceid=US:en', 'category': 'google_news'},
+    {'url': 'https://news.google.com/rss/search?q=ExxonMobil+Chevron+ConocoPhillips+Schlumberger+stock+when:1d&hl=en-US&gl=US&ceid=US:en', 'category': 'google_news'},
+    {'url': 'https://news.google.com/rss/search?q=%22Home+Depot%22+McDonald%27s+Nike+Starbucks+stock+when:1d&hl=en-US&gl=US&ceid=US:en', 'category': 'google_news'},
+    {'url': 'https://news.google.com/rss/search?q=Walmart+Costco+Coca-Cola+stock+when:1d&hl=en-US&gl=US&ceid=US:en', 'category': 'google_news'},
+    {'url': 'https://news.google.com/rss/search?q=Caterpillar+Boeing+%22General+Electric%22+Honeywell+Raytheon+stock+when:1d&hl=en-US&gl=US&ceid=US:en', 'category': 'google_news'},
+    {'url': 'https://news.google.com/rss/search?q=Disney+Netflix+Comcast+stock+when:1d&hl=en-US&gl=US&ceid=US:en', 'category': 'google_news'},
+    {'url': 'https://news.google.com/rss/search?q=%22NextEra+Energy%22+%22Southern+Company%22+%22American+Tower%22+stock+when:1d&hl=en-US&gl=US&ceid=US:en', 'category': 'google_news'},
+    {'url': 'https://news.google.com/rss/search?q=Bitcoin+Ethereum+Solana+XRP+Cardano+Avalanche+Dogecoin+Polygon+BNB+Tron+crypto+when:1d&hl=en-US&gl=US&ceid=US:en', 'category': 'google_news'},
+    # Layer A — Regulatory origin-point feeds
+    {'url': 'https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/press-releases/rss.xml', 'category': 'regulatory'},
+    {'url': 'https://www.federalreserve.gov/feeds/press_all.xml', 'category': 'regulatory'},
+    {'url': 'https://www.federalreserve.gov/feeds/press_monetary.xml', 'category': 'regulatory'},
+    {'url': 'https://www.federalreserve.gov/feeds/s_t_powell.xml', 'category': 'regulatory'},
+    {'url': 'https://www.ecb.europa.eu/rss/press.html', 'category': 'regulatory'},
+    {'url': 'https://www.sec.gov/news/pressreleases.rss', 'category': 'regulatory'},
+    {'url': 'https://www.eia.gov/rss/todayinenergy.xml', 'category': 'regulatory'},
+    # Layer B — Sector depth feeds
+    {'url': 'https://www.statnews.com/feed/', 'category': 'sector'},
+    {'url': 'https://endpts.com/feed/', 'category': 'sector'},
+    {'url': 'https://www.rigzone.com/news/rss/rigzone_latest.aspx', 'category': 'sector'},
+    {'url': 'https://www.eetimes.com/feed/', 'category': 'sector'},
+    {'url': 'https://deadline.com/feed/', 'category': 'sector'},
+    # Layer C — KOL / Key person feeds
+    {'url': 'https://trumpstruth.org/feed', 'category': 'kol'},
+    {'url': 'https://decrypt.co/feed', 'category': 'kol'},
+    {'url': 'https://blockworks.co/feed', 'category': 'kol'},
+    {'url': 'https://rekt.news/feed/', 'category': 'kol'},
+    {'url': 'https://bitcoinmagazine.com/feed', 'category': 'kol'},
+    # Layer D — IPO / New listings feeds
+    {'url': 'https://news.google.com/rss/search?q=IPO+%22initial+public+offering%22+stock+when:1d&hl=en-US&gl=US&ceid=US:en', 'category': 'ipo'},
+    {'url': 'https://news.google.com/rss/search?q=Binance+OR+Coinbase+%22new+listing%22+crypto+when:1d&hl=en-US&gl=US&ceid=US:en', 'category': 'ipo'},
 ]
 
 _vader_analyzer = SentimentIntensityAnalyzer()
 
-RSS_FETCH_TIMEOUT = 10
+RSS_FETCH_TIMEOUT = 15
 
 
 # --- Internal Functions ---
@@ -106,6 +197,8 @@ def _fetch_single_rss_feed(feed_info):
                 'description': getattr(entry, 'summary', ''),
                 'published_at': getattr(entry, 'published', ''),
                 'source': getattr(parsed.feed, 'title', feed_info['url']),
+                'source_url': getattr(entry, 'link', ''),
+                'category': feed_info.get('category', 'unknown'),
             })
         return articles
     except Exception as e:
@@ -116,7 +209,7 @@ def _fetch_single_rss_feed(feed_info):
 def _fetch_rss_feeds():
     """Fetches all RSS feeds in parallel using a thread pool."""
     all_articles = []
-    with ThreadPoolExecutor(max_workers=7) as executor:
+    with ThreadPoolExecutor(max_workers=14) as executor:
         futures = {executor.submit(_fetch_single_rss_feed, feed): feed for feed in RSS_FEEDS}
         for future in as_completed(futures, timeout=RSS_FETCH_TIMEOUT + 5):
             try:
@@ -206,6 +299,14 @@ def collect_news_sentiment(symbols):
         log.info("No news articles found.")
         return {'per_symbol': {}, 'triggered_symbols': []}
 
+    # 2b. Deep scraping: enrich important articles with full body text
+    if news_config.get('deep_scraping', {}).get('enabled', False):
+        try:
+            from src.collectors.article_enricher import enrich_articles_batch
+            all_articles = enrich_articles_batch(all_articles)
+        except Exception as e:
+            log.warning(f"Deep scraping failed, continuing with original articles: {e}")
+
     # 3. VADER score each headline and match to symbols
     symbol_articles = {symbol: [] for symbol in symbols}
     archive_rows = []
@@ -248,6 +349,7 @@ def collect_news_sentiment(symbols):
                     'description': description,
                     'symbol': symbol,
                     'vader_score': score,
+                    'category': article.get('category', 'unknown'),
                 })
 
     # Archive articles to DB

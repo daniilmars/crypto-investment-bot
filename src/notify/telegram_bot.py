@@ -1,10 +1,13 @@
+from datetime import datetime, timezone
 from functools import wraps
-from telegram import Bot, Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from typing import Callable, Optional
+
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 from src.logger import log
 from src.config import app_config
 from src.database import (
-    get_whale_transactions_since, get_price_history_since,
+    get_price_history_since,
     get_database_schema, get_table_counts, get_trade_summary, get_last_signal
 )
 from src.analysis.gemini_summary import generate_market_summary
@@ -24,6 +27,17 @@ telegram_config = app_config.get('notification_services', {}).get('telegram', {}
 TOKEN = telegram_config.get('token')
 CHAT_ID = telegram_config.get('chat_id')
 AUTHORIZED_USER_IDS = telegram_config.get('authorized_user_ids', [])
+
+# --- Signal Confirmation State ---
+_pending_signals: dict[int, dict] = {}  # signal_id → {signal, message_id, chat_id, created_at}
+_signal_counter: int = 0
+_execute_callback: Optional[Callable] = None  # registered by main.py
+
+# Load confirmation config
+_confirmation_config = app_config.get('settings', {}).get('signal_confirmation', {})
+CONFIRMATION_ENABLED = _confirmation_config.get('enabled', False)
+CONFIRMATION_TIMEOUT_MINUTES = _confirmation_config.get('timeout_minutes', 30)
+CONFIRMATION_SIGNALS = _confirmation_config.get('require_confirmation_for', ['BUY', 'SELL'])
 
 # --- Decorators ---
 def authorized(func):
@@ -46,6 +60,215 @@ async def send_telegram_message(bot: Bot, chat_id: str, message: str):
         log.info("Successfully sent Telegram message.")
     except Exception as e:
         log.error(f"Error sending Telegram message: {e}")
+
+# --- Signal Confirmation Functions ---
+def register_execute_callback(callback: Callable):
+    """Registers the trade execution function (called from main.py at startup)."""
+    global _execute_callback
+    _execute_callback = callback
+    log.info("Signal confirmation execute callback registered.")
+
+
+def is_confirmation_required(signal_type: str) -> bool:
+    """Checks if this signal type requires user confirmation."""
+    return CONFIRMATION_ENABLED and signal_type in CONFIRMATION_SIGNALS
+
+
+async def send_signal_for_confirmation(signal: dict) -> int:
+    """Sends a signal to Telegram with inline Approve/Reject buttons.
+    Returns the signal_id assigned to this pending signal."""
+    global _signal_counter
+    if not telegram_config.get('enabled') or not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
+        log.error("Telegram bot is not configured. Cannot send confirmation.")
+        return -1
+
+    _signal_counter += 1
+    signal_id = _signal_counter
+
+    bot = Bot(token=TOKEN)
+    signal_type = signal.get('signal', 'N/A')
+    symbol = signal.get('symbol', 'N/A').upper()
+    price = signal.get('current_price', 0)
+    reason = signal.get('reason', 'No reason provided.')
+    asset_type = signal.get('asset_type', 'crypto')
+    quantity = signal.get('quantity', 0)
+
+    asset_label = "Stock" if asset_type == "stock" else "Crypto"
+    mode = _get_trading_mode()
+    mode_label = f" [{mode.upper()}]" if mode != 'paper' else ""
+
+    message = f"📊 *NEW SIGNAL: {signal_type} {symbol}*{mode_label}\n\n"
+    message += f"💰 *Price:* ${price:,.2f}\n"
+    message += f"📈 *Reason:* {reason}\n"
+
+    if quantity and signal_type == "BUY":
+        total_value = quantity * price
+        message += f"💵 *Quantity:* {quantity:.6f} {symbol} (${total_value:,.2f})\n"
+    elif quantity and signal_type == "SELL":
+        total_value = quantity * price
+        message += f"💵 *Quantity:* {quantity:.6f} {symbol} (${total_value:,.2f})\n"
+
+    message += f"⏱ *Expires in {CONFIRMATION_TIMEOUT_MINUTES} min*\n"
+    message += f"_{asset_label} signal_"
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Execute", callback_data=f"a:{signal_id}"),
+            InlineKeyboardButton("❌ Skip", callback_data=f"r:{signal_id}"),
+        ]
+    ])
+
+    try:
+        sent_msg = await bot.send_message(
+            chat_id=CHAT_ID, text=message, parse_mode='Markdown',
+            reply_markup=keyboard
+        )
+        _pending_signals[signal_id] = {
+            'signal': signal,
+            'message_id': sent_msg.message_id,
+            'chat_id': CHAT_ID,
+            'created_at': datetime.now(timezone.utc),
+        }
+        log.info(f"Signal #{signal_id} sent for confirmation: {signal_type} {symbol}")
+        return signal_id
+    except Exception as e:
+        log.error(f"Error sending signal confirmation: {e}")
+        return -1
+
+
+async def _handle_signal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles Approve/Reject button presses for pending signals."""
+    query = update.callback_query
+
+    # Authorization check
+    user_id = query.from_user.id
+    if user_id not in AUTHORIZED_USER_IDS:
+        await query.answer("You are not authorized.", show_alert=True)
+        return
+
+    data = query.data or ""
+    if ":" not in data:
+        await query.answer("Invalid action.")
+        return
+
+    action, id_str = data.split(":", 1)
+    try:
+        signal_id = int(id_str)
+    except ValueError:
+        await query.answer("Invalid signal ID.")
+        return
+
+    pending = _pending_signals.pop(signal_id, None)
+    if not pending:
+        await query.answer("Signal expired or already handled.", show_alert=True)
+        return
+
+    signal = pending['signal']
+    signal_type = signal.get('signal', 'N/A')
+    symbol = signal.get('symbol', 'N/A').upper()
+    price = signal.get('current_price', 0)
+    reason = signal.get('reason', 'No reason provided.')
+    quantity = signal.get('quantity', 0)
+
+    if action == "a":
+        # Approve — execute the trade
+        await query.answer("Executing trade...")
+        order_result = None
+        if _execute_callback:
+            try:
+                order_result = await _execute_callback(signal)
+            except Exception as e:
+                log.error(f"Error executing confirmed signal #{signal_id}: {e}")
+                error_msg = (
+                    f"⚠️ *EXECUTION FAILED: {signal_type} {symbol}*\n\n"
+                    f"💰 *Price:* ${price:,.2f}\n"
+                    f"📈 *Reason:* {reason}\n\n"
+                    f"*Error:* {str(e)[:200]}"
+                )
+                await query.edit_message_text(error_msg, parse_mode='Markdown')
+                return
+
+        # Build success message
+        message = f"✅ *EXECUTED: {signal_type} {symbol}*\n\n"
+        if order_result:
+            fill_price = order_result.get('price', price)
+            message += f"💰 *Fill price:* ${fill_price:,.2f}\n"
+        else:
+            message += f"💰 *Price:* ${price:,.2f}\n"
+        message += f"📈 *Reason:* {reason}\n"
+        if quantity:
+            message += f"💵 *Quantity:* {quantity:.6f} {symbol}\n"
+        if order_result:
+            oco = order_result.get('oco')
+            if oco:
+                message += f"🎯 *TP:* ${oco['take_profit']:,.2f} | *SL:* ${oco['stop_loss']:,.2f}\n"
+            pnl = order_result.get('pnl')
+            if pnl is not None:
+                message += f"*PnL:* ${pnl:,.2f}\n"
+        message += "\n_Approved by user_"
+
+        await query.edit_message_text(message, parse_mode='Markdown')
+        log.info(f"Signal #{signal_id} approved: {signal_type} {symbol}")
+
+    elif action == "r":
+        # Reject
+        await query.answer("Signal skipped.")
+        message = (
+            f"❌ *SKIPPED: {signal_type} {symbol}*\n\n"
+            f"💰 *Price:* ${price:,.2f}\n"
+            f"📈 *Reason:* {reason}\n\n"
+            f"_Rejected by user_"
+        )
+        await query.edit_message_text(message, parse_mode='Markdown')
+        log.info(f"Signal #{signal_id} rejected: {signal_type} {symbol}")
+    else:
+        await query.answer("Unknown action.")
+
+
+async def cleanup_expired_signals():
+    """Removes expired pending signals and edits their messages."""
+    if not _pending_signals:
+        return
+
+    now = datetime.now(timezone.utc)
+    expired_ids = []
+
+    for signal_id, pending in list(_pending_signals.items()):
+        age_minutes = (now - pending['created_at']).total_seconds() / 60
+        if age_minutes >= CONFIRMATION_TIMEOUT_MINUTES:
+            expired_ids.append(signal_id)
+
+    if not expired_ids:
+        return
+
+    bot = Bot(token=TOKEN)
+    for signal_id in expired_ids:
+        pending = _pending_signals.pop(signal_id, None)
+        if not pending:
+            continue
+
+        signal = pending['signal']
+        signal_type = signal.get('signal', 'N/A')
+        symbol = signal.get('symbol', 'N/A').upper()
+        price = signal.get('current_price', 0)
+        reason = signal.get('reason', 'No reason provided.')
+
+        message = (
+            f"⏰ *EXPIRED: {signal_type} {symbol}*\n\n"
+            f"💰 *Price:* ${price:,.2f}\n"
+            f"📈 *Reason:* {reason}\n\n"
+            f"_Auto-rejected after {CONFIRMATION_TIMEOUT_MINUTES} min_"
+        )
+        try:
+            await bot.edit_message_text(
+                chat_id=pending['chat_id'],
+                message_id=pending['message_id'],
+                text=message, parse_mode='Markdown'
+            )
+        except Exception as e:
+            log.warning(f"Could not edit expired signal #{signal_id} message: {e}")
+        log.info(f"Signal #{signal_id} expired: {signal_type} {symbol}")
+
 
 # --- Alerting Functions ---
 async def send_telegram_alert(signal: dict):
@@ -107,7 +330,15 @@ async def send_position_health_alert(symbol: str, current_price: float,
     reasoning = health.get('reasoning', 'No reasoning provided.')
     entry_price = position.get('entry_price', 0)
 
-    if recommendation == 'exit':
+    # Use risk_level from Gemini if available, fall back to old logic
+    risk_level = health.get('risk_level')
+    if risk_level == 'red':
+        emoji = "🔴"
+    elif risk_level == 'yellow':
+        emoji = "🟡"
+    elif risk_level == 'green':
+        emoji = "🟢"
+    elif recommendation == 'exit':
         emoji = "🔴"
     elif confidence >= 0.5:
         emoji = "🟡"
@@ -124,6 +355,12 @@ async def send_position_health_alert(symbol: str, current_price: float,
         f"*Confidence:* {confidence:.0%}\n"
         f"*Reasoning:* {reasoning}"
     )
+
+    # Show primary risk if available
+    primary_risk = health.get('primary_risk')
+    if primary_risk and primary_risk != 'none':
+        risk_label = primary_risk.replace('_', ' ').title()
+        message += f"\n*Risk:* {risk_label}"
 
     await send_telegram_message(bot, CHAT_ID, message)
 
@@ -151,8 +388,24 @@ async def send_news_alert(triggered_symbols, sentiment_data, gemini_assessments=
                 reasoning = ga.get('reasoning', '')
                 lines.append(f"  Gemini: {direction} (conf {confidence:.2f}) — {reasoning}")
 
+                # Show catalyst info if present
+                catalyst_type = ga.get('catalyst_type')
+                freshness = ga.get('catalyst_freshness')
+                if catalyst_type and catalyst_type != 'none':
+                    freshness_label = f", {freshness}" if freshness and freshness != 'none' else ""
+                    lines.append(f"  Catalyst: {catalyst_type}{freshness_label}")
+
+                # Show key headline if present
+                key_headline = ga.get('key_headline')
+                if key_headline:
+                    lines.append(f"  _{key_headline}_")
+
     if gemini_assessments and gemini_assessments.get('market_mood'):
         lines.append(f"\n*Market Mood:* {gemini_assessments['market_mood']}")
+
+    # Show cross-asset theme if present
+    if gemini_assessments and gemini_assessments.get('cross_asset_theme'):
+        lines.append(f"*Theme:* {gemini_assessments['cross_asset_theme']}")
 
     message = "\n".join(lines)
     await send_telegram_message(bot, CHAT_ID, message)
@@ -318,10 +571,32 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text('Fetching status and generating report...')
     try:
         report_hours = app_config.get('settings', {}).get('status_report_hours', 24)
-        whale_transactions = get_whale_transactions_since(hours_ago=report_hours)
         price_history = get_price_history_since(hours_ago=report_hours)
         last_signal = get_last_signal()
-        summary = generate_market_summary(whale_transactions, price_history, last_signal)
+
+        # Build open positions with current prices for the summary
+        positions_for_summary = []
+        try:
+            open_pos = get_open_positions()
+            for pos in open_pos:
+                symbol = pos.get('symbol')
+                entry_price = pos.get('entry_price', 0)
+                current_price = _get_position_price(symbol) or entry_price
+                pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+                positions_for_summary.append({
+                    'symbol': symbol,
+                    'entry_price': entry_price,
+                    'current_price': current_price,
+                    'pnl_percentage': pnl_pct,
+                    'quantity': pos.get('quantity', 0),
+                })
+        except Exception as e:
+            log.warning(f"Could not fetch positions for status summary: {e}")
+
+        summary = generate_market_summary(
+            price_history, last_signal,
+            open_positions=positions_for_summary or None,
+        )
         await update.message.reply_text(summary)
     except Exception as e:
         log.error(f"Error generating /status report: {e}")
@@ -333,7 +608,6 @@ async def db_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         counts = get_table_counts()
         message = (
             f"📊 *Database Statistics* 📊\n\n"
-            f"Whale Transactions: `{counts.get('whale_transactions', 0)}`\n"
             f"Market Prices: `{counts.get('market_prices', 0)}`\n"
             f"Signals: `{counts.get('signals', 0)}`\n"
             f"Trades: `{counts.get('trades', 0)}`"
@@ -545,6 +819,7 @@ async def start_bot() -> Application:
             CommandHandler("stock_balance", stock_balance_cmd),
             CommandHandler("pdt", pdt_cmd),
             CommandHandler("market_hours", market_hours_cmd),
+            CallbackQueryHandler(_handle_signal_callback),
         ]
         application.add_handlers(handlers)
         await application.initialize()

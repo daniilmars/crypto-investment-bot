@@ -1,7 +1,7 @@
 # Backtest Results
 
 **Date:** 2026-02-13
-**Dataset:** 224,640 price records, 183,102 whale transactions (Jan 12 – Feb 5, 23 days)
+**Dataset:** 224,640 price records (Jan 12 – Feb 5, 23 days)
 **Initial capital:** $10,000 | **Risk per trade:** 3% | **Max positions:** 5
 
 ---

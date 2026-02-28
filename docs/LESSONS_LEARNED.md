@@ -1,6 +1,6 @@
 # Lessons Learned: ML Model Iteration
 
-This document summarizes the key insights gained from the iterative development and tuning of the whale transaction predictive model.
+This document summarizes the key insights gained from the iterative development and tuning of the predictive model.
 
 ## 1. Initial Model: The "Flat" Bias
 
@@ -30,4 +30,4 @@ This iterative process has been highly successful. We have:
 2.  Gained critical insights into the nature of our dataset.
 3.  Received a clear, data-driven mandate to proceed with more advanced feature engineering.
 
-To improve the model's performance, we must move beyond simple, aggregate metrics and create a richer, more sophisticated set of features that can capture the complex dynamics of the on-chain environment. This includes graph-based features, individual whale tracking, and "smart money" analysis.
+To improve the model's performance, we must move beyond simple, aggregate metrics and create a richer, more sophisticated set of features that can capture the complex dynamics of the market environment.

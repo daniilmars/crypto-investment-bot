@@ -19,7 +19,7 @@ def analyze_data_quality():
     3.  Calculates cross-correlations between features.
     4.  Generates a consolidated report and visualizations.
     """
-    log.info("--- 🔬 Starting Data Quality Analysis ---")
+    log.info("--- Starting Data Quality Analysis ---")
     conn = get_db_connection()
     watch_list = app_config.get('settings', {}).get('watch_list', ['BTC'])
     report_path = "output/data_quality_report.txt"
@@ -34,7 +34,6 @@ def analyze_data_quality():
             # --- 1. Data Loading ---
             try:
                 prices_df = pd.read_sql("SELECT * FROM market_prices WHERE symbol LIKE %(sym)s", conn, params={"sym": f"{symbol}%"}, parse_dates=['timestamp'])
-                whales_df = pd.read_sql("SELECT * FROM whale_transactions WHERE symbol = %(sym)s", conn, params={"sym": symbol.lower()}, parse_dates=['timestamp'])
                 sentiment_df = pd.read_sql("SELECT * FROM news_sentiment WHERE symbol = %(sym)s", conn, params={"sym": symbol.lower()}, parse_dates=['timestamp'])
             except Exception as e:
                 log.error(f"Failed to load data for {symbol}: {e}")
@@ -48,7 +47,7 @@ def analyze_data_quality():
 
             # --- 2. Data Completeness & Sparsity ---
             report_file.write("\\n1. Data Completeness & Sparsity:\\n")
-            
+
             # Create a complete hourly index for the last 30 days
             end_date = prices_df['timestamp'].max()
             start_date = end_date - pd.Timedelta(days=30)
@@ -61,12 +60,6 @@ def analyze_data_quality():
             else:
                 prices_df.index = prices_df.index.tz_convert('UTC')
 
-            whales_df.set_index('timestamp', inplace=True)
-            if whales_df.index.tz is None:
-                whales_df.index = whales_df.index.tz_localize('UTC')
-            else:
-                whales_df.index = whales_df.index.tz_convert('UTC')
-
             sentiment_df.set_index('timestamp', inplace=True)
             if sentiment_df.index.tz is None:
                 sentiment_df.index = sentiment_df.index.tz_localize('UTC')
@@ -75,37 +68,25 @@ def analyze_data_quality():
 
             # Resample each data source to this common index
             prices_resampled = prices_df.resample('h').last()
-            
-            # Select only numeric columns for aggregation
-            numeric_whales_df = whales_df.select_dtypes(include=np.number)
-            whales_resampled = numeric_whales_df.resample('h').sum()
-            
+
             # Drop the non-numeric 'symbol' column before resampling
             sentiment_numeric = sentiment_df.drop(columns=['symbol'])
             sentiment_resampled = sentiment_numeric.resample('h').mean()
 
             # Calculate completeness
             price_completeness = (prices_resampled['price'].notna().sum() / len(complete_hourly_index)) * 100
-            whale_completeness = (whales_resampled['amount_usd'].notna().sum() / len(complete_hourly_index)) * 100
             sentiment_completeness = (sentiment_resampled['avg_sentiment_score'].notna().sum() / len(complete_hourly_index)) * 100
 
             report_file.write(f"  - Price Data Completeness (hourly): {price_completeness:.2f}%\\n")
-            report_file.write(f"  - Whale Transaction Data Completeness (hourly): {whale_completeness:.2f}%\\n")
             report_file.write(f"  - News Sentiment Data Completeness (hourly): {sentiment_completeness:.2f}%\\n")
 
             # --- 3. Statistical Distribution ---
             report_file.write("\\n2. Statistical Distribution of Key Features:\\n")
-            
+
             # Price distribution
             report_file.write("\\n  - Market Prices:\\n")
             report_file.write(prices_df['price'].describe().to_string())
             report_file.write("\\n")
-
-            # Whale transaction distribution
-            if not whales_df.empty:
-                report_file.write("\\n  - Whale Transaction Sizes (USD):\\n")
-                report_file.write(whales_df['amount_usd'].describe().to_string())
-                report_file.write("\\n")
 
             # Sentiment score distribution
             if not sentiment_df.empty:
@@ -115,13 +96,13 @@ def analyze_data_quality():
 
             # --- 4. Correlation Analysis ---
             log.info(f"Generating correlation heatmap for {symbol}...")
-            
+
             # Create a merged dataframe for correlation
-            merged_df = prices_resampled[['price']].join(whales_resampled[['amount_usd']], how='inner')
+            merged_df = prices_resampled[['price']]
             if not sentiment_resampled.empty:
                  merged_df = merged_df.join(sentiment_resampled[['avg_sentiment_score']], how='inner')
 
-            if len(merged_df) > 1:
+            if len(merged_df) > 1 and len(merged_df.columns) > 1:
                 correlation_matrix = merged_df.corr()
                 plt.figure(figsize=(10, 8))
                 sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', fmt=".2f")
@@ -136,7 +117,7 @@ def analyze_data_quality():
 
             report_file.write("\\n" + "="*40 + "\\n\\n")
 
-    log.info(f"--- ✅ Data Quality Analysis Complete. Report saved to {report_path} ---")
+    log.info(f"--- Data Quality Analysis Complete. Report saved to {report_path} ---")
 
 if __name__ == "__main__":
     analyze_data_quality()

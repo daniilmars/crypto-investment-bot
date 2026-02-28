@@ -48,6 +48,37 @@ def save_price_data(price_data: dict):
             cursor.close()
         release_db_connection(conn)
 
+def get_all_prices():
+    """Fetches ALL ticker prices from Binance in a single API call.
+
+    Returns:
+        dict {symbol: float_price} e.g. {'BTCUSDT': 65000.0, ...}
+        or empty dict on failure.
+    """
+    endpoint = f"{BINANCE_API_URL}/ticker/price"
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = requests.get(endpoint, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            prices = {item['symbol']: float(item['price']) for item in data}
+            log.info(f"Fetched {len(prices)} ticker prices from Binance in a single call.")
+            return prices
+        except requests.exceptions.RequestException as e:
+            log.error(f"Error fetching all Binance prices (attempt {attempt}/{MAX_RETRIES}): {e}")
+        except (json.JSONDecodeError, ValueError, KeyError) as e:
+            log.error(f"Error parsing Binance all-prices response (attempt {attempt}/{MAX_RETRIES}): {e}")
+
+        if attempt < MAX_RETRIES:
+            backoff = RETRY_BACKOFF_BASE ** attempt
+            log.info(f"Retrying in {backoff}s...")
+            time.sleep(backoff)
+
+    log.error(f"Failed to fetch all Binance prices after {MAX_RETRIES} attempts.")
+    return {}
+
+
 def get_current_price(symbol: str):
     """
     Fetches the latest price for a specific symbol from the Binance API and saves it.

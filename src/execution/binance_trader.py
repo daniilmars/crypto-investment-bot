@@ -530,7 +530,12 @@ def get_account_balance(asset_type=None):
 
 def _get_paper_balance(asset_type=None):
     """Calculates the current paper trading balance based on initial capital and closed trade PnL."""
-    initial_capital = Decimal(str(app_config.get('settings', {}).get('paper_trading_initial_capital', 10000.0)))
+    if asset_type == 'stock':
+        stock_cfg = app_config.get('settings', {}).get('stock_trading', {})
+        initial_capital = Decimal(str(stock_cfg.get('paper_trading_initial_capital',
+                                  app_config.get('settings', {}).get('paper_trading_initial_capital', 10000.0))))
+    else:
+        initial_capital = Decimal(str(app_config.get('settings', {}).get('paper_trading_initial_capital', 10000.0)))
     conn = None
     try:
         conn = get_db_connection()

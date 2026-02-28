@@ -9,7 +9,7 @@ This document outlines the conceptual shift and strategic roadmap required to ev
 The application currently functions as a sophisticated **signal generator**.
 
 *   **Strengths:**
-    *   **Robust Data Pipeline:** Successfully collects data from multiple, high-quality sources (Binance, Whale Alert).
+    *   **Robust Data Pipeline:** Successfully collects data from multiple, high-quality sources (Binance, news feeds).
     *   **Solid Foundation:** Modular code, containerized with Docker, and a CI/CD pipeline, representing a professional setup.
     *   **Intelligent Signal Logic:** The signal engine combines trend, momentum, and on-chain analysis, providing a strong, multi-factor approach.
     *   **Good Observability:** Includes logging and an interactive Telegram interface for status checks.
@@ -37,8 +37,7 @@ This phase focuses on refining the existing signal engine and improving the bot'
     *   **Actions:**
         *   Make **RSI overbought/oversold thresholds configurable** (`rsi_oversold_threshold`, `rsi_overbought_threshold` in `settings.yaml`).
         *   Make the **Simple Moving Average (SMA) period configurable** (`sma_period` in `settings.yaml`).
-        *   Refactor **whale flow analysis to be symbol-specific**, ensuring signals are based on relevant on-chain activity for the asset being traded.
-        *   Simplify and **clean up the transaction velocity anomaly check** to remove redundant logic.
+        *   Simplify and **clean up the signal logic** to remove redundant checks.
 
 2.  **Enhance Telegram `/status` Report Functionality:**
     *   **Goal:** Provide more informative and configurable status reports to the user.

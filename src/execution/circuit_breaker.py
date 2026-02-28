@@ -199,6 +199,35 @@ def get_circuit_breaker_status():
     }
 
 
+def get_unrealized_pnl(current_prices: dict) -> float:
+    """Calculates total unrealized P&L across all open positions.
+
+    Args:
+        current_prices: {symbol: float} — current market prices.
+
+    Returns:
+        Total unrealized P&L in USD. Returns 0.0 on any error (fail-safe).
+    """
+    try:
+        from src.execution.binance_trader import get_open_positions
+        positions = get_open_positions()
+        total = 0.0
+        for pos in positions:
+            if pos.get('status') != 'OPEN':
+                continue
+            symbol = pos.get('symbol')
+            entry_price = pos.get('entry_price', 0)
+            quantity = pos.get('quantity', 0)
+            current_price = current_prices.get(symbol)
+            if current_price is None or entry_price <= 0:
+                continue
+            total += (current_price - entry_price) * quantity
+        return total
+    except Exception as e:
+        log.warning(f"Could not compute unrealized PnL: {e}")
+        return 0.0
+
+
 def get_daily_pnl(asset_type=None):
     """Returns the sum of PnL from trades closed today (UTC), optionally filtered by asset_type."""
     conn = None

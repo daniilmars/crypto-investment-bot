@@ -27,7 +27,7 @@ class TestCryptoNewsIndicator:
             'sentiment_sell_threshold': -0.15,
         }
         signal = generate_signal(
-            symbol='BTCUSDT', whale_transactions=[], market_data=market_data,
+            symbol='BTCUSDT', market_data=market_data,
             news_sentiment_data=news_data, signal_threshold=2
         )
         assert signal['signal'] == 'BUY'
@@ -42,7 +42,7 @@ class TestCryptoNewsIndicator:
             'sentiment_sell_threshold': -0.15,
         }
         signal = generate_signal(
-            symbol='BTCUSDT', whale_transactions=[], market_data=market_data,
+            symbol='BTCUSDT', market_data=market_data,
             news_sentiment_data=news_data, signal_threshold=2
         )
         assert signal['signal'] == 'SELL'
@@ -52,7 +52,7 @@ class TestCryptoNewsIndicator:
         """When news_sentiment_data is None, signal engine works as before."""
         market_data = {'current_price': 105, 'sma': 100, 'rsi': 50}
         signal = generate_signal(
-            symbol='BTCUSDT', whale_transactions=[], market_data=market_data,
+            symbol='BTCUSDT', market_data=market_data,
             news_sentiment_data=None
         )
         assert signal['signal'] == 'HOLD'
@@ -66,7 +66,7 @@ class TestCryptoNewsIndicator:
             'sentiment_sell_threshold': -0.15,
         }
         signal = generate_signal(
-            symbol='BTCUSDT', whale_transactions=[], market_data=market_data,
+            symbol='BTCUSDT', market_data=market_data,
             news_sentiment_data=news_data
         )
         assert signal['signal'] == 'HOLD'
@@ -188,7 +188,7 @@ class TestGeminiGroundedSearch:
             'gemini_assessment': {'direction': 'bullish', 'confidence': 0.8, 'reasoning': 'Test'},
         }
         signal = generate_signal(
-            symbol='BTCUSDT', whale_transactions=[], market_data=market_data,
+            symbol='BTCUSDT', market_data=market_data,
             news_sentiment_data=news_data, signal_threshold=2
         )
         assert signal['signal'] == 'BUY'
@@ -205,7 +205,7 @@ class TestGeminiGroundedSearch:
             'gemini_assessment': {'direction': 'bearish', 'confidence': 0.8, 'reasoning': 'Test'},
         }
         signal = generate_signal(
-            symbol='BTCUSDT', whale_transactions=[], market_data=market_data,
+            symbol='BTCUSDT', market_data=market_data,
             news_sentiment_data=news_data, signal_threshold=2
         )
         assert signal['signal'] == 'SELL'
@@ -222,7 +222,7 @@ class TestGeminiGroundedSearch:
             'gemini_assessment': {'direction': 'bullish', 'confidence': 0.3, 'reasoning': 'Low conf'},
         }
         signal = generate_signal(
-            symbol='BTCUSDT', whale_transactions=[], market_data=market_data,
+            symbol='BTCUSDT', market_data=market_data,
             news_sentiment_data=news_data, signal_threshold=2
         )
         assert signal['signal'] == 'BUY'
@@ -307,7 +307,7 @@ class TestSentimentModeIntegration:
             'avg_sentiment_score': 0.2,
         }
         signal = generate_signal(
-            symbol='BTCUSDT', whale_transactions=[], market_data=market_data,
+            symbol='BTCUSDT', market_data=market_data,
             news_sentiment_data=news_data,
             signal_mode='sentiment',
             sentiment_config={'min_gemini_confidence': 0.7, 'min_vader_score': 0.3,

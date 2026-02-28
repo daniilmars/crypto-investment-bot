@@ -1,11 +1,40 @@
 import json
 import os
+import re
 import time
 
 import vertexai
 from vertexai.generative_models import GenerativeModel
 
 from src.logger import log
+
+# --- JSON parsing helpers ---
+
+_FENCE_RE = re.compile(r'^```(?:json)?\s*\n?(.*?)```\s*$', re.DOTALL)
+
+
+def _parse_gemini_json(text: str) -> dict:
+    """Strip markdown code-fence variants and parse JSON.
+
+    Handles:
+      - Plain JSON (no fences)
+      - ```json ... ```
+      - ``` ... ```
+    Raises json.JSONDecodeError on failure.
+    """
+    text = text.strip()
+    m = _FENCE_RE.match(text)
+    if m:
+        text = m.group(1).strip()
+    return json.loads(text)
+
+
+def _validate_gemini_response(result: dict, required_keys: list, context: str) -> dict:
+    """Warn about missing keys but return result unchanged."""
+    missing = [k for k in required_keys if k not in result]
+    if missing:
+        log.warning(f"Gemini response ({context}) missing keys: {missing}")
+    return result
 
 # --- Gemini Response Cache ---
 # Key: frozenset of sorted symbols, Value: (timestamp, result)
@@ -99,14 +128,9 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
         )
 
         text = response.text.strip()
-
-        # Strip markdown code fences if present
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-            if text.endswith("```"):
-                text = text[:-3].strip()
-
-        result = json.loads(text)
+        result = _parse_gemini_json(text)
+        _validate_gemini_response(result, ['symbol_assessments', 'market_mood'],
+                                  'analyze_news_with_search')
         log.info(f"Gemini grounded news analysis complete: mood={result.get('market_mood')}, "
                  f"symbols={list(result.get('symbol_assessments', {}).keys())}")
         # --- Cache store ---
@@ -125,7 +149,8 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
 
 
 def analyze_news_impact(headlines_by_symbol: dict, current_prices: dict,
-                        archived_articles_by_symbol: dict = None) -> dict | None:
+                        archived_articles_by_symbol: dict = None,
+                        news_stats_by_symbol: dict = None) -> dict | None:
     """
     Uses Vertex AI Gemini to analyze news headlines and assess market impact per symbol.
 
@@ -134,6 +159,9 @@ def analyze_news_impact(headlines_by_symbol: dict, current_prices: dict,
         current_prices: {symbol: float}
         archived_articles_by_symbol: {symbol: [{'title': ..., 'source': ..., 'vader_score': ...}, ...]}
             Optional recent archived articles to enrich the prompt.
+        news_stats_by_symbol: {symbol: {'sentiment_volatility': float, 'positive_ratio': float,
+            'negative_ratio': float, 'news_volume': int}}
+            Optional pre-computed news statistics per symbol.
 
     Returns:
         dict with 'symbol_assessments' and 'market_mood', or None on failure.
@@ -165,41 +193,87 @@ def analyze_news_impact(headlines_by_symbol: dict, current_prices: dict,
             if archived_articles_by_symbol:
                 archived = archived_articles_by_symbol.get(symbol, [])
                 if archived:
-                    archive_lines = [f"- [{a.get('source', '?')}] {a.get('title', '')}" for a in archived[:5]]
+                    archive_lines = []
+                    for a in archived[:5]:
+                        source = a.get('source', '?')
+                        category = a.get('category', '')
+                        cat_tag = f" ({category})" if category else ""
+                        line = f"- [{source}{cat_tag}] {a.get('title', '')}"
+                        desc = a.get('description', '')
+                        if desc and len(desc) > 50:
+                            line += f"\n  Body excerpt: {desc[:500]}"
+                        archive_lines.append(line)
                     section += "\n\nRecent archived headlines:\n" + "\n".join(archive_lines)
+
+            # Add pre-computed news stats if available
+            if news_stats_by_symbol:
+                stats = news_stats_by_symbol.get(symbol)
+                if stats:
+                    section += (
+                        f"\n\nNews stats (pre-computed):"
+                        f"\n- Volume: {stats.get('news_volume', 0)} articles"
+                        f"\n- Positive/Negative ratio: {stats.get('positive_ratio', 0):.0%} / {stats.get('negative_ratio', 0):.0%}"
+                        f"\n- Sentiment volatility: {stats.get('sentiment_volatility', 0):.3f}"
+                    )
 
             symbol_sections.append(section)
 
         headlines_text = "\n\n".join(symbol_sections)
 
         prompt = (
-            "You are a financial news analyst. Analyze these recent headlines and assess "
-            "the likely short-term market impact for each asset.\n\n"
-            f"{headlines_text}\n\n"
+            "You are a crypto/financial news analyst for a trading bot that runs 15-minute cycles "
+            "with 3.5% stop-loss and 8% take-profit. Your job is to assess short-term (<24h) "
+            "market impact from news.\n\n"
+            "Analyze these recent headlines using the following 4-step framework:\n\n"
+            "STEP 1 — CATALYST SCAN: Identify concrete events vs noise.\n"
+            "- Catalysts: regulatory action, ETF approval/rejection, exchange hack/exploit, "
+            "major partnership, macro policy (Fed, CPI), protocol upgrade, large fund flow.\n"
+            "- Noise: opinion pieces, price predictions, recycled narratives, vague 'experts say' articles.\n"
+            "- Only catalysts should drive confidence above 0.6.\n\n"
+            "STEP 2 — SOURCE WEIGHT: Not all sources are equal.\n"
+            "- Tier 1 (high weight): regulatory filings, wire services (Reuters, AP), exchange announcements.\n"
+            "- Tier 2 (medium): CoinDesk, CoinTelegraph, Bloomberg, established financial media.\n"
+            "- Tier 3 (low): blogs, KOLs, unknown sources, articles without body text.\n"
+            "- Articles with body excerpts are more reliable than headline-only.\n\n"
+            "STEP 3 — CONSENSUS vs DIVERGENCE: Do headlines agree?\n"
+            "- If most headlines point the same direction → higher confidence.\n"
+            "- If headlines conflict (some bullish, some bearish) → flag divergence, lower confidence.\n"
+            "- Note the sentiment_divergence in your response.\n\n"
+            "STEP 4 — TIME HORIZON: Only short-term catalysts matter.\n"
+            "- Events happening now or within 24h → can drive high confidence.\n"
+            "- Speculative future events (months away) → low confidence regardless of importance.\n"
+            "- Stale news (>48h old, already priced in) → neutral/low confidence.\n\n"
+            f"--- Headlines by Symbol ---\n{headlines_text}\n\n"
             "For each symbol, provide:\n"
             "- direction: one of 'bullish', 'bearish', or 'neutral'\n"
             "- confidence: a float between 0.0 and 1.0\n"
-            "- reasoning: a brief one-sentence explanation\n\n"
-            "Also provide an overall 'market_mood' string (e.g. 'cautiously optimistic').\n\n"
+            "- reasoning: a brief one-sentence explanation\n"
+            "- catalyst_type: one of 'regulatory', 'etf', 'hack_exploit', 'macro', 'partnership', "
+            "'protocol_upgrade', 'fund_flow', 'earnings', 'none' (use 'none' if no real catalyst)\n"
+            "- catalyst_freshness: one of 'breaking', 'recent', 'stale', 'none'\n"
+            "- sentiment_divergence: true if headlines conflict, false if consensus\n"
+            "- key_headline: the single most impactful headline driving your assessment\n\n"
+            "Also provide:\n"
+            "- 'market_mood': a brief overall sentiment phrase\n"
+            "- 'cross_asset_theme': a one-sentence theme if multiple assets share a common driver "
+            "(e.g. 'broad risk-off on Fed hawkishness'), or null if none\n\n"
             "Respond ONLY with valid JSON in this exact format:\n"
             "{\n"
             '  "symbol_assessments": {\n'
-            '    "SYMBOL": {"direction": "bullish|bearish|neutral", "confidence": 0.0, "reasoning": "..."}\n'
+            '    "SYMBOL": {"direction": "bullish|bearish|neutral", "confidence": 0.0, '
+            '"reasoning": "...", "catalyst_type": "...", "catalyst_freshness": "...", '
+            '"sentiment_divergence": false, "key_headline": "..."}\n'
             "  },\n"
-            '  "market_mood": "..."\n'
+            '  "market_mood": "...",\n'
+            '  "cross_asset_theme": "..." or null\n'
             "}"
         )
 
         response = model.generate_content(prompt)
         text = response.text.strip()
-
-        # Strip markdown code fences if present
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-            if text.endswith("```"):
-                text = text[:-3].strip()
-
-        result = json.loads(text)
+        result = _parse_gemini_json(text)
+        _validate_gemini_response(result, ['symbol_assessments', 'market_mood'],
+                                  'analyze_news_impact')
         log.info(f"Gemini news analysis complete: mood={result.get('market_mood')}, "
                  f"symbols={list(result.get('symbol_assessments', {}).keys())}")
         return result
@@ -213,7 +287,9 @@ def analyze_news_impact(headlines_by_symbol: dict, current_prices: dict,
 
 
 def analyze_position_health(position: dict, current_price: float,
-                            recent_headlines: list, technical_data: dict) -> dict | None:
+                            recent_headlines: list, technical_data: dict,
+                            hours_held: float = None,
+                            trailing_stop_info: dict = None) -> dict | None:
     """
     Asks Gemini whether an open position should be held or exited.
 
@@ -222,9 +298,13 @@ def analyze_position_health(position: dict, current_price: float,
         current_price: current market price
         recent_headlines: list of headline strings (last 10)
         technical_data: dict with keys: rsi, sma, regime
+        hours_held: how long the position has been open (in hours), optional
+        trailing_stop_info: dict with trailing stop state, optional
+            keys: peak_price, trailing_active, pnl_percentage, activation_threshold
 
     Returns:
-        dict with keys: recommendation ("hold"|"exit"), confidence (0.0-1.0), reasoning
+        dict with keys: recommendation ("hold"|"exit"), confidence (0.0-1.0), reasoning,
+        risk_level ("green"|"yellow"|"red"), primary_risk
         or None on failure.
     """
     project_id = os.environ.get('GCP_PROJECT_ID')
@@ -244,39 +324,74 @@ def analyze_position_health(position: dict, current_price: float,
 
         headlines_text = "\n".join(f"- {h}" for h in recent_headlines[:10]) if recent_headlines else "No recent headlines."
 
+        # Build trailing stop context
+        trailing_context = ""
+        if trailing_stop_info:
+            peak = trailing_stop_info.get('peak_price')
+            active = trailing_stop_info.get('trailing_active', False)
+            activation = trailing_stop_info.get('activation_threshold', 0.02)
+            if peak:
+                trailing_context = (
+                    f"\n**Trailing Stop State:**\n"
+                    f"- Peak price seen: ${peak:,.2f}\n"
+                    f"- Trailing stop active: {'YES' if active else 'No (not yet at +' + f'{activation*100:.1f}%)'}\n"
+                )
+
+        hours_context = ""
+        if hours_held is not None:
+            hours_context = f"- Time held: {hours_held:.1f} hours\n"
+
         prompt = (
-            f"You are a position risk analyst. Evaluate whether this open position should be HELD or EXITED.\n\n"
+            f"You are a position risk analyst for a trading bot. Evaluate this open position "
+            f"using the TRAFFIC LIGHT framework.\n\n"
+            f"**Bot Risk Parameters (hardcoded):**\n"
+            f"- Stop-loss: -3.5% (auto-closes position)\n"
+            f"- Take-profit: +8% (auto-closes position)\n"
+            f"- Trailing stop: activates at +2%, trails 1.5% from peak\n"
+            f"- The bot checks positions every 15 minutes.\n\n"
             f"**Position Details:**\n"
             f"- Symbol: {symbol}\n"
             f"- Entry price: ${entry_price:,.2f}\n"
             f"- Current price: ${current_price:,.2f}\n"
-            f"- Unrealized PnL: {pnl_pct:+.2f}%\n\n"
+            f"- Unrealized PnL: {pnl_pct:+.2f}%\n"
+            f"{hours_context}"
+            f"{trailing_context}\n"
             f"**Technical Indicators:**\n"
             f"- RSI: {technical_data.get('rsi', 'N/A')}\n"
             f"- SMA: {technical_data.get('sma', 'N/A')}\n"
             f"- Market regime: {technical_data.get('regime', 'unknown')}\n\n"
             f"**Recent Headlines:**\n{headlines_text}\n\n"
-            "Based on the position performance, technical indicators, and news sentiment, "
-            "should this position be held or exited?\n\n"
+            "**TRAFFIC LIGHT FRAMEWORK:**\n"
+            "- GREEN: position healthy — trend supports hold, no adverse catalysts, momentum intact.\n"
+            "- YELLOW: one risk factor present — fading momentum, mixed headlines, RSI extreme, "
+            "or approaching SL but no clear exit catalyst.\n"
+            "- RED: multiple risk factors converge, OR a severe catalyst (exploit, regulatory ban, "
+            "exchange insolvency). Recommends exit.\n\n"
+            "**DECISION RULES (follow these):**\n"
+            "- If PnL is near take-profit (>+6%) → lean GREEN/HOLD, let the TP mechanism close it.\n"
+            "- If no concrete adverse catalyst → lean HOLD. Don't exit on vibes alone.\n"
+            "- A high-confidence EXIT requires a concrete catalyst (specific bad news, not just 'uncertain market').\n"
+            "- RSI overbought alone is YELLOW, not RED (the trailing stop handles orderly pullbacks).\n"
+            "- If trailing stop is already active, it will protect gains — bias toward HOLD.\n\n"
             "Respond ONLY with valid JSON:\n"
-            '{"recommendation": "hold|exit", "confidence": 0.0, "reasoning": "..."}\n\n'
+            '{"recommendation": "hold|exit", "confidence": 0.0, "reasoning": "...", '
+            '"risk_level": "green|yellow|red", '
+            '"primary_risk": "none|momentum_fading|adverse_news|rsi_extreme|approaching_sl|multiple_factors"}\n\n'
             "Rules:\n"
             "- recommendation must be 'hold' or 'exit'\n"
             "- confidence must be a float between 0.0 and 1.0\n"
             "- reasoning should be one concise sentence\n"
+            "- risk_level must be 'green', 'yellow', or 'red'\n"
+            "- primary_risk describes the main concern (use 'none' if green)\n"
             "- Do not include any text outside the JSON object"
         )
 
         response = model.generate_content(prompt)
         text = response.text.strip()
-
-        # Strip markdown code fences if present
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-            if text.endswith("```"):
-                text = text[:-3].strip()
-
-        result = json.loads(text)
+        result = _parse_gemini_json(text)
+        _validate_gemini_response(result,
+                                  ['recommendation', 'confidence', 'risk_level', 'primary_risk'],
+                                  'analyze_position_health')
         log.info(f"Position health for {symbol}: {result.get('recommendation')} "
                  f"(confidence={result.get('confidence')})")
         return result

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Continuous news scraper daemon — process supervision via KeepAlive -->
+    <!-- Install: cp scripts/com.cryptobot.news-scraper-daemon.plist ~/Library/LaunchAgents/ -->
+    <!-- Load:    launchctl load ~/Library/LaunchAgents/com.cryptobot.news-scraper-daemon.plist -->
+    <!-- Unload:  launchctl unload ~/Library/LaunchAgents/com.cryptobot.news-scraper-daemon.plist -->
+
+    <key>Label</key>
+    <string>com.cryptobot.news-scraper-daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/daniil/Projects/crypto-investment-bot/.venv/bin/python</string>
+        <string>/Users/daniil/Projects/crypto-investment-bot/scripts/news_scraper_daemon.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/daniil/Projects/crypto-investment-bot</string>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/daniil/Projects/crypto-investment-bot/data/news-scraper-daemon.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/daniil/Projects/crypto-investment-bot/data/news-scraper-daemon.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/daniil/.local/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>

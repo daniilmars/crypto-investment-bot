@@ -79,68 +79,37 @@ jobs:
             enabled: true
 
           settings:
-            watch_list:
-              # Tier 1 — Large caps with strong whale data
-              - "BTC"
-              - "ETH"
-              - "XRP"
-              - "TRX"
-              # Tier 2 — Major alts
-              - "SOL"
-              - "BNB"
-              - "ADA"
-              - "AVAX"
-              - "DOGE"
-              - "MATIC"
-              - "LINK"
-              - "XLM"
-              - "SHIB"
-              # Tier 3 — Top-25 by market cap (price + news, no whale data)
-              - "DOT"
-              - "UNI"
-              - "ATOM"
-              - "LTC"
-              - "NEAR"
-              - "APT"
-              - "SUI"
-              - "FIL"
-              - "ARB"
-              - "OP"
-              - "PEPE"
-              - "ICP"
-              - "HBAR"
-              - "RENDER"
+            # Crypto and stock watch lists are loaded from config/watch_list.yaml.
+            run_interval_minutes: 15
 
-            min_whale_transaction_usd: 5000000
             sma_period: 20
-            rsi_period: 14
             rsi_overbought_threshold: 70
             rsi_oversold_threshold: 30
 
-            high_interest_wallets:
-              - "Grayscale"
-              - "US Government"
+            signal_mode: "sentiment"
 
-            stablecoins_to_monitor:
-              - "usdt"
-              - "usdc"
-              - "busd"
-              - "dai"
-              - "tusd"
-              - "fdusd"
-              - "pyusd"
+            sentiment_signal:
+              min_gemini_confidence: 0.7
+              min_vader_score: 0.3
+              rsi_buy_veto_threshold: 75
+              rsi_sell_veto_threshold: 25
+              adx_min_threshold: 20
 
-            stablecoin_inflow_threshold_usd: 100000000
-            transaction_velocity_baseline_hours: 24
-            transaction_velocity_threshold_multiplier: 5.0
+            stoploss_cooldown_hours: 6
+
             status_report_hours: 24
 
             paper_trading: false
             paper_trading_initial_capital: 10000.0
+
             trade_risk_percentage: 0.03
-            stop_loss_percentage: 0.03
+            stop_loss_percentage: 0.035
             take_profit_percentage: 0.08
             max_concurrent_positions: 5
+
+            trailing_stop_enabled: true
+            trailing_stop_activation: 0.02
+            trailing_stop_distance: 0.015
 
             regular_status_update:
               enabled: true
@@ -148,6 +117,12 @@ jobs:
 
             news_analysis:
               enabled: true
+              use_grounded_search: false
+              web_scraping:
+                enabled: true
+              deep_scraping:
+                enabled: true
+              cache_ttl_minutes: 30
               volume_spike_multiplier: 3.0
               sentiment_shift_threshold: 0.3
               sentiment_buy_threshold: 0.15
@@ -160,7 +135,7 @@ jobs:
               initial_capital: 100.0
               max_concurrent_positions: 3
               trade_risk_percentage: 0.03
-              stop_loss_percentage: 0.03
+              stop_loss_percentage: 0.035
               take_profit_percentage: 0.08
               daily_loss_limit_pct: 0.10
               max_drawdown_pct: 0.25
@@ -173,14 +148,40 @@ jobs:
               broker: "paper_only"
               alpaca:
                 paper: true
-              watch_list:
-                - "AAPL"
-                - "MSFT"
-                - "GOOGL"
-                - "AMZN"
-                - "NVDA"
-                - "META"
-                - "TSLA"
+              paper_trading_initial_capital: 10000.0
+              max_concurrent_positions: 8
+              sma_period: 20
+              rsi_period: 14
+              rsi_overbought_threshold: 70
+              rsi_oversold_threshold: 30
+              pe_ratio_buy_threshold: 25
+              pe_ratio_sell_threshold: 40
+              earnings_growth_sell_threshold: -10
+              volume_spike_multiplier: 1.5
+
+            signal_confirmation:
+              enabled: true
+              timeout_minutes: 30
+              require_confirmation_for:
+                - "BUY"
+                - "SELL"
+
+            news_scraper_daemon:
+              rss_interval_seconds: 300
+              web_interval_seconds: 900
+              deep_interval_seconds: 1800
+              dedup_cache_hours: 48
+              chrome_mcp:
+                enabled: true
+                timeout_seconds: 180
+                fallback_to_bs4: true
+
+            position_monitor:
+              enabled: true
+              min_position_age_hours: 4
+              exit_confidence_threshold: 0.8
+              auto_exit: false
+              check_interval_minutes: 60
           SETTINGS_EOF
 
       - name: Create deployment bundle

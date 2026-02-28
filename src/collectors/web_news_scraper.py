@@ -5,6 +5,7 @@ Uses requests + BeautifulSoup to extract headlines from financial news sites.
 Zero API cost — all parsing is done locally.
 """
 
+import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
@@ -14,24 +15,55 @@ from src.logger import log
 
 SCRAPE_TIMEOUT = 15
 
-HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
-                  'AppleWebKit/537.36 (KHTML, like Gecko) '
-                  'Chrome/131.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.9',
-}
+_USER_AGENTS = [
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+]
+
+
+def _get_headers():
+    """Return request headers with a randomly selected User-Agent."""
+    return {
+        'User-Agent': random.choice(_USER_AGENTS),
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+    }
 
 
 def _fetch_page(url):
     """Fetch a page and return a BeautifulSoup object, or None on failure."""
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=SCRAPE_TIMEOUT)
+        resp = requests.get(url, headers=_get_headers(), timeout=SCRAPE_TIMEOUT)
         resp.raise_for_status()
         return BeautifulSoup(resp.text, 'html.parser')
     except Exception as e:
         log.warning(f"Failed to fetch {url}: {e}")
         return None
+
+
+def _generic_article_fallback(soup, source_name, base_url):
+    """Generic fallback scraper: extracts headlines from common HTML patterns."""
+    articles = []
+    seen = set()
+    selectors = ['h1 a', 'h2 a', 'h3 a', 'article a', '[class*="headline"] a']
+    for selector in selectors:
+        for tag in soup.select(selector):
+            headline = tag.get_text(strip=True)
+            if not headline or len(headline) < 15 or headline.lower() in seen:
+                continue
+            seen.add(headline.lower())
+            href = tag.get('href', '')
+            url = href if href.startswith('http') else f'{base_url.rstrip("/")}/{href.lstrip("/")}'
+            articles.append({
+                'title': headline,
+                'description': '',
+                'source': source_name,
+                'source_url': url,
+            })
+    return articles
 
 
 # --- Individual site scrapers ---
@@ -56,7 +88,7 @@ def scrape_coindesk():
             'source': 'CoinDesk',
             'source_url': url,
         })
-    return articles
+    return articles or _generic_article_fallback(soup, 'CoinDesk', 'https://www.coindesk.com')
 
 
 def scrape_cointelegraph():
@@ -78,7 +110,7 @@ def scrape_cointelegraph():
             'source': 'CoinTelegraph',
             'source_url': url,
         })
-    return articles
+    return articles or _generic_article_fallback(soup, 'CoinTelegraph', 'https://cointelegraph.com')
 
 
 def scrape_decrypt():
@@ -98,7 +130,7 @@ def scrape_decrypt():
             'source': 'Decrypt',
             'source_url': 'https://decrypt.co/news',
         })
-    return articles
+    return articles or _generic_article_fallback(soup, 'Decrypt', 'https://decrypt.co')
 
 
 def scrape_reuters_business():
@@ -120,7 +152,7 @@ def scrape_reuters_business():
             'source': 'Reuters',
             'source_url': url,
         })
-    return articles
+    return articles or _generic_article_fallback(soup, 'Reuters', 'https://www.reuters.com')
 
 
 def scrape_marketwatch():
@@ -142,7 +174,7 @@ def scrape_marketwatch():
             'source': 'MarketWatch',
             'source_url': url,
         })
-    return articles
+    return articles or _generic_article_fallback(soup, 'MarketWatch', 'https://www.marketwatch.com')
 
 
 def scrape_yahoo_finance():
@@ -164,7 +196,7 @@ def scrape_yahoo_finance():
             'source': 'Yahoo Finance',
             'source_url': url,
         })
-    return articles
+    return articles or _generic_article_fallback(soup, 'Yahoo Finance', 'https://finance.yahoo.com')
 
 
 def scrape_theblock():
@@ -186,7 +218,7 @@ def scrape_theblock():
             'source': 'The Block',
             'source_url': 'https://www.theblock.co/latest',
         })
-    return articles
+    return articles or _generic_article_fallback(soup, 'The Block', 'https://www.theblock.co')
 
 
 def scrape_cnbc():
@@ -210,7 +242,7 @@ def scrape_cnbc():
             'source': 'CNBC',
             'source_url': 'https://www.cnbc.com/world/',
         })
-    return articles
+    return articles or _generic_article_fallback(soup, 'CNBC', 'https://www.cnbc.com')
 
 
 def scrape_apnews():
@@ -234,7 +266,7 @@ def scrape_apnews():
             'source': 'AP News',
             'source_url': 'https://apnews.com/hub/business',
         })
-    return articles
+    return articles or _generic_article_fallback(soup, 'AP News', 'https://apnews.com')
 
 
 ALL_SCRAPERS = [

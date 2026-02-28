@@ -24,7 +24,7 @@ def _cursor(conn):
 # --- Connection Pool (for PostgreSQL) ---
 _pg_pool = None
 
-ALLOWED_TABLES = frozenset({"market_prices", "whale_transactions", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles"})
+ALLOWED_TABLES = frozenset({"market_prices", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles", "stoploss_cooldowns"})
 
 # --- Database Connection Management ---
 
@@ -146,20 +146,6 @@ def initialize_database(db_url=None):
             )'''
         cursor.execute(market_prices_sql)
 
-        # Whale Transactions
-        whale_transactions_sql = '''
-            CREATE TABLE IF NOT EXISTS whale_transactions (
-                id TEXT PRIMARY KEY, symbol TEXT NOT NULL, timestamp BIGINT NOT NULL, amount_usd REAL NOT NULL,
-                from_owner TEXT, from_owner_type TEXT, to_owner TEXT, to_owner_type TEXT,
-                recorded_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-            )''' if is_postgres_conn else '''
-            CREATE TABLE IF NOT EXISTS whale_transactions (
-                id TEXT PRIMARY KEY, symbol TEXT NOT NULL, timestamp INTEGER NOT NULL, amount_usd REAL NOT NULL,
-                from_owner TEXT, from_owner_type TEXT, to_owner TEXT, to_owner_type TEXT,
-                recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )'''
-        cursor.execute(whale_transactions_sql)
-
         # Signals
         signals_sql = '''
             CREATE TABLE IF NOT EXISTS signals (
@@ -253,6 +239,7 @@ def initialize_database(db_url=None):
                 description TEXT,
                 symbol TEXT,
                 vader_score REAL,
+                category TEXT,
                 collected_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             )''' if is_postgres_conn else '''
             CREATE TABLE IF NOT EXISTS scraped_articles (
@@ -264,6 +251,7 @@ def initialize_database(db_url=None):
                 description TEXT,
                 symbol TEXT,
                 vader_score REAL,
+                category TEXT,
                 collected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )'''
         cursor.execute(scraped_articles_sql)
@@ -274,6 +262,18 @@ def initialize_database(db_url=None):
             "ON scraped_articles (title_hash)"
         )
         cursor.execute(scraped_articles_idx_sql)
+
+        # Stoploss Cooldowns (persists across restarts)
+        stoploss_cooldowns_sql = '''
+            CREATE TABLE IF NOT EXISTS stoploss_cooldowns (
+                symbol TEXT PRIMARY KEY,
+                cooldown_expires_at TIMESTAMPTZ NOT NULL
+            )''' if is_postgres_conn else '''
+            CREATE TABLE IF NOT EXISTS stoploss_cooldowns (
+                symbol TEXT PRIMARY KEY,
+                cooldown_expires_at TIMESTAMP NOT NULL
+            )'''
+        cursor.execute(stoploss_cooldowns_sql)
 
         # --- Migrate trades table: add live trading columns if missing ---
         new_trade_columns = [
@@ -296,6 +296,30 @@ def initialize_database(db_url=None):
                 log.warning(f"Could not add column '{col_name}' to trades: {e}")
                 if is_postgres_conn:
                     conn.rollback()
+
+        # --- Migrate trades table: add trailing_stop_peak column if missing ---
+        try:
+            cursor.execute("ALTER TABLE trades ADD COLUMN trailing_stop_peak REAL")
+            log.info("Added column 'trailing_stop_peak' to trades table.")
+        except (sqlite3.OperationalError, psycopg2.errors.DuplicateColumn):
+            if is_postgres_conn:
+                conn.rollback()
+        except Exception as e:
+            log.warning(f"Could not add column 'trailing_stop_peak' to trades: {e}")
+            if is_postgres_conn:
+                conn.rollback()
+
+        # --- Migrate scraped_articles table: add category column if missing ---
+        try:
+            cursor.execute("ALTER TABLE scraped_articles ADD COLUMN category TEXT")
+            log.info("Added column 'category' to scraped_articles table.")
+        except (sqlite3.OperationalError, psycopg2.errors.DuplicateColumn):
+            if is_postgres_conn:
+                conn.rollback()
+        except Exception as e:
+            log.warning(f"Could not add column 'category' to scraped_articles: {e}")
+            if is_postgres_conn:
+                conn.rollback()
 
         conn.commit()
     except (sqlite3.Error, psycopg2.Error) as e:
@@ -357,7 +381,7 @@ def get_db_stats() -> dict:
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        tables = ["market_prices", "whale_transactions", "signals", "trades"]
+        tables = ["market_prices", "signals", "trades"]
         for table in tables:
             if table not in ALLOWED_TABLES:
                 continue
@@ -465,28 +489,6 @@ def get_trade_summary(hours_ago: int = 24) -> dict:
     finally:
         release_db_connection(conn)
 
-def get_whale_transactions_since(hours_ago: int = 24) -> list:
-    """Retrieves all whale transactions recorded in the last N hours."""
-    conn = None
-    try:
-        conn = get_db_connection()
-        is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
-        with _cursor(conn) as cursor:
-            if is_postgres_conn:
-                query = "SELECT * FROM whale_transactions WHERE recorded_at >= NOW() - INTERVAL '%s hours' ORDER BY timestamp DESC"
-                cursor.execute(query, (hours_ago,))
-            else:
-                query = "SELECT * FROM whale_transactions WHERE recorded_at >= datetime('now', ? || ' hours') ORDER BY timestamp DESC"
-                cursor.execute(query, (f'-{hours_ago}',))
-            transactions = [dict(row) for row in cursor.fetchall()]
-        log.info(f"Retrieved {len(transactions)} whale transactions from the last {hours_ago} hours.")
-        return transactions
-    except (sqlite3.Error, psycopg2.Error) as e:
-        log.error(f"Database error in get_whale_transactions_since: {e}", exc_info=True)
-        return []
-    finally:
-        release_db_connection(conn)
-
 def get_price_history_since(hours_ago: int = 24) -> list:
     """Retrieves all price history recorded in the last N hours."""
     conn = None
@@ -509,32 +511,10 @@ def get_price_history_since(hours_ago: int = 24) -> list:
     finally:
         release_db_connection(conn)
 
-def get_transaction_timestamps_since(symbol: str, hours_ago: int) -> list:
-    """Retrieves the timestamps of all whale transactions for a specific symbol in the last N hours."""
-    conn = None
-    try:
-        conn = get_db_connection()
-        is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
-
-        with _cursor(conn) as cursor:
-            if is_postgres_conn:
-                query = "SELECT timestamp FROM whale_transactions WHERE symbol = %s AND recorded_at >= NOW() - INTERVAL '%s hours'"
-                cursor.execute(query, (symbol, hours_ago))
-            else:
-                query = "SELECT timestamp FROM whale_transactions WHERE symbol = ? AND recorded_at >= datetime('now', ? || ' hours')"
-                cursor.execute(query, (symbol, f'-{hours_ago}'))
-            timestamps = [row[0] for row in cursor.fetchall()]
-        return timestamps
-    except (sqlite3.Error, psycopg2.Error) as e:
-        log.error(f"Database error in get_transaction_timestamps_since: {e}", exc_info=True)
-        return []
-    finally:
-        release_db_connection(conn)
-
 def get_table_counts() -> dict:
     """Retrieves the row count for the main tables in the database."""
     conn = None
-    tables = ["whale_transactions", "market_prices", "signals", "trades"]
+    tables = ["market_prices", "signals", "trades"]
     counts = {}
     try:
         conn = get_db_connection()
@@ -820,15 +800,15 @@ def save_articles_batch(articles: list):
                 if is_postgres_conn:
                     query = '''
                         INSERT INTO scraped_articles
-                            (title, title_hash, source, source_url, description, symbol, vader_score)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            (title, title_hash, source, source_url, description, symbol, vader_score, category)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (title_hash) DO NOTHING
                     '''
                 else:
                     query = '''
                         INSERT OR IGNORE INTO scraped_articles
-                            (title, title_hash, source, source_url, description, symbol, vader_score)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                            (title, title_hash, source, source_url, description, symbol, vader_score, category)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     '''
                 cursor.execute(query, (
                     article.get('title', ''),
@@ -838,6 +818,7 @@ def save_articles_batch(articles: list):
                     article.get('description', ''),
                     article.get('symbol'),
                     article.get('vader_score'),
+                    article.get('category', ''),
                 ))
         conn.commit()
         log.info(f"Saved batch of {len(articles)} articles to archive.")
@@ -862,7 +843,8 @@ def get_recent_articles(symbol: str, hours: int = 24, limit: int = 20) -> list:
         with _cursor(conn) as cursor:
             if is_postgres_conn:
                 query = '''
-                    SELECT title, source, vader_score, collected_at
+                    SELECT title, source, vader_score, collected_at,
+                           source_url, description, category
                     FROM scraped_articles
                     WHERE symbol = %s AND collected_at >= NOW() - INTERVAL '%s hours'
                     ORDER BY collected_at DESC LIMIT %s
@@ -870,7 +852,8 @@ def get_recent_articles(symbol: str, hours: int = 24, limit: int = 20) -> list:
                 cursor.execute(query, (symbol, hours, limit))
             else:
                 query = '''
-                    SELECT title, source, vader_score, collected_at
+                    SELECT title, source, vader_score, collected_at,
+                           source_url, description, category
                     FROM scraped_articles
                     WHERE symbol = ? AND collected_at >= datetime('now', ? || ' hours')
                     ORDER BY collected_at DESC LIMIT ?
@@ -880,6 +863,52 @@ def get_recent_articles(symbol: str, hours: int = 24, limit: int = 20) -> list:
     except (sqlite3.Error, psycopg2.Error) as e:
         log.error(f"Database error in get_recent_articles: {e}", exc_info=True)
         return []
+    finally:
+        release_db_connection(conn)
+
+
+def load_trailing_stop_peaks() -> dict:
+    """Loads trailing stop peaks for all open positions from the database.
+
+    Returns a dict of {order_id: peak_price} for open trades that have a
+    non-null trailing_stop_peak value.  Called once on startup to restore
+    in-memory state after a restart.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        with _cursor(conn) as cursor:
+            cursor.execute(
+                "SELECT order_id, trailing_stop_peak FROM trades "
+                "WHERE status = 'OPEN' AND trailing_stop_peak IS NOT NULL"
+            )
+            return {row[0]: row[1] for row in cursor.fetchall()}
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in load_trailing_stop_peaks: {e}", exc_info=True)
+        return {}
+    finally:
+        release_db_connection(conn)
+
+
+def save_trailing_stop_peak(order_id: str, peak_price: float):
+    """Persists the trailing stop peak price for a trade.
+
+    Called only when the peak increases, so writes are infrequent.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
+        query = (
+            "UPDATE trades SET trailing_stop_peak = %s WHERE order_id = %s"
+            if is_postgres_conn else
+            "UPDATE trades SET trailing_stop_peak = ? WHERE order_id = ?"
+        )
+        with _cursor(conn) as cursor:
+            cursor.execute(query, (peak_price, order_id))
+        conn.commit()
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in save_trailing_stop_peak: {e}", exc_info=True)
     finally:
         release_db_connection(conn)
 
@@ -901,5 +930,84 @@ def get_article_count(hours: int = 24) -> int:
     except (sqlite3.Error, psycopg2.Error) as e:
         log.error(f"Database error in get_article_count: {e}", exc_info=True)
         return 0
+    finally:
+        release_db_connection(conn)
+
+
+def save_stoploss_cooldown(symbol: str, expires_at):
+    """Persists a stoploss cooldown expiry for a symbol (UPSERT)."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            if is_pg:
+                query = """
+                    INSERT INTO stoploss_cooldowns (symbol, cooldown_expires_at)
+                    VALUES (%s, %s)
+                    ON CONFLICT (symbol) DO UPDATE SET cooldown_expires_at = EXCLUDED.cooldown_expires_at
+                """
+            else:
+                query = """
+                    INSERT OR REPLACE INTO stoploss_cooldowns (symbol, cooldown_expires_at)
+                    VALUES (?, ?)
+                """
+            cursor.execute(query, (symbol, expires_at))
+        conn.commit()
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in save_stoploss_cooldown: {e}", exc_info=True)
+    finally:
+        release_db_connection(conn)
+
+
+def load_stoploss_cooldowns() -> dict:
+    """Loads non-expired stoploss cooldowns from the database.
+
+    Returns {symbol: expires_at} for rows where cooldown has not yet expired.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            if is_pg:
+                query = "SELECT symbol, cooldown_expires_at FROM stoploss_cooldowns WHERE cooldown_expires_at > NOW()"
+            else:
+                query = "SELECT symbol, cooldown_expires_at FROM stoploss_cooldowns WHERE cooldown_expires_at > datetime('now')"
+            cursor.execute(query)
+            result = {}
+            for row in cursor.fetchall():
+                row_dict = dict(row) if hasattr(row, 'keys') else {'symbol': row[0], 'cooldown_expires_at': row[1]}
+                sym = row_dict['symbol']
+                expires = row_dict['cooldown_expires_at']
+                # Convert string to datetime if needed (SQLite returns strings)
+                if isinstance(expires, str):
+                    from datetime import datetime, timezone
+                    try:
+                        expires = datetime.fromisoformat(expires.replace('Z', '+00:00'))
+                    except ValueError:
+                        expires = datetime.strptime(expires, '%Y-%m-%d %H:%M:%S.%f').replace(tzinfo=timezone.utc)
+                result[sym] = expires
+            return result
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in load_stoploss_cooldowns: {e}", exc_info=True)
+        return {}
+    finally:
+        release_db_connection(conn)
+
+
+def clear_stoploss_cooldown(symbol: str):
+    """Removes a stoploss cooldown entry for a symbol."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            query = "DELETE FROM stoploss_cooldowns WHERE symbol = %s" if is_pg else \
+                    "DELETE FROM stoploss_cooldowns WHERE symbol = ?"
+            cursor.execute(query, (symbol,))
+        conn.commit()
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in clear_stoploss_cooldown: {e}", exc_info=True)
     finally:
         release_db_connection(conn)

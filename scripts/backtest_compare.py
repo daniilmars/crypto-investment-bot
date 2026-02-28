@@ -35,11 +35,6 @@ def make_params(signal_threshold, volume_gate_enabled, volume_gate_period,
         rsi_period=14,
         rsi_overbought_threshold=70,
         rsi_oversold_threshold=30,
-        stablecoin_inflow_threshold_usd=100000000,
-        transaction_velocity_baseline_hours=24,
-        transaction_velocity_threshold_multiplier=5.0,
-        high_interest_wallets=["Grayscale", "US Government"],
-        stablecoins_to_monitor=["usdt", "usdc", "busd", "dai", "tusd", "fdusd", "pyusd"],
         bar_interval_minutes=60,
         signal_threshold=signal_threshold,
         volume_gate_enabled=volume_gate_enabled,
@@ -51,14 +46,14 @@ def make_params(signal_threshold, volume_gate_enabled, volume_gate_period,
 
 def run_backtest(args):
     """Run a single backtest config. Returns (label, results_dict)."""
-    params, prices_df, whales_df = args
+    params, prices_df = args
     label = params._label
 
     # Suppress logging in worker
     logging.disable(logging.CRITICAL)
 
     watchlist = prices_df['symbol'].unique().tolist()
-    bt = Backtester(watchlist, prices_df.copy(), whales_df.copy(), params)
+    bt = Backtester(watchlist, prices_df.copy(), params)
     results = bt.run()
     return label, results
 
@@ -67,8 +62,8 @@ def main():
     # Load data once in the main process
     print("Loading historical data...")
     t0 = time.time()
-    prices_df, whales_df = DataLoader.load_historical_data()
-    print(f"Loaded {len(prices_df)} price records, {len(whales_df)} whale txns in {time.time()-t0:.1f}s")
+    prices_df = DataLoader.load_historical_data()
+    print(f"Loaded {len(prices_df)} price records in {time.time()-t0:.1f}s")
 
     if prices_df.empty:
         print("No data found. Exiting.")
@@ -89,7 +84,7 @@ def main():
                     label="NEW-full (threshold=3, volgate=20, cooldown=6)"),
     ]
 
-    work = [(cfg, prices_df, whales_df) for cfg in configs]
+    work = [(cfg, prices_df) for cfg in configs]
 
     n_workers = min(len(configs), mp.cpu_count())
     print(f"\nRunning {len(configs)} configs on {n_workers} cores...\n")

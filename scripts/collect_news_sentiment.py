@@ -68,7 +68,7 @@ def collect_and_analyze_sentiment(start_date_str=None, end_date_str=None):
             sentiment = analyzer.polarity_scores(title)
             all_sentiment_data.append({
                 'timestamp': pd.to_datetime(article['publishedAt']),
-                'symbol': symbol.lower(), # Store symbol in lowercase to match whale data
+                'symbol': symbol.lower(),
                 'headline': title,
                 'sentiment_score': sentiment['compound']
             })

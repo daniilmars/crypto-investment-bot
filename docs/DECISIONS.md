@@ -525,9 +525,24 @@ Migrating to FastAPI and webhooks provides a robust, scalable, and idiomatic sol
 
 This decision significantly improves the bot's stability, scalability, and adherence to cloud-native best practices, making it a more resilient and maintainable application on Google Cloud Run.
 
+---
 
+### ADR-027: Telegram Signal Confirmation Flow
 
+**Date:** 2026-02-15
 
+**Decision:**
+- **Implemented a Telegram-based signal confirmation system** that gates BUY/SELL trade execution behind manual user approval via inline buttons. The bot sends a message with "Execute" and "Skip" buttons when a signal fires; the trade only executes after the user taps Approve.
+- **Protective exits remain fully automatic.** Stop-loss, take-profit, trailing stop, position monitor auto-exit, and circuit breaker halts are never gated by confirmation, preserving safety.
+- **Extracted trade execution into a standalone function** (`execute_confirmed_signal` in `main.py`) that handles all combinations of asset type (crypto/stock), signal type (BUY/SELL), and broker (Binance/Alpaca/paper). This function is registered as a callback with the Telegram bot module at startup.
+- **Added an in-memory pending signals store** with configurable timeout (default 30 min). Expired signals are auto-rejected by a background cleanup task that runs every 60 seconds.
+- **Made the feature fully configurable** via `settings.yaml` (`signal_confirmation.enabled`, `timeout_minutes`, `require_confirmation_for`). Setting `enabled: false` restores the original auto-execute behavior with no code changes.
+- **Added 17 tests** covering the full confirmation lifecycle: sending, approving, rejecting, timeout, authorization, error handling.
+
+**Reasoning:**
+On a Mac Mini-based local architecture with direct user oversight, auto-executing trades immediately is unnecessarily aggressive. The confirmation flow gives the user a chance to review signal quality, verify market conditions, and decide whether to commit capital -- while keeping time-critical protective exits (SL/TP/trailing) fully automatic. The in-memory store with short TTL keeps the system simple and avoids database complexity for what is fundamentally transient state. The extracted execution function also improves testability and makes it easier to add future execution paths.
+
+See `docs/SIGNAL_CONFIRMATION.md` for full architecture documentation.
 
 ---
 

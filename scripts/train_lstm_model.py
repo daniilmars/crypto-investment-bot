@@ -30,16 +30,15 @@ def create_sequences(data, sequence_length):
 
 def train_lstm_for_symbol(symbol: str, sequence_length: int = 24):
     """
-    Trains an LSTM model for a single cryptocurrency symbol using price and whale data.
+    Trains an LSTM model for a single cryptocurrency symbol using price data.
     """
-    log.info(f"--- 🧠 Starting LSTM Model Training for {symbol} ---")
+    log.info(f"--- Starting LSTM Model Training for {symbol} ---")
     conn = get_db_connection()
 
     # --- 1. Data Loading & Feature Engineering ---
     log.info(f"Phase 1: Loading data and engineering features for {symbol}...")
     try:
         prices_df = pd.read_sql("SELECT * FROM market_prices WHERE symbol LIKE %(sym)s", conn, params={"sym": f"{symbol}%"}, parse_dates=['timestamp'])
-        whales_df = pd.read_sql("SELECT * FROM whale_transactions WHERE symbol = %(sym)s", conn, params={"sym": symbol.lower()}, parse_dates=['timestamp'])
     except Exception as e:
         log.error(f"Failed to load data for {symbol}: {e}")
         return
@@ -49,37 +48,18 @@ def train_lstm_for_symbol(symbol: str, sequence_length: int = 24):
         return
 
     # Set and standardize timezone to UTC
-    for df in [prices_df, whales_df]:
-        df.set_index('timestamp', inplace=True)
-        if df.index.tz is None:
-            df.index = df.index.tz_localize('UTC')
-        else:
-            df.index = df.index.tz_convert('UTC')
+    prices_df.set_index('timestamp', inplace=True)
+    if prices_df.index.tz is None:
+        prices_df.index = prices_df.index.tz_localize('UTC')
+    else:
+        prices_df.index = prices_df.index.tz_convert('UTC')
 
     # Create target variable
     hourly_prices = prices_df['price'].resample('h').last().to_frame()
     hourly_prices['target'] = (hourly_prices['price'].shift(-1) < hourly_prices['price']).astype(int)
 
-    # Engineer rolling window features from whale data
-    if not whales_df.empty:
-        whales_df['inflow_usd'] = whales_df.apply(lambda row: row['amount_usd'] if 'exchange' in row['to_owner_type'] else 0, axis=1)
-        whales_df['outflow_usd'] = whales_df.apply(lambda row: row['amount_usd'] if 'exchange' in row['from_owner_type'] else 0, axis=1)
-        
-        hourly_whales = pd.DataFrame(index=hourly_prices.index)
-        for window in [3, 6, 12, 24]:
-            hourly_whales[f'inflow_sum_{window}h'] = whales_df['inflow_usd'].resample('h').sum().rolling(window=window).sum()
-            hourly_whales[f'outflow_sum_{window}h'] = whales_df['outflow_usd'].resample('h').sum().rolling(window=window).sum()
-            hourly_whales[f'transaction_count_{window}h'] = whales_df['amount_usd'].resample('h').count().rolling(window=window).sum()
-    else:
-        # Create empty dataframe with same index if no whale data
-        hourly_whales = pd.DataFrame(index=hourly_prices.index)
-        for window in [3, 6, 12, 24]:
-            hourly_whales[f'inflow_sum_{window}h'] = 0
-            hourly_whales[f'outflow_sum_{window}h'] = 0
-            hourly_whales[f'transaction_count_{window}h'] = 0
-
     # Merge and create final feature set
-    merged_df = hourly_prices.join(hourly_whales).fillna(0)
+    merged_df = hourly_prices.fillna(0)
     merged_df.dropna(inplace=True) # Drop rows with NaN target
 
     if len(merged_df) < sequence_length * 2:
@@ -106,15 +86,15 @@ def train_lstm_for_symbol(symbol: str, sequence_length: int = 24):
     ])
 
     model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
-    
+
     early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
-    
+
     history = model.fit(X_train, y_train, epochs=100, batch_size=32, validation_split=0.2, callbacks=[early_stopping], verbose=1)
 
     # --- 4. Evaluation & Saving ---
     log.info(f"Phase 4: Evaluating and saving final model for {symbol}...")
     loss, accuracy = model.evaluate(X_test, y_test, verbose=0)
-    
+
     report_path = f"output/lstm_model_performance_{symbol}.txt"
     with open(report_path, 'w') as f:
         f.write(f"LSTM Model Performance Report for {symbol}:\n")
@@ -126,19 +106,19 @@ def train_lstm_for_symbol(symbol: str, sequence_length: int = 24):
     model.save(model_path)
     log.info(f"Saved trained LSTM model for {symbol} to {model_path}")
 
-    log.info(f"--- ✅ LSTM Training for {symbol} Complete ---")
+    log.info(f"--- LSTM Training for {symbol} Complete ---")
 
 def main():
     """
     Main function to run the LSTM training for all symbols in the watch list.
     """
-    log.info("--- 🚀 Starting LSTM Multi-Symbol Model Training Pipeline ---")
+    log.info("--- Starting LSTM Multi-Symbol Model Training Pipeline ---")
     watch_list = app_config.get('settings', {}).get('watch_list', ['BTC'])
-    
+
     for symbol in watch_list:
         train_lstm_for_symbol(symbol)
-        
-    log.info("--- ✅ All Symbols Processed. LSTM Pipeline Complete. ---")
+
+    log.info("--- All Symbols Processed. LSTM Pipeline Complete. ---")
 
 if __name__ == "__main__":
     main()

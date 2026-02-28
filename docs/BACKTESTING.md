@@ -4,7 +4,7 @@ This document outlines the process for backtesting the trading bot's strategy ag
 
 ## Overview
 
-The backtesting framework simulates the bot's full trading logic — including trailing stops, market regime detection, multi-timeframe confirmation, and Kelly-based position sizing — against historical price and whale transaction data.
+The backtesting framework simulates the bot's full trading logic — including trailing stops, market regime detection, multi-timeframe confirmation, and Kelly-based position sizing — against historical price data.
 
 The process involves three main scripts:
 1.  `scripts/backfill_historical_data.py`: For populating the database with high-frequency historical data.

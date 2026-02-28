@@ -38,7 +38,6 @@ notification_services:
 # Add the API keys for the data sources you want to use.
 
 api_keys:
-  whale_alert: "YOUR_WHALE_ALERT_API_KEY"
   binance:
     api_key: "YOUR_BINANCE_API_KEY"
     api_secret: "YOUR_BINANCE_API_SECRET"
@@ -54,22 +53,9 @@ api_keys:
 
 # -- General Bot Settings --
 settings:
-  # Minimum value in USD for a whale transaction to be considered significant.
-  min_whale_transaction_usd: 5000000
+  # Crypto and stock watch lists are loaded from config/watch_list.yaml.
+  # Override with env vars WATCH_LIST / STOCK_WATCH_LIST if needed.
 
-  # List of cryptocurrencies to monitor. Use symbols.
-  # Example: ["BTC", "ETH", "SOL"]
-  watch_list:
-    - "BTC"
-    - "ETH"
-    - "SOL"
-    - "XRP"
-    - "ADA"
-    - "AVAX"
-    - "DOGE"
-    - "MATIC"
-    - "BNB"
-    - "TRX"
   # How often the bot should run its analysis cycle, in minutes.
   run_interval_minutes: 15
 
@@ -92,43 +78,10 @@ settings:
     min_vader_score: 0.3
     rsi_buy_veto_threshold: 75
     rsi_sell_veto_threshold: 25
+    adx_min_threshold: 20
 
-  # -- Signal Quality Settings --
-  # Minimum number of indicators that must agree for a BUY or SELL signal.
-  signal_threshold: 3
-  # Volume confirmation gate: block entries when volume < N-bar average.
-  volume_gate_enabled: true
-  volume_gate_period: 20
   # Per-symbol cooldown (hours) after a stop-loss exit before re-entering.
   stoploss_cooldown_hours: 6
-
-  # -- Advanced Signal Settings --
-  # List of specific wallet owners to watch for high-priority signals.
-  # The names should match the 'owner' field from the Whale Alert API.
-  # Example: ["Grayscale", "US Government", "Ethereum Foundation"]
-  high_interest_wallets:
-    - "Grayscale"
-    - "US Government"
-
-  # Threshold in USD for stablecoin inflows to an exchange to be considered a strong BUY signal.
-  stablecoin_inflow_threshold_usd: 100000000
-
-  # List of stablecoin symbols (lowercase) to monitor for exchange inflows.
-  stablecoins_to_monitor:
-    - "usdt"
-    - "usdc"
-    - "busd"
-    - "dai"
-    - "tusd"
-    - "fdusd"
-    - "pyusd"
-  # -- Volatility & Anomaly Detection --
-  # The number of hours to look back to establish a baseline for transaction frequency.
-  transaction_velocity_baseline_hours: 24
-
-  # The multiplier to apply to the baseline average. If the current hour's transaction
-  # count exceeds this, it's flagged as a volatility anomaly.
-  transaction_velocity_threshold_multiplier: 5.0
 
   # -- Telegram Bot Settings --
   # The number of hours to look back for the /status report.
@@ -148,6 +101,11 @@ settings:
   take_profit_percentage: 0.08
   max_concurrent_positions: 5
 
+  # -- Trailing Stop Settings --
+  trailing_stop_enabled: true
+  trailing_stop_activation: 0.02    # activate after 2% gain
+  trailing_stop_distance: 0.015     # trail 1.5% from peak
+
   # -- Regular Status Update Settings --
   regular_status_update:
     enabled: true
@@ -160,6 +118,9 @@ settings:
     use_grounded_search: false
     # Web scraping supplements RSS feeds with direct page content
     web_scraping:
+      enabled: true
+    # Deep scraping: fetch full article body for important categories (regulatory/kol/ipo)
+    deep_scraping:
       enabled: true
     # Cache Gemini responses to halve API calls (~96/day -> ~48/day)
     cache_ttl_minutes: 30
@@ -190,19 +151,15 @@ settings:
     cooldown_hours: 24
 
   # -- Stock Trading Settings --
+  # Stock watch list is loaded from config/watch_list.yaml (US + EU + Asia).
   stock_trading:
     enabled: true
     broker: "paper_only"    # "paper_only" or "alpaca"
     alpaca:
       paper: true           # use Alpaca paper trading endpoint
-    watch_list:
-      - "AAPL"
-      - "MSFT"
-      - "GOOGL"
-      - "AMZN"
-      - "NVDA"
-      - "META"
-      - "TSLA"
+    # Separate capital pool for stocks (independent from crypto's $10k)
+    paper_trading_initial_capital: 10000.0
+    max_concurrent_positions: 8
     sma_period: 20
     rsi_period: 14
     rsi_overbought_threshold: 70
@@ -212,6 +169,28 @@ settings:
     earnings_growth_sell_threshold: -10
     volume_spike_multiplier: 1.5
 
+  # -- Signal Confirmation Settings --
+  # Require manual Telegram approval before executing BUY/SELL trades.
+  # Protective exits (SL/TP/trailing) are NEVER gated by confirmation.
+  signal_confirmation:
+    enabled: true
+    timeout_minutes: 30
+    require_confirmation_for:
+      - "BUY"
+      - "SELL"
+
+  # -- News Scraper Daemon Settings --
+  # Continuous scraper with tiered intervals (replaces launchd batch approach)
+  news_scraper_daemon:
+    rss_interval_seconds: 300        # 5 minutes
+    web_interval_seconds: 900        # 15 minutes
+    deep_interval_seconds: 1800      # 30 minutes
+    dedup_cache_hours: 48
+    chrome_mcp:
+      enabled: true
+      timeout_seconds: 180
+      fallback_to_bs4: true
+
   # -- Position Monitor Settings --
   # Sub-bot that monitors open positions and asks Gemini "hold or exit?"
   position_monitor:
@@ -219,3 +198,4 @@ settings:
     min_position_age_hours: 4
     exit_confidence_threshold: 0.8
     auto_exit: false    # false = alert only, true = auto-sell
+    check_interval_minutes: 60

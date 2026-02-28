@@ -2,68 +2,30 @@ import pandas as pd
 from src.logger import log
 from src.analysis.technical_indicators import calculate_macd, calculate_bollinger_bands
 
-def generate_signal(symbol, whale_transactions, market_data, high_interest_wallets=None, stablecoin_data=None, stablecoin_threshold=100000000, velocity_data=None, velocity_threshold_multiplier=5.0, rsi_overbought_threshold=70, rsi_oversold_threshold=30, news_sentiment_data=None, historical_prices=None, volume_data=None, order_book_data=None, signal_threshold=3, signal_mode="scoring", sentiment_config=None):
+def generate_signal(symbol, market_data, news_sentiment_data=None,
+                    signal_mode="scoring", sentiment_config=None,
+                    rsi_overbought_threshold=70, rsi_oversold_threshold=30,
+                    historical_prices=None, volume_data=None,
+                    order_book_data=None, signal_threshold=3):
     """
-    Generates a trading signal based on on-chain data and technical indicators.
-    Prioritizes anomalies and high-priority events.
+    Generates a trading signal.
 
     Args:
-        signal_mode: "scoring" (legacy 8-indicator system) or "sentiment" (Gemini-first).
+        signal_mode: "scoring" (legacy 7-indicator system) or "sentiment" (Gemini-first).
         sentiment_config: dict with min_gemini_confidence, min_vader_score,
                           rsi_buy_veto_threshold, rsi_sell_veto_threshold.
     """
-    if high_interest_wallets is None: high_interest_wallets = []
-    if stablecoin_data is None: stablecoin_data = {}
-    if velocity_data is None: velocity_data = {}
-
-    # --- 1. Check for Transaction Velocity Anomaly ---
-    current_count = velocity_data.get('current_count', 0)
-    baseline_avg = velocity_data.get('baseline_avg', 0.0)
-    if baseline_avg > 0 and current_count > (baseline_avg * velocity_threshold_multiplier):
-        reason = f"Transaction velocity anomaly detected: {current_count} txns in last hour vs. baseline of {baseline_avg:.1f} (threshold: {baseline_avg * velocity_threshold_multiplier:.1f})."
-        return {"signal": "VOLATILITY_WARNING", "symbol": symbol, "reason": reason}
-
-    # --- 2. Check for High-Priority Stablecoin Inflow ---
-    inflow = stablecoin_data.get('stablecoin_inflow_usd', 0)
-    if inflow > stablecoin_threshold:
-        reason = f"Large stablecoin inflow of ${inflow:,.2f} detected, exceeding threshold of ${stablecoin_threshold:,.2f}."
-        return {"signal": "BUY", "symbol": symbol, "reason": "High-priority signal: " + reason}
-
-    # --- 3. Check for High-Priority Signals from Watched Wallets ---
-    base_symbol = symbol.replace('USDT', '')
-    if whale_transactions:
-        for tx in whale_transactions:
-            tx_symbol = tx.get('symbol', '').upper()
-            if tx_symbol != base_symbol:
-                continue
-
-            from_owner = tx.get('from', {}).get('owner', 'unknown')
-            to_owner = tx.get('to', {}).get('owner', 'unknown')
-            to_owner_type = tx.get('to', {}).get('owner_type', 'unknown')
-            from_owner_type = tx.get('from', {}).get('owner_type', 'unknown')
-            amount_usd = tx.get('amount_usd', 0)
-
-            if from_owner in high_interest_wallets and to_owner_type == 'exchange':
-                reason = f"High-interest wallet '{from_owner}' sent ${amount_usd:,.2f} of {symbol} to {to_owner}."
-                return {"signal": "SELL", "symbol": symbol, "reason": "High-priority signal: " + reason}
-
-            if to_owner in high_interest_wallets and from_owner_type == 'exchange':
-                reason = f"High-interest wallet '{to_owner}' received ${amount_usd:,.2f} of {symbol} from {from_owner}."
-                return {"signal": "BUY", "symbol": symbol, "reason": "High-priority signal: " + reason}
-
-    # --- 4. Route to signal mode ---
     if signal_mode == "sentiment":
         return _generate_sentiment_signal(
             symbol=symbol,
             market_data=market_data,
-            whale_transactions=whale_transactions,
             news_sentiment_data=news_sentiment_data,
             sentiment_config=sentiment_config or {},
+            historical_prices=historical_prices,
         )
     else:
         return _generate_scoring_signal(
             symbol=symbol,
-            whale_transactions=whale_transactions,
             market_data=market_data,
             rsi_overbought_threshold=rsi_overbought_threshold,
             rsi_oversold_threshold=rsi_oversold_threshold,
@@ -75,15 +37,14 @@ def generate_signal(symbol, whale_transactions, market_data, high_interest_walle
         )
 
 
-def _generate_scoring_signal(symbol, whale_transactions, market_data,
+def _generate_scoring_signal(symbol, market_data,
                               rsi_overbought_threshold=70, rsi_oversold_threshold=30,
                               news_sentiment_data=None, historical_prices=None,
                               volume_data=None, order_book_data=None, signal_threshold=3):
-    """Legacy 8-indicator scoring system. Zero behavior change from original."""
+    """Legacy 7-indicator scoring system."""
     current_price = market_data.get('current_price')
     sma = market_data.get('sma')
     rsi = market_data.get('rsi')
-    base_symbol = symbol.replace('USDT', '')
 
     log.debug(f"[{symbol}] Signal Check: Price={current_price}, SMA={sma}, RSI={rsi}")
 
@@ -107,22 +68,7 @@ def _generate_scoring_signal(symbol, whale_transactions, market_data,
     elif rsi > rsi_overbought_threshold:
         sell_score += 1
 
-    # Indicator 3: On-Chain Flow (Whale Transactions)
-    net_flow = 0
-    symbol_whale_transactions = [tx for tx in whale_transactions if tx.get('symbol', '').upper() == base_symbol.upper()]
-    if symbol_whale_transactions:
-        exchange_inflow = sum(tx['amount_usd'] for tx in symbol_whale_transactions if tx.get('to', {}).get('owner_type', '') == 'exchange')
-        exchange_outflow = sum(tx['amount_usd'] for tx in symbol_whale_transactions if tx.get('from', {}).get('owner_type', '') == 'exchange')
-        net_flow = exchange_inflow - exchange_outflow
-
-    log.debug(f"[{symbol}] Whale Net Flow: ${net_flow:,.2f}")
-
-    if net_flow < 0: # More leaving exchanges than entering
-        buy_score += 1
-    elif net_flow > 0: # More entering exchanges than leaving
-        sell_score += 1
-
-    # Indicator 4: News Sentiment (Gemini preferred, VADER fallback)
+    # Indicator 3: News Sentiment (Gemini preferred, VADER fallback)
     news_reason = ""
     if news_sentiment_data:
         gemini = news_sentiment_data.get('gemini_assessment')
@@ -152,7 +98,7 @@ def _generate_scoring_signal(symbol, whale_transactions, market_data,
                 sell_score += 1
                 news_reason = f", News: VADER bearish ({avg_sentiment:.3f})"
 
-    # Indicator 5: MACD Momentum
+    # Indicator 4: MACD Momentum
     macd_reason = ""
     if historical_prices and len(historical_prices) >= 26:
         macd = calculate_macd(historical_prices)
@@ -165,7 +111,7 @@ def _generate_scoring_signal(symbol, whale_transactions, market_data,
                 sell_score += 1
                 macd_reason = f", MACD: bearish (hist {histogram:.4f})"
 
-    # Indicator 6: Bollinger Position
+    # Indicator 5: Bollinger Position
     bollinger_reason = ""
     if historical_prices and len(historical_prices) >= 20:
         bb = calculate_bollinger_bands(historical_prices)
@@ -177,7 +123,7 @@ def _generate_scoring_signal(symbol, whale_transactions, market_data,
                 sell_score += 1
                 bollinger_reason = f", BB: overbought (price > {bb['upper_band']:,.2f})"
 
-    # Indicator 7: Volume (24hr stats from Binance)
+    # Indicator 6: Volume (24hr stats from Binance)
     volume_reason = ""
     if volume_data is None:
         volume_data = {}
@@ -194,7 +140,7 @@ def _generate_scoring_signal(symbol, whale_transactions, market_data,
             sell_score += 1
             volume_reason = f", Volume: spike ({vol_current:,.0f} > {vol_avg * vol_spike_multiplier:,.0f}) with price down {vol_change:.1f}%"
 
-    # Indicator 8: Order Book Depth Imbalance
+    # Indicator 7: Order Book Depth Imbalance
     orderbook_reason = ""
     if order_book_data is None:
         order_book_data = {}
@@ -209,7 +155,7 @@ def _generate_scoring_signal(symbol, whale_transactions, market_data,
             orderbook_reason = f", OrderBook: ask-heavy ({bid_ask_ratio:.2f} ratio, selling pressure)"
 
     # --- Signal Generation ---
-    reason = f"Price: ${current_price:,.2f}, SMA: ${sma:,.2f}, RSI: {rsi:.2f}, Whale Net Flow: ${net_flow:,.2f}{news_reason}{macd_reason}{bollinger_reason}{volume_reason}{orderbook_reason}. Buy Score: {buy_score}, Sell Score: {sell_score}."
+    reason = f"Price: ${current_price:,.2f}, SMA: ${sma:,.2f}, RSI: {rsi:.2f}{news_reason}{macd_reason}{bollinger_reason}{volume_reason}{orderbook_reason}. Buy Score: {buy_score}, Sell Score: {sell_score}."
 
     if buy_score >= signal_threshold and buy_score > sell_score:
         log.info(f"[{symbol}] BUY signal generated. {reason}")
@@ -223,8 +169,9 @@ def _generate_scoring_signal(symbol, whale_transactions, market_data,
     return {"signal": "HOLD", "symbol": symbol, "reason": "No strong signal detected. " + reason}
 
 
-def _generate_sentiment_signal(symbol, market_data, whale_transactions=None,
-                                news_sentiment_data=None, sentiment_config=None):
+def _generate_sentiment_signal(symbol, market_data,
+                                news_sentiment_data=None, sentiment_config=None,
+                                historical_prices=None):
     """
     Sentiment-first signal: Gemini is the primary trigger, with SMA trend filter
     and RSI sanity check as gatekeepers.
@@ -304,6 +251,17 @@ def _generate_sentiment_signal(symbol, market_data, whale_transactions=None,
         reason = f"Sentiment bearish but RSI {rsi:.2f} < {rsi_sell_veto} (oversold veto). {sentiment_reason}."
         log.debug(f"[{symbol}] HOLD: {reason}")
         return {"signal": "HOLD", "symbol": symbol, "reason": reason}
+
+    # --- Step 4: ADX trend strength filter (optional) ---
+    adx_min = sentiment_config.get('adx_min_threshold')
+    if adx_min is not None and historical_prices and len(historical_prices) >= 29:
+        from src.analysis.technical_indicators import calculate_adx_from_closes
+        adx = calculate_adx_from_closes(historical_prices, period=14)
+        if adx is not None and adx < adx_min:
+            reason = (f"ADX {adx:.1f} < {adx_min} (weak trend). {sentiment_reason}. "
+                      f"Price: ${current_price:,.2f}, SMA: ${sma:,.2f}, RSI: {rsi:.2f}.")
+            log.debug(f"[{symbol}] HOLD: {reason}")
+            return {"signal": "HOLD", "symbol": symbol, "reason": reason}
 
     # --- All gates passed: generate signal ---
     signal_type = "BUY" if direction == 'bullish' else "SELL"

@@ -32,7 +32,7 @@ Raw text will be converted into numerical features that our model can understand
     -   **Pre-trained:** No need for a complex model training pipeline.
     -   **Fast & Efficient:** Ideal for processing a high volume of headlines.
     -   **Tuned for Social Media & News:** It is specifically designed to understand the sentiment in short-form text, including the use of capitalization and exclamation marks.
-2.  **Aggregation:** The sentiment score of each individual headline will be aggregated into the same **1-hour time buckets** used for our price and whale data.
+2.  **Aggregation:** The sentiment score of each individual headline will be aggregated into the same **1-hour time buckets** used for our price data.
 3.  **Feature Creation:** For each 1-hour bucket, we will engineer a set of sentiment features, including:
     -   `avg_sentiment_score`: The average compound sentiment score of all articles in that hour.
     -   `news_volume`: The total count of articles published in that hour.
@@ -51,8 +51,8 @@ The engineered sentiment data will be persisted in our database.
 
 The new sentiment data will be seamlessly integrated into our existing machine learning pipeline.
 
-1.  **Data Loading:** The main analysis script, `scripts/whale_price_correlation.py`, will be modified to load data from the new `news_sentiment` table.
-2.  **Unified DataFrame:** The sentiment data will be joined with the existing price and whale transaction data on the hourly `timestamp`. This will create a single, powerful DataFrame containing on-chain, off-chain, and market data.
+1.  **Data Loading:** The main analysis script will be modified to load data from the new `news_sentiment` table.
+2.  **Unified DataFrame:** The sentiment data will be joined with the existing price data on the hourly `timestamp`. This will create a single, powerful DataFrame containing off-chain and market data.
 3.  **Model Training:** This unified dataset will be used as the input for training and tuning our XGBoost "sell-signal" model. The existing `GridSearchCV` process will automatically evaluate the predictive power of the new sentiment features.
 
 ## 4. Expected Outcome

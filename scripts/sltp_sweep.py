@@ -34,11 +34,6 @@ def make_params(sl_pct, tp_pct, label=""):
         rsi_period=14,
         rsi_overbought_threshold=70,
         rsi_oversold_threshold=30,
-        stablecoin_inflow_threshold_usd=100000000,
-        transaction_velocity_baseline_hours=24,
-        transaction_velocity_threshold_multiplier=5.0,
-        high_interest_wallets=["Grayscale", "US Government"],
-        stablecoins_to_monitor=["usdt", "usdc", "busd", "dai", "tusd", "fdusd", "pyusd"],
         bar_interval_minutes=60,
         signal_threshold=2,
         volume_gate_enabled=False,
@@ -50,13 +45,13 @@ def make_params(sl_pct, tp_pct, label=""):
 
 def run_backtest(args):
     """Run a single backtest config. Returns (label, sl, tp, results_dict)."""
-    params, prices_df, whales_df = args
+    params, prices_df = args
     label = params._label
 
     logging.disable(logging.CRITICAL)
 
     watchlist = prices_df['symbol'].unique().tolist()
-    bt = Backtester(watchlist, prices_df.copy(), whales_df.copy(), params)
+    bt = Backtester(watchlist, prices_df.copy(), params)
     results = bt.run()
     return label, params.stop_loss_percentage, params.take_profit_percentage, results
 
@@ -64,8 +59,8 @@ def run_backtest(args):
 def main():
     print("Loading historical data...")
     t0 = time.time()
-    prices_df, whales_df = DataLoader.load_historical_data()
-    print(f"Loaded {len(prices_df)} price records, {len(whales_df)} whale txns in {time.time()-t0:.1f}s")
+    prices_df = DataLoader.load_historical_data()
+    print(f"Loaded {len(prices_df)} price records in {time.time()-t0:.1f}s")
 
     if prices_df.empty:
         print("No data found. Exiting.")
@@ -82,7 +77,7 @@ def main():
             label = f"SL={sl:.1%} TP={tp:.1%}"
             configs.append(make_params(sl, tp, label=label))
 
-    work = [(cfg, prices_df, whales_df) for cfg in configs]
+    work = [(cfg, prices_df) for cfg in configs]
 
     n_workers = mp.cpu_count()
     print(f"\nRunning {len(configs)} SL/TP combos on {n_workers} cores...\n")
