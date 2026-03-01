@@ -233,6 +233,24 @@ stocks:
   - TTD
   - MELI
 
+# --- AI Pure-Play Stocks ---
+stocks_ai:
+  - AI      # C3.ai
+  - BBAI    # BigBear.ai
+  - UPST    # Upstart
+  - PATH    # UiPath
+  - SOUN    # SoundHound AI
+  - SMCI    # Super Micro Computer
+  - VRT     # Vertiv
+  - DELL    # Dell Technologies
+  - ARM     # Arm Holdings
+  - ANET    # Arista Networks
+  - MDB     # MongoDB
+  - ESTC    # Elastic
+  - CFLT    # Confluent
+  - IONQ    # IonQ
+  - RGTI    # Rigetti Computing
+
 # --- European Stocks (yfinance suffix) ---
 stocks_europe:
   # UK FTSE (15)

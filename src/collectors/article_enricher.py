@@ -16,7 +16,7 @@ from bs4 import BeautifulSoup
 
 from src.logger import log
 
-IMPORTANT_CATEGORIES = {'regulatory', 'kol', 'ipo'}
+IMPORTANT_CATEGORIES = {'regulatory', 'kol', 'ipo', 'ai', 'ai_research'}
 
 MAX_BODY_CHARS = 2000
 MIN_PARAGRAPH_CHARS = 20

@@ -24,9 +24,10 @@ def test_initialize_database_creates_tables(mock_get_db_connection, mock_release
     initialize_database()
 
     # Assert: Check if CREATE TABLE + ALTER TABLE statements were executed
-    # 8 CREATE TABLEs + 1 CREATE INDEX + 6 ALTER TABLE (trade columns) + 1 ALTER TABLE (trailing_stop_peak)
-    # + 1 ALTER TABLE (scraped_articles category) + 1 ALTER TABLE (scraped_articles gemini_score) = 18
-    assert mock_cursor.execute.call_count == 18
+    # 11 CREATE TABLEs + 4 CREATE INDEXes + 6 ALTER TABLE (trade columns) + 1 ALTER TABLE (trailing_stop_peak)
+    # + 1 ALTER TABLE (scraped_articles category) + 1 ALTER TABLE (scraped_articles gemini_score)
+    # + 1 ALTER TABLE (trades trading_strategy) = 25
+    assert mock_cursor.execute.call_count == 25
 
     # Check the SQL statements (case-insensitive and ignoring whitespace)
     executed_queries = [' '.join(call[0][0].split()) for call in mock_cursor.execute.call_args_list]
@@ -37,6 +38,10 @@ def test_initialize_database_creates_tables(mock_get_db_connection, mock_release
     assert any("CREATE TABLE IF NOT EXISTS news_sentiment" in query for query in executed_queries)
     assert any("CREATE TABLE IF NOT EXISTS scraped_articles" in query for query in executed_queries)
     assert any("idx_scraped_articles_title_hash" in query for query in executed_queries)
+    assert any("CREATE TABLE IF NOT EXISTS position_additions" in query for query in executed_queries)
+    assert any("idx_pos_additions_order" in query for query in executed_queries)
+    assert any("CREATE TABLE IF NOT EXISTS macro_regime_history" in query for query in executed_queries)
+    assert any("idx_macro_regime_recorded_at" in query for query in executed_queries)
 
     mock_conn.commit.assert_called_once()
     mock_release.assert_called_once_with(mock_conn)

@@ -131,17 +131,17 @@ def _validate_order_quantity(symbol_info, quantity, price):
 
 # --- Order Placement ---
 
-def place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto"):
+def place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual"):
     """
     Places an order — dispatches to paper or live based on config.
     """
-    if _is_live_trading():
-        return _live_place_order(symbol, side, quantity, price, order_type, existing_order_id, asset_type=asset_type)
+    if _is_live_trading() and trading_strategy != 'auto':
+        return _live_place_order(symbol, side, quantity, price, order_type, existing_order_id, asset_type=asset_type, trading_strategy=trading_strategy)
     else:
-        return _paper_place_order(symbol, side, quantity, price, order_type, existing_order_id, asset_type=asset_type)
+        return _paper_place_order(symbol, side, quantity, price, order_type, existing_order_id, asset_type=asset_type, trading_strategy=trading_strategy)
 
 
-def _paper_place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto"):
+def _paper_place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual"):
     """Simulates placing an order for paper trading. Records the trade in the database."""
     conn = None
     cursor = None
@@ -152,12 +152,13 @@ def _paper_place_order(symbol, side, quantity, price, order_type="MARKET", exist
 
         if side == "BUY":
             log.info(f"Simulating BUY order for {quantity} {symbol} at {price} (Type: {order_type})")
-            order_id = f"PAPER_{symbol}_BUY_{int(time.time() * 1000)}"
-            query = ('INSERT INTO trades (symbol, order_id, side, entry_price, quantity, status, trading_mode, asset_type) '
-                     'VALUES (%s, %s, %s, %s, %s, %s, %s, %s)') if is_postgres_conn else \
-                    ('INSERT INTO trades (symbol, order_id, side, entry_price, quantity, status, trading_mode, asset_type) '
-                     'VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-            cursor.execute(query, (symbol, order_id, side, price, quantity, "OPEN", "paper", asset_type))
+            prefix = "AUTO" if trading_strategy == "auto" else "PAPER"
+            order_id = f"{prefix}_{symbol}_BUY_{int(time.time() * 1000)}"
+            query = ('INSERT INTO trades (symbol, order_id, side, entry_price, quantity, status, trading_mode, asset_type, trading_strategy) '
+                     'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)') if is_postgres_conn else \
+                    ('INSERT INTO trades (symbol, order_id, side, entry_price, quantity, status, trading_mode, asset_type, trading_strategy) '
+                     'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            cursor.execute(query, (symbol, order_id, side, price, quantity, "OPEN", "paper", asset_type, trading_strategy))
             conn.commit()
             log.info(f"Paper trade recorded: Order ID {order_id}")
             return {"order_id": order_id, "symbol": symbol, "side": side, "quantity": quantity, "price": price, "status": "FILLED"}
@@ -211,7 +212,7 @@ def _paper_place_order(symbol, side, quantity, price, order_type="MARKET", exist
         release_db_connection(conn)
 
 
-def _live_place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto"):
+def _live_place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual"):
     """Places a real order on Binance (testnet or live)."""
     from binance.exceptions import BinanceAPIException
 
@@ -481,10 +482,139 @@ def _cancel_open_oco_orders(symbol):
         log.warning(f"Error cancelling OCO orders for {symbol}: {e}")
 
 
+# --- Position Increase ---
+
+def add_to_position(parent_order_id, symbol, add_quantity, add_price,
+                    reason="", asset_type="crypto", trading_strategy="manual"):
+    """Adds to an existing position with weighted-average entry price update.
+
+    Paper trading: updates DB directly with new avg price and total quantity.
+    Live trading: places market BUY, cancels existing OCO, updates DB, places new OCO.
+
+    Returns dict with status, new_avg_price, new_total_quantity.
+    """
+    from src.database import (save_position_addition, update_trade_position)
+
+    if _is_live_trading() and trading_strategy != 'auto':
+        return _live_add_to_position(parent_order_id, symbol, add_quantity, add_price,
+                                     reason, asset_type)
+
+    # --- Paper trading path ---
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            q = ('SELECT entry_price, quantity FROM trades WHERE order_id = %s AND status = %s'
+                 if is_pg else
+                 'SELECT entry_price, quantity FROM trades WHERE order_id = ? AND status = ?')
+            cursor.execute(q, (parent_order_id, 'OPEN'))
+            row = cursor.fetchone()
+            if not row:
+                log.error(f"Cannot add to position — order {parent_order_id} not found or not OPEN")
+                return {"status": "FAILED", "message": "Position not found or not open"}
+
+            old_price = float(row[0])
+            old_qty = float(row[1])
+
+        new_total = old_qty + add_quantity
+        new_avg = (old_price * old_qty + add_price * add_quantity) / new_total
+
+        update_trade_position(parent_order_id, new_avg, new_total)
+        save_position_addition(parent_order_id, add_price, add_quantity, reason)
+
+        log.info(f"Paper position increase for {symbol}: +{add_quantity} at ${add_price:,.2f} "
+                 f"→ avg ${new_avg:,.2f}, total {new_total}")
+        return {
+            "status": "FILLED",
+            "order_id": parent_order_id,
+            "symbol": symbol,
+            "new_avg_price": round(new_avg, 8),
+            "new_total_quantity": round(new_total, 8),
+            "price": add_price,
+        }
+
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in add_to_position: {e}", exc_info=True)
+        return {"status": "FAILED", "message": str(e)}
+    finally:
+        release_db_connection(conn)
+
+
+def _live_add_to_position(parent_order_id, symbol, add_quantity, add_price,
+                          reason="", asset_type="crypto"):
+    """Live trading path for adding to a position (future implementation)."""
+    from src.database import (save_position_addition, update_trade_position)
+
+    api_symbol = symbol if "USDT" in symbol else f"{symbol}USDT"
+    client = _get_binance_client()
+    if not client:
+        return {"status": "FAILED", "message": "Binance client not available"}
+
+    try:
+        from binance.exceptions import BinanceAPIException
+
+        # Cancel existing OCO before adding
+        _cancel_open_oco_orders(api_symbol)
+
+        # Place market buy
+        sym_info = _get_symbol_info(api_symbol)
+        adjusted_qty = _validate_order_quantity(sym_info, add_quantity, add_price)
+        if adjusted_qty is None:
+            return {"status": "FAILED", "message": f"Order quantity too small for {api_symbol}"}
+
+        order = client.order_market_buy(symbol=api_symbol, quantity=adjusted_qty)
+        fill_price = _extract_fill_price(order) or add_price
+        fill_qty = float(order.get('executedQty', adjusted_qty))
+
+        # Get existing position to compute new avg
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        try:
+            with _cursor(conn) as cursor:
+                q = ('SELECT entry_price, quantity FROM trades WHERE order_id = %s AND status = %s'
+                     if is_pg else
+                     'SELECT entry_price, quantity FROM trades WHERE order_id = ? AND status = ?')
+                cursor.execute(q, (parent_order_id, 'OPEN'))
+                row = cursor.fetchone()
+        finally:
+            release_db_connection(conn)
+
+        if not row:
+            log.error(f"Position {parent_order_id} not found after live buy")
+            return {"status": "FAILED", "message": "Position not found"}
+
+        old_price = float(row[0])
+        old_qty = float(row[1])
+        new_total = old_qty + fill_qty
+        new_avg = (old_price * old_qty + fill_price * fill_qty) / new_total
+
+        update_trade_position(parent_order_id, new_avg, new_total)
+        save_position_addition(parent_order_id, fill_price, fill_qty, reason)
+
+        # Place new OCO at updated avg price
+        _place_oco_bracket(api_symbol, new_avg, new_total)
+
+        log.info(f"Live position increase for {symbol}: +{fill_qty} at ${fill_price:,.2f} "
+                 f"→ avg ${new_avg:,.2f}, total {new_total}")
+        return {
+            "status": "FILLED",
+            "order_id": parent_order_id,
+            "symbol": symbol,
+            "new_avg_price": round(new_avg, 8),
+            "new_total_quantity": round(new_total, 8),
+            "price": fill_price,
+        }
+
+    except Exception as e:
+        log.error(f"Live add_to_position failed: {e}", exc_info=True)
+        return {"status": "FAILED", "message": str(e)}
+
+
 # --- Position & Balance Queries ---
 
-def get_open_positions(asset_type=None):
-    """Retrieves open trading positions from the database, optionally filtered by asset_type."""
+def get_open_positions(asset_type=None, trading_strategy=None):
+    """Retrieves open trading positions from the database, optionally filtered by asset_type and trading_strategy."""
     conn = None
     cursor = None
     try:
@@ -497,18 +627,21 @@ def get_open_positions(asset_type=None):
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
-        if asset_type:
-            query = ('SELECT * FROM trades WHERE status = %s AND asset_type = %s' if is_postgres_conn else
-                     'SELECT * FROM trades WHERE status = ? AND asset_type = ?')
-            cursor.execute(query, ("OPEN", asset_type))
-        else:
-            query = 'SELECT * FROM trades WHERE status = %s' if is_postgres_conn else \
-                    'SELECT * FROM trades WHERE status = ?'
-            cursor.execute(query, ("OPEN",))
+        ph = '%s' if is_postgres_conn else '?'
+        query = f'SELECT * FROM trades WHERE status = {ph}'
+        params = ["OPEN"]
 
+        if asset_type:
+            query += f' AND asset_type = {ph}'
+            params.append(asset_type)
+        if trading_strategy:
+            query += f' AND trading_strategy = {ph}'
+            params.append(trading_strategy)
+
+        cursor.execute(query, tuple(params))
         positions = [dict(row) for row in cursor.fetchall()]
 
-        log.info(f"Retrieved {len(positions)} open positions (asset_type={asset_type or 'all'}).")
+        log.info(f"Retrieved {len(positions)} open positions (asset_type={asset_type or 'all'}, strategy={trading_strategy or 'all'}).")
         return positions
     except (sqlite3.Error, psycopg2.Error) as e:
         log.error(f"Database error in get_open_positions: {e}", exc_info=True)
@@ -519,18 +652,21 @@ def get_open_positions(asset_type=None):
         release_db_connection(conn)
 
 
-def get_account_balance(asset_type=None):
+def get_account_balance(asset_type=None, trading_strategy=None):
     """
     Returns account balance — paper-based calculation or real Binance balance.
     """
-    if _is_live_trading():
+    if _is_live_trading() and trading_strategy != 'auto':
         return _get_live_balance()
-    return _get_paper_balance(asset_type=asset_type)
+    return _get_paper_balance(asset_type=asset_type, trading_strategy=trading_strategy)
 
 
-def _get_paper_balance(asset_type=None):
+def _get_paper_balance(asset_type=None, trading_strategy=None):
     """Calculates the current paper trading balance based on initial capital and closed trade PnL."""
-    if asset_type == 'stock':
+    if trading_strategy == 'auto':
+        auto_cfg = app_config.get('settings', {}).get('auto_trading', {})
+        initial_capital = Decimal(str(auto_cfg.get('paper_trading_initial_capital', 10000.0)))
+    elif asset_type == 'stock':
         stock_cfg = app_config.get('settings', {}).get('stock_trading', {})
         initial_capital = Decimal(str(stock_cfg.get('paper_trading_initial_capital',
                                   app_config.get('settings', {}).get('paper_trading_initial_capital', 10000.0))))
@@ -540,34 +676,37 @@ def _get_paper_balance(asset_type=None):
     try:
         conn = get_db_connection()
         is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
+        ph = '%s' if is_postgres_conn else '?'
         with _cursor(conn) as cursor:
+            # Build PnL query with optional filters
+            query_pnl = f'SELECT COALESCE(SUM(pnl), 0) FROM trades WHERE status = {ph}'
+            params_pnl = ["CLOSED"]
             if asset_type:
-                query_pnl = ('SELECT COALESCE(SUM(pnl), 0) FROM trades WHERE status = %s AND asset_type = %s'
-                             if is_postgres_conn else
-                             'SELECT COALESCE(SUM(pnl), 0) FROM trades WHERE status = ? AND asset_type = ?')
-                cursor.execute(query_pnl, ("CLOSED", asset_type))
-            else:
-                query_pnl = ('SELECT COALESCE(SUM(pnl), 0) FROM trades WHERE status = %s' if is_postgres_conn else
-                             'SELECT COALESCE(SUM(pnl), 0) FROM trades WHERE status = ?')
-                cursor.execute(query_pnl, ("CLOSED",))
+                query_pnl += f' AND asset_type = {ph}'
+                params_pnl.append(asset_type)
+            if trading_strategy:
+                query_pnl += f' AND trading_strategy = {ph}'
+                params_pnl.append(trading_strategy)
+            cursor.execute(query_pnl, tuple(params_pnl))
             total_pnl = Decimal(str(cursor.fetchone()[0]))
 
+            # Build locked capital query with optional filters
+            query_open = f'SELECT COALESCE(SUM(entry_price * quantity), 0) FROM trades WHERE status = {ph}'
+            params_open = ["OPEN"]
             if asset_type:
-                query_open = ('SELECT COALESCE(SUM(entry_price * quantity), 0) FROM trades WHERE status = %s AND asset_type = %s'
-                              if is_postgres_conn else
-                              'SELECT COALESCE(SUM(entry_price * quantity), 0) FROM trades WHERE status = ? AND asset_type = ?')
-                cursor.execute(query_open, ("OPEN", asset_type))
-            else:
-                query_open = ('SELECT COALESCE(SUM(entry_price * quantity), 0) FROM trades WHERE status = %s' if is_postgres_conn else
-                              'SELECT COALESCE(SUM(entry_price * quantity), 0) FROM trades WHERE status = ?')
-                cursor.execute(query_open, ("OPEN",))
+                query_open += f' AND asset_type = {ph}'
+                params_open.append(asset_type)
+            if trading_strategy:
+                query_open += f' AND trading_strategy = {ph}'
+                params_open.append(trading_strategy)
+            cursor.execute(query_open, tuple(params_open))
             locked_capital = Decimal(str(cursor.fetchone()[0]))
 
         available = initial_capital + total_pnl - locked_capital
         total = initial_capital + total_pnl
         available_f = float(available.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
         total_f = float(total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
-        log.info(f"Paper trading balance: available=${available_f:.2f}, total=${total_f:.2f}")
+        log.info(f"Paper trading balance (strategy={trading_strategy or 'manual'}): available=${available_f:.2f}, total=${total_f:.2f}")
         return {"USDT": available_f, "total_usd": total_f}
     except (sqlite3.Error, psycopg2.Error) as e:
         log.error(f"Database error in get_account_balance: {e}", exc_info=True)

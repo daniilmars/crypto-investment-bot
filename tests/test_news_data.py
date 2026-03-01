@@ -16,7 +16,7 @@ class TestRSSFeedConfig:
     """Validates the RSS_FEEDS list structure and category distribution."""
 
     def test_total_feed_count(self):
-        assert len(RSS_FEEDS) == 55
+        assert len(RSS_FEEDS) == 69
 
     def test_all_feeds_have_required_keys(self):
         for feed in RSS_FEEDS:
@@ -60,7 +60,7 @@ class TestRSSFeedConfig:
 
     def test_ipo_feed_count(self):
         ipo_feeds = [f for f in RSS_FEEDS if f['category'] == 'ipo']
-        assert len(ipo_feeds) == 2
+        assert len(ipo_feeds) == 4
 
     def test_asia_feed_count(self):
         asia_feeds = [f for f in RSS_FEEDS if f['category'] == 'asia']
@@ -73,7 +73,8 @@ class TestRSSFeedConfig:
     def test_all_categories_present(self):
         categories = {f['category'] for f in RSS_FEEDS}
         expected = {'financial', 'european', 'crypto', 'tech', 'wire',
-                    'press_release', 'google_news', 'regulatory', 'sector', 'kol', 'ipo', 'asia'}
+                    'press_release', 'google_news', 'regulatory', 'sector', 'kol', 'ipo', 'asia',
+                    'ai', 'ai_research'}
         assert categories == expected
 
     def test_ipo_feeds_have_time_filter(self):

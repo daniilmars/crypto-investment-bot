@@ -269,6 +269,85 @@ def scrape_apnews():
     return articles or _generic_article_fallback(soup, 'AP News', 'https://apnews.com')
 
 
+def scrape_techcrunch_ai():
+    """Scrape TechCrunch AI category for AI industry headlines."""
+    soup = _fetch_page('https://techcrunch.com/category/artificial-intelligence/')
+    if not soup:
+        return []
+
+    articles = []
+    seen = set()
+    for tag in soup.select('a[href*="/2026/"], a[href*="/2025/"]'):
+        headline = tag.get_text(strip=True)
+        href = tag.get('href', '')
+        if not headline or len(headline) < 25 or len(headline) > 250:
+            continue
+        if headline.lower() in seen:
+            continue
+        seen.add(headline.lower())
+        url = href if href.startswith('http') else f'https://techcrunch.com{href}'
+        articles.append({
+            'title': headline,
+            'description': '',
+            'source': 'TechCrunch AI',
+            'source_url': url,
+            'category': 'ai',
+        })
+    return articles or _generic_article_fallback(soup, 'TechCrunch AI', 'https://techcrunch.com')
+
+
+def scrape_venturebeat_ai():
+    """Scrape VentureBeat AI category for AI industry headlines."""
+    soup = _fetch_page('https://venturebeat.com/category/ai/')
+    if not soup:
+        return []
+
+    articles = []
+    seen = set()
+    for tag in soup.select('h2 a, h3 a, a[href*="/ai/"]'):
+        headline = tag.get_text(strip=True)
+        href = tag.get('href', '')
+        if not headline or len(headline) < 25 or len(headline) > 250:
+            continue
+        if headline.lower() in seen:
+            continue
+        seen.add(headline.lower())
+        url = href if href.startswith('http') else f'https://venturebeat.com{href}'
+        articles.append({
+            'title': headline,
+            'description': '',
+            'source': 'VentureBeat AI',
+            'source_url': url,
+            'category': 'ai',
+        })
+    return articles or _generic_article_fallback(soup, 'VentureBeat AI', 'https://venturebeat.com')
+
+
+def scrape_the_information():
+    """Scrape The Information for AI/tech headlines (paywalled — headlines only)."""
+    soup = _fetch_page('https://www.theinformation.com/')
+    if not soup:
+        return []
+
+    articles = []
+    seen = set()
+    for tag in soup.select('h2, h3, [class*="headline"]'):
+        headline = tag.get_text(strip=True)
+        if not headline or len(headline) < 25 or len(headline) > 250:
+            continue
+        if headline.lower() in seen:
+            continue
+        seen.add(headline.lower())
+        articles.append({
+            'title': headline,
+            'description': '',
+            'source': 'The Information',
+            'source_url': 'https://www.theinformation.com/',
+            'category': 'ai',
+        })
+    return articles or _generic_article_fallback(soup, 'The Information', 'https://www.theinformation.com')
+
+
 ALL_SCRAPERS = [
     ('CoinDesk', scrape_coindesk),
     ('CoinTelegraph', scrape_cointelegraph),
@@ -279,6 +358,9 @@ ALL_SCRAPERS = [
     ('AP News', scrape_apnews),
     ('MarketWatch', scrape_marketwatch),
     ('Yahoo Finance', scrape_yahoo_finance),
+    ('TechCrunch AI', scrape_techcrunch_ai),
+    ('VentureBeat AI', scrape_venturebeat_ai),
+    ('The Information', scrape_the_information),
 ]
 
 

@@ -16,7 +16,9 @@ from telegram import Update
 
 from src.analysis.gemini_news_analyzer import (
     analyze_news_impact, analyze_news_with_search, analyze_position_health,
+    analyze_position_investment,
 )
+from src.analysis.news_velocity import compute_news_velocity
 from src.analysis.signal_engine import generate_signal
 from src.analysis.stock_signal_engine import generate_stock_signal
 from src.analysis.technical_indicators import calculate_rsi, calculate_sma
@@ -28,14 +30,23 @@ from src.collectors.alpha_vantage_data import (get_company_overview,
 from src.collectors.binance_data import get_current_price, get_all_prices
 from src.collectors.news_data import collect_news_sentiment
 from src.config import app_config
+from src.analysis.macro_regime import get_macro_regime, clear_regime_cache
+from src.analysis.sector_limits import check_sector_limit
+from src.analysis.event_calendar import (
+    check_event_gate, get_event_warnings_for_positions,
+)
 from src.database import (get_historical_prices, get_recent_articles,
-                          get_trade_history_stats, initialize_database,
+                          get_trade_history_stats, get_trade_summary,
+                          initialize_database,
                           load_trailing_stop_peaks, save_signal,
                           save_trailing_stop_peak,
                           save_stoploss_cooldown, load_stoploss_cooldowns,
-                          clear_stoploss_cooldown)
+                          clear_stoploss_cooldown,
+                          get_position_additions,
+                          save_macro_regime)
 from src.execution.binance_trader import (get_account_balance,
                                           get_open_positions, place_order,
+                                          add_to_position,
                                           _is_live_trading, _get_trading_mode)
 from src.execution.circuit_breaker import (check_circuit_breaker, get_daily_pnl,
                                            get_recent_closed_trades,
@@ -50,7 +61,8 @@ from src.notify.telegram_bot import (send_news_alert, send_position_health_alert
                                      send_signal_for_confirmation,
                                      is_confirmation_required,
                                      register_execute_callback,
-                                     cleanup_expired_signals)
+                                     cleanup_expired_signals,
+                                     send_auto_bot_summary)
 from src.state import bot_is_running
 
 # Initialize the database at the start of the application
@@ -75,10 +87,16 @@ _trailing_stop_peaks = {}
 # Key: symbol, Value: timestamp when cooldown expires
 _stoploss_cooldowns = {}
 
-# --- Position Health Check Cooldown ---
-# Prevents excessive Gemini calls for position monitoring.
-# Key: order_id, Value: datetime of last health check
-_health_check_last_run = {}
+# --- Position Analyst Cooldown ---
+# Prevents excessive Gemini calls for position analysis.
+# Key: order_id, Value: datetime of last analyst check
+_analyst_last_run = {}
+
+# --- Auto-Trading Shadow Bot State ---
+# Separate state dicts so auto-bot doesn't interfere with manual bot.
+_auto_trailing_stop_peaks = {}
+_auto_stoploss_cooldowns = {}
+_auto_analyst_last_run = {}
 
 
 def _update_trailing_stop(order_id: str, current_price: float) -> float:
@@ -99,6 +117,19 @@ def _update_trailing_stop(order_id: str, current_price: float) -> float:
 def _clear_trailing_stop(order_id: str):
     """Removes tracking data for a closed position."""
     _trailing_stop_peaks.pop(order_id, None)
+
+
+def _auto_update_trailing_stop(order_id: str, current_price: float) -> float:
+    """Updates and returns the peak price for an auto-bot position (not persisted to DB)."""
+    prev_peak = _auto_trailing_stop_peaks.get(order_id, current_price)
+    new_peak = max(prev_peak, current_price)
+    _auto_trailing_stop_peaks[order_id] = new_peak
+    return new_peak
+
+
+def _auto_clear_trailing_stop(order_id: str):
+    """Removes auto-bot tracking data for a closed position."""
+    _auto_trailing_stop_peaks.pop(order_id, None)
 
 
 async def execute_confirmed_signal(signal: dict) -> dict:
@@ -130,6 +161,12 @@ async def execute_confirmed_signal(signal: dict) -> dict:
                                            existing_order_id=position.get('order_id'),
                                            asset_type='stock')
                 _clear_trailing_stop(position.get('order_id', ''))
+                _analyst_last_run.pop(position.get('order_id', ''), None)
+            elif signal_type == "INCREASE" and position:
+                order_result = add_to_position(
+                    position.get('order_id'), symbol, quantity, current_price,
+                    reason=signal.get('reason', ''), asset_type=asset_type,
+                )
     else:
         # Crypto
         if signal_type == "BUY":
@@ -138,6 +175,12 @@ async def execute_confirmed_signal(signal: dict) -> dict:
             order_result = place_order(symbol, "SELL", quantity, current_price,
                                        existing_order_id=position.get('order_id'))
             _clear_trailing_stop(position.get('order_id', ''))
+            _analyst_last_run.pop(position.get('order_id', ''), None)
+        elif signal_type == "INCREASE" and position:
+            order_result = add_to_position(
+                position.get('order_id'), symbol, quantity, current_price,
+                reason=signal.get('reason', ''), asset_type=asset_type,
+            )
 
     return order_result or {}
 
@@ -190,6 +233,19 @@ async def run_bot_cycle():
         effective_risk_pct = trade_risk_percentage
         log.info(f"Using fixed position sizing: {effective_risk_pct:.4f} "
                  f"({trade_stats.get('total_trades', 0)} trades, need 10+ for Kelly)")
+
+    # --- Macro Regime Detection ---
+    macro_regime_result = get_macro_regime()
+    macro_multiplier = macro_regime_result['position_size_multiplier']
+    suppress_buys = macro_regime_result.get('suppress_buys', False)
+    log.info(f"Macro regime: {macro_regime_result['regime']} "
+             f"(mult={macro_multiplier}, suppress_buys={suppress_buys})")
+
+    # Save regime to DB and alert on change
+    try:
+        save_macro_regime(macro_regime_result)
+    except Exception as e:
+        log.warning(f"Failed to save macro regime: {e}")
 
     # 1. Collect news data
     log.info("Fetching data from all sources...")
@@ -281,10 +337,16 @@ async def run_bot_cycle():
 
     # Cache open positions once per cycle (avoid repeated DB queries)
     is_live = _is_live_trading()
-    _cached_crypto_positions = get_open_positions() if (paper_trading or is_live) else []
+    _cached_crypto_positions = get_open_positions(trading_strategy='manual') if (paper_trading or is_live) else []
+
+    # Auto-trading shadow bot setup
+    auto_cfg = settings.get('auto_trading', {})
+    auto_enabled = auto_cfg.get('enabled', False)
+    _cached_auto_positions = get_open_positions(trading_strategy='auto') if auto_enabled else []
 
     # Process each symbol in the watch list
     for symbol in watch_list:
+        signal = None  # reset per symbol; set below if signal generation runs
         log.info(f"--- Processing symbol: {symbol} ---")
 
         # Use batch price from all_binance_prices, fall back to individual call
@@ -331,7 +393,7 @@ async def run_bot_cycle():
                             place_order(symbol, "SELL", position['quantity'], current_price,
                                         existing_order_id=order_id)
                             _clear_trailing_stop(order_id)
-                            _health_check_last_run.pop(order_id, None)
+                            _analyst_last_run.pop(order_id, None)
                             await send_telegram_alert({"signal": "SELL", "symbol": symbol,
                                                        "current_price": current_price,
                                                        "reason": f"Trailing stop hit (peak ${peak_price:,.2f}, "
@@ -344,7 +406,7 @@ async def run_bot_cycle():
                         place_order(symbol, "SELL", position['quantity'], current_price,
                                     existing_order_id=order_id)
                         _clear_trailing_stop(order_id)
-                        _health_check_last_run.pop(order_id, None)
+                        _analyst_last_run.pop(order_id, None)
                         if stoploss_cooldown_hours > 0:
                             from datetime import datetime, timedelta, timezone
                             _stoploss_cooldowns[symbol] = datetime.now(timezone.utc) + timedelta(hours=stoploss_cooldown_hours)
@@ -359,7 +421,7 @@ async def run_bot_cycle():
                         place_order(symbol, "SELL", position['quantity'], current_price,
                                     existing_order_id=order_id)
                         _clear_trailing_stop(order_id)
-                        _health_check_last_run.pop(order_id, None)
+                        _analyst_last_run.pop(order_id, None)
                         await send_telegram_alert({"signal": "SELL", "symbol": symbol, "current_price": current_price,
                                                    "reason": f"Take-profit hit ({take_profit_percentage * 100:.2f}% gain)."})
 
@@ -381,8 +443,9 @@ async def run_bot_cycle():
         market_price_data['rsi'] = calculate_rsi(historical_prices, period=rsi_period)
         log.info(f"Technical Indicators for {symbol}: SMA={market_price_data['sma']}, RSI={market_price_data['rsi']}")
 
-        # --- Position Health Monitor (Gemini sub-bot) ---
-        # Runs after SMA/RSI are available so tech_data is populated
+        # --- Position Analyst (tri-state: HOLD / INCREASE / SELL) ---
+        # Replaces binary health monitor when position_analyst is enabled.
+        # Falls back to old position_monitor when position_analyst is disabled.
         if paper_trading or is_live:
             for position in _cached_crypto_positions:
                 if position['symbol'] == symbol and position['status'] == 'OPEN':
@@ -391,15 +454,150 @@ async def run_bot_cycle():
                     order_id = position['order_id']
                     mode_label = trading_mode.upper()
 
-                    pos_monitor_cfg = settings.get('position_monitor', {})
-                    if pos_monitor_cfg.get('enabled', False):
-                        # Health check cooldown — skip if checked recently
+                    analyst_cfg = settings.get('position_analyst', {})
+                    if analyst_cfg.get('enabled', False):
+                        from datetime import datetime, timezone
+                        now = datetime.now(timezone.utc)
+                        check_interval = analyst_cfg.get('check_interval_minutes', 30)
+                        last_check = _analyst_last_run.get(order_id)
+                        if last_check and (now - last_check).total_seconds() / 60 < check_interval:
+                            log.debug(f"[{symbol}] Skipping analyst — last run {(now - last_check).total_seconds() / 60:.0f}m ago")
+                        else:
+                          min_age_hours = analyst_cfg.get('min_position_age_hours', 2)
+                          entry_ts = position.get('entry_timestamp')
+                          if entry_ts:
+                            try:
+                                if isinstance(entry_ts, str):
+                                    entry_dt = datetime.fromisoformat(entry_ts.replace('Z', '+00:00'))
+                                else:
+                                    entry_dt = entry_ts
+                                if entry_dt.tzinfo is None:
+                                    entry_dt = entry_dt.replace(tzinfo=timezone.utc)
+                                age_hours = (now - entry_dt).total_seconds() / 3600
+                                if age_hours >= min_age_hours:
+                                    # 1. News velocity (cheap DB query — gates Gemini call)
+                                    velocity = compute_news_velocity(symbol)
+
+                                    # 2. Gate: skip Gemini if no news activity
+                                    if (velocity['articles_last_4h'] == 0
+                                            and not velocity['breaking_detected']
+                                            and velocity['sentiment_trend'] == 'stable'):
+                                        log.debug(f"[{symbol}] Position analyst: no news activity, default HOLD")
+                                        _analyst_last_run[order_id] = now
+                                    else:
+                                        # 3. Gather full article data + additions history
+                                        recent_articles = get_recent_articles(symbol, hours=48, limit=30)
+                                        additions = get_position_additions(order_id)
+
+                                        tech_data = {
+                                            'rsi': market_price_data['rsi'],
+                                            'sma': market_price_data['sma'],
+                                            'regime': 'unknown',
+                                        }
+                                        peak_price = _trailing_stop_peaks.get(order_id)
+                                        ts_info = None
+                                        if peak_price is not None:
+                                            ts_info = {
+                                                'peak_price': peak_price,
+                                                'trailing_active': pnl_percentage >= trailing_stop_activation,
+                                                'pnl_percentage': pnl_percentage,
+                                                'activation_threshold': trailing_stop_activation,
+                                            }
+
+                                        max_mult = analyst_cfg.get('max_position_multiplier', 3.0)
+
+                                        # 4. Call Gemini analyst
+                                        result = analyze_position_investment(
+                                            position, current_price, recent_articles, tech_data,
+                                            velocity, hours_held=age_hours,
+                                            trailing_stop_info=ts_info,
+                                            position_additions=additions,
+                                            max_position_multiplier=max_mult,
+                                        )
+                                        _analyst_last_run[order_id] = now
+
+                                        if result:
+                                            rec = result.get('recommendation', 'hold')
+                                            confidence = result.get('confidence', 0)
+                                            reasoning = result.get('reasoning', '')
+                                            risk_level = result.get('risk_level', 'green')
+
+                                            if rec == 'increase' and confidence >= analyst_cfg.get('increase_confidence_threshold', 0.75):
+                                                # Size the addition based on hint
+                                                hint = result.get('increase_sizing_hint', 'small')
+                                                hint_fractions = {'small': 0.25, 'medium': 0.50, 'large': 0.75}
+                                                fraction = hint_fractions.get(hint, 0.25)
+                                                original_value = entry_price * position['quantity']
+                                                # Subtract already-added value
+                                                total_added = sum(a.get('addition_price', 0) * a.get('addition_quantity', 0) for a in additions)
+                                                estimated_original = original_value - total_added if total_added < original_value else original_value
+                                                add_value = estimated_original * fraction
+                                                add_qty = add_value / current_price if current_price > 0 else 0
+
+                                                # Check position multiplier cap
+                                                new_total_value = original_value + add_value
+                                                current_mult = new_total_value / estimated_original if estimated_original > 0 else 999
+                                                if current_mult > max_mult:
+                                                    log.info(f"[{symbol}] INCREASE blocked: would exceed {max_mult}x cap")
+                                                else:
+                                                    # Balance check
+                                                    balance = get_account_balance(asset_type='crypto')
+                                                    available = balance.get('USDT', 0)
+                                                    if add_value > available:
+                                                        log.info(f"[{symbol}] INCREASE blocked: need ${add_value:.2f} but only ${available:.2f} available")
+                                                    elif is_confirmation_required("INCREASE"):
+                                                        await send_signal_for_confirmation({
+                                                            'signal': 'INCREASE', 'symbol': symbol,
+                                                            'current_price': current_price,
+                                                            'quantity': add_qty,
+                                                            'reason': reasoning,
+                                                            'asset_type': 'crypto',
+                                                            'position': position,
+                                                        })
+                                                    else:
+                                                        add_to_position(order_id, symbol, add_qty, current_price,
+                                                                        reason=reasoning, asset_type='crypto')
+
+                                            elif rec == 'sell' and confidence >= analyst_cfg.get('exit_confidence_threshold', 0.8):
+                                                if is_confirmation_required("SELL"):
+                                                    await send_signal_for_confirmation({
+                                                        'signal': 'SELL', 'symbol': symbol,
+                                                        'current_price': current_price,
+                                                        'quantity': position['quantity'],
+                                                        'reason': reasoning,
+                                                        'asset_type': 'crypto',
+                                                        'position': position,
+                                                    })
+                                                else:
+                                                    place_order(symbol, "SELL", position['quantity'], current_price,
+                                                                existing_order_id=order_id)
+                                                    _clear_trailing_stop(order_id)
+                                                    _analyst_last_run.pop(order_id, None)
+                                                    await send_telegram_alert({
+                                                        "signal": "SELL", "symbol": symbol,
+                                                        "current_price": current_price,
+                                                        "reason": f"Position analyst sell ({confidence:.0%}): {reasoning}"
+                                                    })
+
+                                            else:
+                                                # HOLD — log, optionally alert if risk is elevated
+                                                log.info(f"[{symbol}] Position analyst: {rec} (confidence={confidence:.2f}, risk={risk_level})")
+                                                if risk_level in ('yellow', 'red'):
+                                                    await send_position_health_alert(
+                                                        symbol, current_price, pnl_percentage * 100, result, position
+                                                    )
+                            except Exception as e:
+                                log.warning(f"Position analyst error for {symbol}: {e}")
+
+                    # Fallback: old position_monitor when position_analyst is disabled
+                    elif settings.get('position_monitor', {}).get('enabled', False):
+                        pos_monitor_cfg = settings.get('position_monitor', {})
                         check_interval = pos_monitor_cfg.get('check_interval_minutes', 60)
                         from datetime import datetime, timezone
                         now = datetime.now(timezone.utc)
-                        last_check = _health_check_last_run.get(order_id)
+                        last_check = _analyst_last_run.get(order_id)
                         if last_check and (now - last_check).total_seconds() / 60 < check_interval:
-                            log.debug(f"[{symbol}] Skipping health check — last run {(now - last_check).total_seconds() / 60:.0f}m ago")
+                            pass
                         else:
                           min_age_hours = pos_monitor_cfg.get('min_position_age_hours', 4)
                           entry_ts = position.get('entry_timestamp')
@@ -413,7 +611,6 @@ async def run_bot_cycle():
                                     entry_dt = entry_dt.replace(tzinfo=timezone.utc)
                                 age_hours = (now - entry_dt).total_seconds() / 3600
                                 if age_hours >= min_age_hours:
-                                    # Gather headlines for this symbol
                                     pos_headlines = []
                                     sym_news = news_per_symbol.get(symbol, {})
                                     if sym_news:
@@ -423,13 +620,11 @@ async def run_bot_cycle():
                                         pos_headlines.extend([a.get('title', '') for a in archived[:5]])
                                     except Exception:
                                         pass
-
                                     tech_data = {
                                         'rsi': market_price_data['rsi'],
                                         'sma': market_price_data['sma'],
                                         'regime': 'unknown',
                                     }
-                                    # Build trailing stop context for Gemini
                                     peak_price = _trailing_stop_peaks.get(order_id)
                                     ts_info = None
                                     if peak_price is not None:
@@ -441,33 +636,26 @@ async def run_bot_cycle():
                                         }
                                     health = analyze_position_health(
                                         position, current_price, pos_headlines, tech_data,
-                                        hours_held=age_hours,
-                                        trailing_stop_info=ts_info,
+                                        hours_held=age_hours, trailing_stop_info=ts_info,
                                     )
-                                    _health_check_last_run[order_id] = now
+                                    _analyst_last_run[order_id] = now
                                     if health:
                                         exit_threshold = pos_monitor_cfg.get('exit_confidence_threshold', 0.8)
                                         if health.get('recommendation') == 'exit' and health.get('confidence', 0) >= exit_threshold:
-                                            if pos_monitor_cfg.get('auto_exit', False):
-                                                log.info(f"[{mode_label}] Position monitor auto-exiting {symbol}.")
-                                                place_order(symbol, "SELL", position['quantity'], current_price,
-                                                            existing_order_id=order_id)
-                                                _clear_trailing_stop(order_id)
-                                                _health_check_last_run.pop(order_id, None)
-                                                await send_telegram_alert({
-                                                    "signal": "SELL", "symbol": symbol,
-                                                    "current_price": current_price,
-                                                    "reason": f"Position monitor exit (confidence {health.get('confidence', 0):.0%}): {health.get('reasoning', '')}"
-                                                })
-                                            else:
-                                                await send_position_health_alert(
-                                                    symbol, current_price, pnl_percentage * 100, health, position
-                                                )
-                                        elif health.get('recommendation') == 'exit':
-                                            log.info(f"[{symbol}] Position monitor suggests exit but confidence "
-                                                     f"{health.get('confidence', 0):.2f} < threshold {exit_threshold}")
+                                            await send_position_health_alert(
+                                                symbol, current_price, pnl_percentage * 100, health, position
+                                            )
                             except Exception as e:
                                 log.warning(f"Position monitor error for {symbol}: {e}")
+
+        # Skip signal generation for symbols with open positions —
+        # position monitor above handles all exits (SL/TP/trailing/health)
+        if (paper_trading or is_live) and any(
+            p['symbol'] == symbol and p['status'] == 'OPEN'
+            for p in _cached_crypto_positions
+        ):
+            log.debug(f"Skipping signal generation for {symbol}: position open (managed by position monitor).")
+            continue
 
         # 3. Generate a signal
         log.info(f"Generating signal for {symbol}...")
@@ -545,29 +733,49 @@ async def run_bot_cycle():
                     clear_stoploss_cooldown(symbol)
 
             if signal['signal'] == "BUY":
-                if any(p['symbol'] == symbol and p['status'] == 'OPEN' for p in open_positions):
+                # --- Pre-trade gates: macro regime ---
+                if suppress_buys:
+                    log.info(f"Skipping BUY for {symbol}: Macro regime RISK_OFF (suppress_buys).")
+                    signal['signal'] = 'HOLD'
+                elif any(p['symbol'] == symbol and p['status'] == 'OPEN' for p in open_positions):
                     log.info(f"Skipping BUY for {symbol}: Position already open.")
                 elif len(open_positions) >= active_max_positions:
                     log.info(
                         f"Skipping BUY for {symbol}: Max concurrent positions ({active_max_positions}) reached.")
                 else:
-                    capital_to_risk = current_balance * effective_risk_pct
-                    quantity_to_buy = capital_to_risk / current_price
-                    if quantity_to_buy * current_price > current_balance:
-                        log.warning(f"Skipping BUY for {symbol}: Insufficient balance.")
+                    # --- Pre-trade gates: sector limit ---
+                    sector_allowed, sector_reason = check_sector_limit(symbol, open_positions)
+                    if not sector_allowed:
+                        log.info(f"Skipping BUY for {symbol}: {sector_reason}")
                     else:
-                        signal['quantity'] = quantity_to_buy
-                        signal['asset_type'] = 'crypto'
-                        if is_confirmation_required("BUY"):
-                            log.info(f"Sending BUY {symbol} for confirmation (qty={quantity_to_buy:.6f}).")
-                            await send_signal_for_confirmation(signal)
+                        # --- Pre-trade gates: event calendar ---
+                        event_action, event_mult, event_reason = check_event_gate(
+                            symbol, 'BUY', asset_type='crypto')
+                        if event_action == 'block':
+                            log.info(f"Skipping BUY for {symbol}: {event_reason}")
+                            signal['signal'] = 'HOLD'
                         else:
-                            log.info(f"Executing {trading_mode} trade: BUY {quantity_to_buy:.6f} {symbol} "
-                                     f"(risk={effective_risk_pct:.4f}).")
-                            order_result = place_order(symbol, "BUY", quantity_to_buy, current_price)
-                            if order_result.get('status') == 'FILLED':
-                                signal['order_result'] = order_result
-                            await send_telegram_alert(signal)
+                            # Apply macro + event multipliers to position sizing
+                            size_mult = macro_multiplier * (event_mult if event_action == 'reduce' else 1.0)
+                            if event_action == 'reduce':
+                                log.info(f"Reducing BUY for {symbol}: {event_reason} (mult={event_mult})")
+                            capital_to_risk = current_balance * effective_risk_pct * size_mult
+                            quantity_to_buy = capital_to_risk / current_price
+                            if quantity_to_buy * current_price > current_balance:
+                                log.warning(f"Skipping BUY for {symbol}: Insufficient balance.")
+                            else:
+                                signal['quantity'] = quantity_to_buy
+                                signal['asset_type'] = 'crypto'
+                                if is_confirmation_required("BUY"):
+                                    log.info(f"Sending BUY {symbol} for confirmation (qty={quantity_to_buy:.6f}).")
+                                    await send_signal_for_confirmation(signal)
+                                else:
+                                    log.info(f"Executing {trading_mode} trade: BUY {quantity_to_buy:.6f} {symbol} "
+                                             f"(risk={effective_risk_pct:.4f}, size_mult={size_mult:.2f}).")
+                                    order_result = place_order(symbol, "BUY", quantity_to_buy, current_price)
+                                    if order_result.get('status') == 'FILLED':
+                                        signal['order_result'] = order_result
+                                    await send_telegram_alert(signal)
 
             elif signal['signal'] == "SELL":
                 position_to_close = next(
@@ -592,17 +800,126 @@ async def run_bot_cycle():
             else:  # HOLD
                 log.info(f"Signal is HOLD for {symbol}. No trade action taken.")
 
+        # --- Auto-Trading Shadow Bot: Position Monitoring ---
+        if auto_enabled:
+            for position in _cached_auto_positions:
+                if position['symbol'] == symbol and position['status'] == 'OPEN':
+                    entry_price = position['entry_price']
+                    pnl_percentage = (current_price - entry_price) / entry_price
+                    order_id = position['order_id']
+
+                    peak_price = _auto_update_trailing_stop(order_id, current_price)
+                    drawdown_from_peak = (peak_price - current_price) / peak_price if peak_price > 0 else 0
+
+                    # Trailing stop
+                    if trailing_stop_enabled and pnl_percentage >= trailing_stop_activation:
+                        if drawdown_from_peak >= trailing_stop_distance:
+                            log.info(f"[AUTO] Trailing stop triggered for {symbol}. "
+                                     f"Peak: ${peak_price:,.2f}, Current: ${current_price:,.2f}")
+                            place_order(symbol, "SELL", position['quantity'], current_price,
+                                        existing_order_id=order_id, trading_strategy='auto')
+                            _auto_clear_trailing_stop(order_id)
+                            _auto_analyst_last_run.pop(order_id, None)
+                            continue
+
+                    # Fixed stop-loss
+                    if pnl_percentage <= -stop_loss_percentage:
+                        log.info(f"[AUTO] Stop-loss hit for {symbol}. Closing position.")
+                        place_order(symbol, "SELL", position['quantity'], current_price,
+                                    existing_order_id=order_id, trading_strategy='auto')
+                        _auto_clear_trailing_stop(order_id)
+                        _auto_analyst_last_run.pop(order_id, None)
+                        if stoploss_cooldown_hours > 0:
+                            from datetime import datetime, timedelta, timezone
+                            _auto_stoploss_cooldowns[symbol] = datetime.now(timezone.utc) + timedelta(hours=stoploss_cooldown_hours)
+
+                    # Take profit
+                    elif pnl_percentage >= take_profit_percentage:
+                        log.info(f"[AUTO] Take-profit hit for {symbol}. Closing position.")
+                        place_order(symbol, "SELL", position['quantity'], current_price,
+                                    existing_order_id=order_id, trading_strategy='auto')
+                        _auto_clear_trailing_stop(order_id)
+                        _auto_analyst_last_run.pop(order_id, None)
+
+        # --- Auto-Trading Shadow Bot: Signal Execution ---
+        # `signal` is only set when signal generation ran (i.e., no open manual position for this symbol)
+        if auto_enabled and bot_is_running.is_set() and signal is not None:
+            auto_open_crypto = [p for p in _cached_auto_positions
+                                if p.get('asset_type', 'crypto') == 'crypto' and p['status'] == 'OPEN']
+            auto_max = auto_cfg.get('max_concurrent_positions', max_concurrent_positions)
+
+            # Auto-bot cooldown check
+            auto_signal_type = signal.get('signal', 'HOLD')
+            if auto_signal_type in ("BUY", "SELL") and symbol in _auto_stoploss_cooldowns:
+                from datetime import datetime, timezone
+                if datetime.now(timezone.utc) < _auto_stoploss_cooldowns[symbol]:
+                    auto_signal_type = 'HOLD'
+                else:
+                    del _auto_stoploss_cooldowns[symbol]
+
+            if auto_signal_type == "BUY":
+                if suppress_buys:
+                    log.info(f"[AUTO] Skipping BUY for {symbol}: Macro regime RISK_OFF.")
+                elif not any(p['symbol'] == symbol and p['status'] == 'OPEN' for p in auto_open_crypto):
+                    if len(auto_open_crypto) < auto_max:
+                        sector_ok, sector_msg = check_sector_limit(symbol, auto_open_crypto, 'auto')
+                        if not sector_ok:
+                            log.info(f"[AUTO] Skipping BUY for {symbol}: {sector_msg}")
+                        else:
+                            ev_action, ev_mult, ev_reason = check_event_gate(
+                                symbol, 'BUY', asset_type='crypto')
+                            if ev_action == 'block':
+                                log.info(f"[AUTO] Skipping BUY for {symbol}: {ev_reason}")
+                            else:
+                                size_mult = macro_multiplier * (ev_mult if ev_action == 'reduce' else 1.0)
+                                auto_balance = get_account_balance(asset_type='crypto', trading_strategy='auto')
+                                auto_available = auto_balance.get('USDT', 0)
+                                capital_to_risk = auto_available * effective_risk_pct * size_mult
+                                qty = capital_to_risk / current_price if current_price > 0 else 0
+                                if qty > 0 and qty * current_price <= auto_available:
+                                    log.info(f"[AUTO] Executing BUY {qty:.6f} {symbol} (size_mult={size_mult:.2f})")
+                                    place_order(symbol, "BUY", qty, current_price, trading_strategy='auto')
+                                else:
+                                    log.info(f"[AUTO] Insufficient balance for BUY {symbol}")
+
+            elif auto_signal_type == "SELL":
+                auto_pos = next((p for p in auto_open_crypto
+                                 if p['symbol'] == symbol and p['status'] == 'OPEN'), None)
+                if auto_pos:
+                    log.info(f"[AUTO] Executing SELL {auto_pos['quantity']:.6f} {symbol}")
+                    place_order(symbol, "SELL", auto_pos['quantity'], current_price,
+                                existing_order_id=auto_pos['order_id'], trading_strategy='auto')
+                    _auto_clear_trailing_stop(auto_pos['order_id'])
+
+    # --- Event warnings for open positions ---
+    try:
+        all_open = open_positions + (auto_open_crypto if auto_enabled else [])
+        event_warnings = get_event_warnings_for_positions(all_open)
+        for warn in event_warnings:
+            log.info(f"Event warning: {warn['symbol']} — {warn['event_type']} in {warn['hours_until']:.0f}h")
+            await send_telegram_alert({
+                'signal': 'INFO', 'symbol': warn['symbol'],
+                'current_price': 0,
+                'reason': f"Upcoming {warn['event_type']} in {warn['hours_until']:.0f}h — "
+                          f"consider reducing exposure.",
+            })
+    except Exception as e:
+        log.warning(f"Event warnings failed: {e}")
+
     # --- Run Stock Trading Cycle ---
     await run_stock_cycle(settings, news_per_symbol=news_per_symbol,
                           news_config=news_config,
                           gemini_assessments=gemini_assessments,
                           signal_mode=signal_mode,
-                          sentiment_config=sentiment_config)
+                          sentiment_config=sentiment_config,
+                          macro_multiplier=macro_multiplier,
+                          suppress_buys=suppress_buys)
 
 
 async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                           gemini_assessments=None, signal_mode="scoring",
-                          sentiment_config=None):
+                          sentiment_config=None,
+                          macro_multiplier=1.0, suppress_buys=False):
     """
     Executes one cycle of stock trading analysis for all configured stock symbols.
     """
@@ -614,6 +931,27 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
     if not stock_settings.get('enabled', False):
         log.info("Stock trading is disabled. Skipping stock cycle.")
         return
+
+    # IPO watchlist promotion: auto-add recently listed tickers
+    ipo_cfg = settings.get('ipo_tracking', {})
+    if ipo_cfg.get('enabled', False) and ipo_cfg.get('auto_add_to_watchlist', True):
+        try:
+            from src.collectors.ipo_watchlist_promoter import promote_new_listings
+            new_tickers = promote_new_listings(settings)
+            if new_tickers:
+                log.info(f"[IPO] Promoted {len(new_tickers)} new tickers to watchlist: {new_tickers}")
+                for ticker in new_tickers:
+                    try:
+                        await send_telegram_alert({
+                            'signal': 'INFO',
+                            'symbol': ticker,
+                            'current_price': 0,
+                            'reason': f'IPO Watchlist Update: Added {ticker} to stock watchlist. Now being tracked for signals.',
+                        })
+                    except Exception:
+                        pass
+        except Exception as e:
+            log.warning(f"[IPO] Watchlist promotion failed: {e}")
 
     watch_list = stock_settings.get('watch_list', [])
     if not watch_list:
@@ -658,9 +996,16 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
     stock_batch_daily = get_batch_daily_prices(watch_list) if not use_alpaca_data else {}
 
     # Cache open stock positions once per cycle
-    _cached_stock_positions = get_open_positions(asset_type='stock') if paper_trading else []
+    _cached_stock_positions = get_open_positions(asset_type='stock', trading_strategy='manual') if paper_trading else []
+    _cached_alpaca_positions = get_stock_positions() if broker == 'alpaca' else []
+
+    # Auto-trading shadow bot for stocks
+    auto_cfg = settings.get('auto_trading', {})
+    auto_enabled = auto_cfg.get('enabled', False)
+    _cached_auto_stock_positions = get_open_positions(asset_type='stock', trading_strategy='auto') if auto_enabled else []
 
     for symbol in watch_list:
+        signal = None  # reset per symbol; set below if signal generation runs
         log.info(f"--- Processing stock: {symbol} ---")
 
         # Use batch price first, fall back to per-symbol call
@@ -696,7 +1041,7 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                             place_order(symbol, "SELL", position['quantity'], current_price,
                                         existing_order_id=order_id, asset_type='stock')
                             _clear_trailing_stop(order_id)
-                            _health_check_last_run.pop(order_id, None)
+                            _analyst_last_run.pop(order_id, None)
                             await send_telegram_alert({"signal": "SELL", "symbol": symbol,
                                                        "current_price": current_price, "asset_type": "stock",
                                                        "reason": f"Trailing stop hit (peak ${peak_price:,.2f}, "
@@ -708,7 +1053,7 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                         place_order(symbol, "SELL", position['quantity'], current_price,
                                     existing_order_id=order_id, asset_type='stock')
                         _clear_trailing_stop(order_id)
-                        _health_check_last_run.pop(order_id, None)
+                        _analyst_last_run.pop(order_id, None)
                         if stoploss_cooldown_hours > 0:
                             from datetime import datetime, timedelta, timezone
                             _stoploss_cooldowns[symbol] = datetime.now(timezone.utc) + timedelta(hours=stoploss_cooldown_hours)
@@ -722,22 +1067,138 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                         place_order(symbol, "SELL", position['quantity'], current_price,
                                     existing_order_id=order_id, asset_type='stock')
                         _clear_trailing_stop(order_id)
-                        _health_check_last_run.pop(order_id, None)
+                        _analyst_last_run.pop(order_id, None)
                         await send_telegram_alert({"signal": "SELL", "symbol": symbol,
                                                    "current_price": current_price, "asset_type": "stock",
                                                    "reason": f"Take-profit hit ({take_profit_percentage * 100:.2f}% gain)."})
 
-                    # --- Stock Position Health Monitor (Gemini sub-bot) ---
+                    # --- Stock Position Analyst (tri-state: HOLD / INCREASE / SELL) ---
                     else:
-                        pos_monitor_cfg = settings.get('position_monitor', {})
-                        if pos_monitor_cfg.get('enabled', False):
-                            # Health check cooldown
+                        analyst_cfg = settings.get('position_analyst', {})
+                        if analyst_cfg.get('enabled', False):
+                            from datetime import datetime, timezone
+                            now = datetime.now(timezone.utc)
+                            check_interval = analyst_cfg.get('check_interval_minutes', 30)
+                            last_check = _analyst_last_run.get(order_id)
+                            if last_check and (now - last_check).total_seconds() / 60 < check_interval:
+                                pass
+                            else:
+                              min_age_hours = analyst_cfg.get('min_position_age_hours', 2)
+                              entry_ts = position.get('entry_timestamp')
+                              if entry_ts:
+                                try:
+                                    if isinstance(entry_ts, str):
+                                        entry_dt = datetime.fromisoformat(entry_ts.replace('Z', '+00:00'))
+                                    else:
+                                        entry_dt = entry_ts
+                                    if entry_dt.tzinfo is None:
+                                        entry_dt = entry_dt.replace(tzinfo=timezone.utc)
+                                    age_hours = (now - entry_dt).total_seconds() / 3600
+                                    if age_hours >= min_age_hours:
+                                        velocity = compute_news_velocity(symbol)
+                                        if (velocity['articles_last_4h'] == 0
+                                                and not velocity['breaking_detected']
+                                                and velocity['sentiment_trend'] == 'stable'):
+                                            log.debug(f"[{symbol}] Stock analyst: no news, default HOLD")
+                                            _analyst_last_run[order_id] = now
+                                        else:
+                                            recent_articles = get_recent_articles(symbol, hours=48, limit=30)
+                                            additions = get_position_additions(order_id)
+                                            tech_data = {'rsi': None, 'sma': None, 'regime': 'unknown'}
+                                            peak_price = _trailing_stop_peaks.get(order_id)
+                                            ts_info = None
+                                            if peak_price is not None:
+                                                ts_info = {
+                                                    'peak_price': peak_price,
+                                                    'trailing_active': pnl_percentage >= trailing_stop_activation,
+                                                    'pnl_percentage': pnl_percentage,
+                                                    'activation_threshold': trailing_stop_activation,
+                                                }
+                                            max_mult = analyst_cfg.get('max_position_multiplier', 3.0)
+                                            result = analyze_position_investment(
+                                                position, current_price, recent_articles, tech_data,
+                                                velocity, hours_held=age_hours,
+                                                trailing_stop_info=ts_info,
+                                                position_additions=additions,
+                                                max_position_multiplier=max_mult,
+                                            )
+                                            _analyst_last_run[order_id] = now
+                                            if result:
+                                                rec = result.get('recommendation', 'hold')
+                                                confidence = result.get('confidence', 0)
+                                                reasoning = result.get('reasoning', '')
+                                                risk_level = result.get('risk_level', 'green')
+
+                                                if rec == 'increase' and confidence >= analyst_cfg.get('increase_confidence_threshold', 0.75):
+                                                    hint = result.get('increase_sizing_hint', 'small')
+                                                    hint_fractions = {'small': 0.25, 'medium': 0.50, 'large': 0.75}
+                                                    fraction = hint_fractions.get(hint, 0.25)
+                                                    original_value = entry_price * position['quantity']
+                                                    total_added = sum(a.get('addition_price', 0) * a.get('addition_quantity', 0) for a in additions)
+                                                    estimated_original = original_value - total_added if total_added < original_value else original_value
+                                                    add_value = estimated_original * fraction
+                                                    add_qty = add_value / current_price if current_price > 0 else 0
+
+                                                    new_total_value = original_value + add_value
+                                                    current_mult = new_total_value / estimated_original if estimated_original > 0 else 999
+                                                    if current_mult > max_mult:
+                                                        log.info(f"[{symbol}] Stock INCREASE blocked: would exceed {max_mult}x cap")
+                                                    else:
+                                                        balance = get_account_balance(asset_type='stock')
+                                                        available = balance.get('USDT', 0)
+                                                        if add_value > available:
+                                                            log.info(f"[{symbol}] Stock INCREASE blocked: need ${add_value:.2f} but only ${available:.2f}")
+                                                        elif is_confirmation_required("INCREASE"):
+                                                            await send_signal_for_confirmation({
+                                                                'signal': 'INCREASE', 'symbol': symbol,
+                                                                'current_price': current_price,
+                                                                'quantity': add_qty,
+                                                                'reason': reasoning,
+                                                                'asset_type': 'stock',
+                                                                'position': position,
+                                                            })
+                                                        else:
+                                                            add_to_position(order_id, symbol, add_qty, current_price,
+                                                                            reason=reasoning, asset_type='stock')
+
+                                                elif rec == 'sell' and confidence >= analyst_cfg.get('exit_confidence_threshold', 0.8):
+                                                    if is_confirmation_required("SELL"):
+                                                        await send_signal_for_confirmation({
+                                                            'signal': 'SELL', 'symbol': symbol,
+                                                            'current_price': current_price,
+                                                            'quantity': position['quantity'],
+                                                            'reason': reasoning,
+                                                            'asset_type': 'stock',
+                                                            'position': position,
+                                                        })
+                                                    else:
+                                                        place_order(symbol, "SELL", position['quantity'], current_price,
+                                                                    existing_order_id=order_id, asset_type='stock')
+                                                        _clear_trailing_stop(order_id)
+                                                        _analyst_last_run.pop(order_id, None)
+                                                        await send_telegram_alert({
+                                                            "signal": "SELL", "symbol": symbol,
+                                                            "current_price": current_price, "asset_type": "stock",
+                                                            "reason": f"Position analyst sell ({confidence:.0%}): {reasoning}"
+                                                        })
+                                                else:
+                                                    log.info(f"[{symbol}] Stock analyst: {rec} (confidence={confidence:.2f}, risk={risk_level})")
+                                                    if risk_level in ('yellow', 'red'):
+                                                        await send_position_health_alert(
+                                                            symbol, current_price, pnl_percentage * 100, result, position
+                                                        )
+                                except Exception as e:
+                                    log.warning(f"Stock position analyst error for {symbol}: {e}")
+
+                        # Fallback: old position_monitor
+                        elif settings.get('position_monitor', {}).get('enabled', False):
+                            pos_monitor_cfg = settings.get('position_monitor', {})
                             check_interval = pos_monitor_cfg.get('check_interval_minutes', 60)
                             from datetime import datetime, timezone
                             now = datetime.now(timezone.utc)
-                            last_check = _health_check_last_run.get(order_id)
+                            last_check = _analyst_last_run.get(order_id)
                             if last_check and (now - last_check).total_seconds() / 60 < check_interval:
-                                log.debug(f"[{symbol}] Skipping stock health check — last run {(now - last_check).total_seconds() / 60:.0f}m ago")
+                                pass
                             else:
                               min_age_hours = pos_monitor_cfg.get('min_position_age_hours', 4)
                               entry_ts = position.get('entry_timestamp')
@@ -761,7 +1222,6 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                                         except Exception:
                                             pass
                                         tech_data = {'rsi': None, 'sma': None, 'regime': 'unknown'}
-                                        # Build trailing stop context for Gemini
                                         peak_price = _trailing_stop_peaks.get(order_id)
                                         ts_info = None
                                         if peak_price is not None:
@@ -773,33 +1233,35 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                                             }
                                         health = analyze_position_health(
                                             position, current_price, pos_headlines, tech_data,
-                                            hours_held=age_hours,
-                                            trailing_stop_info=ts_info,
+                                            hours_held=age_hours, trailing_stop_info=ts_info,
                                         )
-                                        _health_check_last_run[order_id] = now
+                                        _analyst_last_run[order_id] = now
                                         if health:
                                             exit_threshold = pos_monitor_cfg.get('exit_confidence_threshold', 0.8)
                                             if health.get('recommendation') == 'exit' and health.get('confidence', 0) >= exit_threshold:
-                                                if pos_monitor_cfg.get('auto_exit', False):
-                                                    log.info(f"[PAPER TRADE] Position monitor auto-exiting stock {symbol}.")
-                                                    place_order(symbol, "SELL", position['quantity'], current_price,
-                                                                existing_order_id=order_id, asset_type='stock')
-                                                    _clear_trailing_stop(order_id)
-                                                    await send_telegram_alert({
-                                                        "signal": "SELL", "symbol": symbol,
-                                                        "current_price": current_price, "asset_type": "stock",
-                                                        "reason": f"Position monitor exit (confidence {health.get('confidence', 0):.0%}): {health.get('reasoning', '')}"
-                                                    })
-                                                else:
-                                                    await send_position_health_alert(
-                                                        symbol, current_price, pnl_percentage * 100, health, position
-                                                    )
+                                                await send_position_health_alert(
+                                                    symbol, current_price, pnl_percentage * 100, health, position
+                                                )
                                 except Exception as e:
                                     log.warning(f"Stock position monitor error for {symbol}: {e}")
 
         # --- Pause Check ---
         if not bot_is_running.is_set():
             log.info("Bot is paused. Skipping new stock signal generation.")
+            continue
+
+        # Skip signal generation for stocks with open positions —
+        # position monitor above handles all exits (SL/TP/trailing/health)
+        if paper_trading and any(
+            p['symbol'] == symbol and p['status'] == 'OPEN'
+            for p in _cached_stock_positions
+        ):
+            log.debug(f"Skipping signal generation for stock {symbol}: paper position open.")
+            continue
+        if broker == 'alpaca' and any(
+            p['symbol'] == symbol for p in _cached_alpaca_positions
+        ):
+            log.debug(f"Skipping signal generation for stock {symbol}: Alpaca position open.")
             continue
 
         # Fetch daily prices for technical analysis (batch or per-symbol fallback)
@@ -897,37 +1359,50 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
         # --- Trade Execution (broker-aware) ---
         if broker == 'alpaca':
             # Use Alpaca for real/paper execution
-            alpaca_positions = get_stock_positions()
+            alpaca_positions = _cached_alpaca_positions
             pdt_status = _check_pdt_rule()
 
             if signal['signal'] == "BUY":
-                if any(p['symbol'] == symbol for p in alpaca_positions):
+                if suppress_buys:
+                    log.info(f"Skipping BUY for stock {symbol}: Macro regime RISK_OFF.")
+                    signal['signal'] = 'HOLD'
+                elif any(p['symbol'] == symbol for p in alpaca_positions):
                     log.info(f"Skipping BUY for stock {symbol}: Position already open on Alpaca.")
                 elif len(alpaca_positions) >= max_concurrent_positions:
                     log.info(f"Skipping BUY for stock {symbol}: Max concurrent positions reached.")
                 elif pdt_status['is_restricted']:
                     log.info(f"Skipping BUY for stock {symbol}: PDT rule — no day trades remaining.")
                 else:
-                    balance = get_stock_balance()
-                    buying_power = balance.get('buying_power', 0)
-                    stock_trade_stats = get_trade_history_stats()
-                    stock_kelly = stock_trade_stats.get('kelly_fraction', 0.0)
-                    stock_risk_pct = stock_kelly if (stock_kelly > 0 and stock_trade_stats.get('total_trades', 0) >= 10) else trade_risk_percentage
-                    capital_to_risk = buying_power * stock_risk_pct
-                    quantity_to_buy = capital_to_risk / current_price
-                    if quantity_to_buy * current_price > buying_power:
-                        log.warning(f"Skipping BUY for stock {symbol}: Insufficient buying power.")
+                    sector_ok, sector_msg = check_sector_limit(symbol, alpaca_positions)
+                    if not sector_ok:
+                        log.info(f"Skipping BUY for stock {symbol}: {sector_msg}")
                     else:
-                        signal['quantity'] = quantity_to_buy
-                        if is_confirmation_required("BUY"):
-                            log.info(f"Sending BUY {symbol} (Alpaca) for confirmation.")
-                            await send_signal_for_confirmation(signal)
+                        ev_action, ev_mult, ev_reason = check_event_gate(symbol, 'BUY', asset_type='stock')
+                        if ev_action == 'block':
+                            log.info(f"Skipping BUY for stock {symbol}: {ev_reason}")
+                            signal['signal'] = 'HOLD'
                         else:
-                            log.info(f"Executing Alpaca trade: BUY {quantity_to_buy:.4f} {symbol}.")
-                            order_result = place_stock_order(symbol, "BUY", quantity_to_buy, current_price)
-                            if order_result.get('status') == 'FILLED':
-                                signal['order_result'] = order_result
-                            await send_telegram_alert(signal)
+                            size_mult = macro_multiplier * (ev_mult if ev_action == 'reduce' else 1.0)
+                            balance = get_stock_balance()
+                            buying_power = balance.get('buying_power', 0)
+                            stock_trade_stats = get_trade_history_stats()
+                            stock_kelly = stock_trade_stats.get('kelly_fraction', 0.0)
+                            stock_risk_pct = stock_kelly if (stock_kelly > 0 and stock_trade_stats.get('total_trades', 0) >= 10) else trade_risk_percentage
+                            capital_to_risk = buying_power * stock_risk_pct * size_mult
+                            quantity_to_buy = capital_to_risk / current_price
+                            if quantity_to_buy * current_price > buying_power:
+                                log.warning(f"Skipping BUY for stock {symbol}: Insufficient buying power.")
+                            else:
+                                signal['quantity'] = quantity_to_buy
+                                if is_confirmation_required("BUY"):
+                                    log.info(f"Sending BUY {symbol} (Alpaca) for confirmation.")
+                                    await send_signal_for_confirmation(signal)
+                                else:
+                                    log.info(f"Executing Alpaca trade: BUY {quantity_to_buy:.4f} {symbol} (size_mult={size_mult:.2f}).")
+                                    order_result = place_stock_order(symbol, "BUY", quantity_to_buy, current_price)
+                                    if order_result.get('status') == 'FILLED':
+                                        signal['order_result'] = order_result
+                                    await send_telegram_alert(signal)
 
             elif signal['signal'] == "SELL":
                 alpaca_pos = next((p for p in alpaca_positions if p['symbol'] == symbol), None)
@@ -958,25 +1433,38 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
             stock_risk_pct = stock_kelly if (stock_kelly > 0 and stock_trade_stats.get('total_trades', 0) >= 10) else trade_risk_percentage
 
             if signal['signal'] == "BUY":
-                if any(p['symbol'] == symbol and p['status'] == 'OPEN' for p in open_positions):
+                if suppress_buys:
+                    log.info(f"Skipping BUY for stock {symbol}: Macro regime RISK_OFF.")
+                    signal['signal'] = 'HOLD'
+                elif any(p['symbol'] == symbol and p['status'] == 'OPEN' for p in open_positions):
                     log.info(f"Skipping BUY for stock {symbol}: Position already open.")
                 elif len(open_positions) >= max_concurrent_positions:
                     log.info(f"Skipping BUY for stock {symbol}: Max concurrent positions reached.")
                 else:
-                    capital_to_risk = current_balance * stock_risk_pct
-                    quantity_to_buy = capital_to_risk / current_price
-                    if quantity_to_buy * current_price > current_balance:
-                        log.warning(f"Skipping BUY for stock {symbol}: Insufficient balance.")
+                    sector_ok, sector_msg = check_sector_limit(symbol, open_positions)
+                    if not sector_ok:
+                        log.info(f"Skipping BUY for stock {symbol}: {sector_msg}")
                     else:
-                        signal['quantity'] = quantity_to_buy
-                        if is_confirmation_required("BUY"):
-                            log.info(f"Sending BUY {symbol} (paper stock) for confirmation.")
-                            await send_signal_for_confirmation(signal)
+                        ev_action, ev_mult, ev_reason = check_event_gate(symbol, 'BUY', asset_type='stock')
+                        if ev_action == 'block':
+                            log.info(f"Skipping BUY for stock {symbol}: {ev_reason}")
+                            signal['signal'] = 'HOLD'
                         else:
-                            log.info(f"Executing paper trade: BUY {quantity_to_buy:.4f} {symbol} "
-                                     f"(risk={stock_risk_pct:.4f}).")
-                            place_order(symbol, "BUY", quantity_to_buy, current_price, asset_type='stock')
-                            await send_telegram_alert(signal)
+                            size_mult = macro_multiplier * (ev_mult if ev_action == 'reduce' else 1.0)
+                            capital_to_risk = current_balance * stock_risk_pct * size_mult
+                            quantity_to_buy = capital_to_risk / current_price
+                            if quantity_to_buy * current_price > current_balance:
+                                log.warning(f"Skipping BUY for stock {symbol}: Insufficient balance.")
+                            else:
+                                signal['quantity'] = quantity_to_buy
+                                if is_confirmation_required("BUY"):
+                                    log.info(f"Sending BUY {symbol} (paper stock) for confirmation.")
+                                    await send_signal_for_confirmation(signal)
+                                else:
+                                    log.info(f"Executing paper trade: BUY {quantity_to_buy:.4f} {symbol} "
+                                             f"(risk={stock_risk_pct:.4f}, size_mult={size_mult:.2f}).")
+                                    place_order(symbol, "BUY", quantity_to_buy, current_price, asset_type='stock')
+                                    await send_telegram_alert(signal)
 
             elif signal['signal'] == "SELL":
                 position_to_close = next(
@@ -997,6 +1485,89 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                     log.info(f"Skipping SELL for stock {symbol}: No open position found.")
             else:
                 log.info(f"Signal is HOLD for stock {symbol}. No trade action taken.")
+
+        # --- Auto-Trading Shadow Bot: Stock Position Monitoring ---
+        if auto_enabled:
+            for position in _cached_auto_stock_positions:
+                if position['symbol'] == symbol and position['status'] == 'OPEN':
+                    entry_price = position['entry_price']
+                    pnl_percentage = (current_price - entry_price) / entry_price
+                    order_id = position['order_id']
+
+                    peak_price = _auto_update_trailing_stop(order_id, current_price)
+                    drawdown_from_peak = (peak_price - current_price) / peak_price if peak_price > 0 else 0
+
+                    if trailing_stop_enabled and pnl_percentage >= trailing_stop_activation:
+                        if drawdown_from_peak >= trailing_stop_distance:
+                            log.info(f"[AUTO] Trailing stop triggered for stock {symbol}.")
+                            place_order(symbol, "SELL", position['quantity'], current_price,
+                                        existing_order_id=order_id, asset_type='stock', trading_strategy='auto')
+                            _auto_clear_trailing_stop(order_id)
+                            continue
+
+                    if pnl_percentage <= -stop_loss_percentage:
+                        log.info(f"[AUTO] Stop-loss hit for stock {symbol}.")
+                        place_order(symbol, "SELL", position['quantity'], current_price,
+                                    existing_order_id=order_id, asset_type='stock', trading_strategy='auto')
+                        _auto_clear_trailing_stop(order_id)
+                        if stoploss_cooldown_hours > 0:
+                            from datetime import datetime, timedelta, timezone
+                            _auto_stoploss_cooldowns[symbol] = datetime.now(timezone.utc) + timedelta(hours=stoploss_cooldown_hours)
+                    elif pnl_percentage >= take_profit_percentage:
+                        log.info(f"[AUTO] Take-profit hit for stock {symbol}.")
+                        place_order(symbol, "SELL", position['quantity'], current_price,
+                                    existing_order_id=order_id, asset_type='stock', trading_strategy='auto')
+                        _auto_clear_trailing_stop(order_id)
+
+        # --- Auto-Trading Shadow Bot: Stock Signal Execution ---
+        if auto_enabled and bot_is_running.is_set() and signal is not None:
+            auto_open_stocks = [p for p in _cached_auto_stock_positions
+                                if p['status'] == 'OPEN']
+            auto_max = auto_cfg.get('max_concurrent_positions', max_concurrent_positions)
+
+            auto_signal_type = signal.get('signal', 'HOLD')
+            if auto_signal_type in ("BUY", "SELL") and symbol in _auto_stoploss_cooldowns:
+                from datetime import datetime, timezone
+                if datetime.now(timezone.utc) < _auto_stoploss_cooldowns[symbol]:
+                    auto_signal_type = 'HOLD'
+                else:
+                    del _auto_stoploss_cooldowns[symbol]
+
+            if auto_signal_type == "BUY":
+                if suppress_buys:
+                    log.info(f"[AUTO] Skipping BUY for stock {symbol}: Macro regime RISK_OFF.")
+                elif not any(p['symbol'] == symbol and p['status'] == 'OPEN' for p in auto_open_stocks):
+                    if len(auto_open_stocks) < auto_max:
+                        sector_ok, sector_msg = check_sector_limit(symbol, auto_open_stocks, 'auto')
+                        if not sector_ok:
+                            log.info(f"[AUTO] Skipping BUY for stock {symbol}: {sector_msg}")
+                        else:
+                            ev_action, ev_mult, ev_reason = check_event_gate(
+                                symbol, 'BUY', asset_type='stock')
+                            if ev_action == 'block':
+                                log.info(f"[AUTO] Skipping BUY for stock {symbol}: {ev_reason}")
+                            else:
+                                size_mult = macro_multiplier * (ev_mult if ev_action == 'reduce' else 1.0)
+                                auto_balance = get_account_balance(asset_type='stock', trading_strategy='auto')
+                                auto_available = auto_balance.get('USDT', 0)
+                                capital_to_risk = auto_available * trade_risk_percentage * size_mult
+                                qty = capital_to_risk / current_price if current_price > 0 else 0
+                                if qty > 0 and qty * current_price <= auto_available:
+                                    log.info(f"[AUTO] Executing BUY {qty:.4f} stock {symbol} (size_mult={size_mult:.2f})")
+                                    place_order(symbol, "BUY", qty, current_price,
+                                                asset_type='stock', trading_strategy='auto')
+                                else:
+                                    log.info(f"[AUTO] Insufficient balance for stock BUY {symbol}")
+
+            elif auto_signal_type == "SELL":
+                auto_pos = next((p for p in auto_open_stocks
+                                 if p['symbol'] == symbol and p['status'] == 'OPEN'), None)
+                if auto_pos:
+                    log.info(f"[AUTO] Executing SELL {auto_pos['quantity']:.4f} stock {symbol}")
+                    place_order(symbol, "SELL", auto_pos['quantity'], current_price,
+                                existing_order_id=auto_pos['order_id'],
+                                asset_type='stock', trading_strategy='auto')
+                    _auto_clear_trailing_stop(auto_pos['order_id'])
 
     log.info("--- Stock trading cycle complete ---")
 
@@ -1062,6 +1633,24 @@ async def _signal_cleanup_loop():
         await asyncio.sleep(60)  # check every minute
 
 
+async def auto_bot_summary_loop():
+    """Periodic summary of auto-bot performance."""
+    auto_cfg = app_config.get('settings', {}).get('auto_trading', {})
+    if not auto_cfg.get('enabled', False):
+        return
+    interval = auto_cfg.get('summary_interval_hours', 1)
+    while True:
+        await asyncio.sleep(interval * 3600)
+        try:
+            summary = get_trade_summary(hours_ago=interval, trading_strategy='auto')
+            auto_positions = get_open_positions(trading_strategy='auto')
+            auto_balance = get_account_balance(trading_strategy='auto')
+            if application:
+                await send_auto_bot_summary(application, summary, auto_positions, auto_balance, interval)
+        except Exception as e:
+            log.error(f"Auto-bot summary error: {e}", exc_info=True)
+
+
 @app.on_event("startup")
 async def startup_event():
     """
@@ -1111,6 +1700,13 @@ async def startup_event():
     _background_tasks.append(asyncio.create_task(bot_loop()))
     _background_tasks.append(asyncio.create_task(status_update_loop()))
     _background_tasks.append(asyncio.create_task(_signal_cleanup_loop()))
+
+    # Start auto-bot summary loop if enabled
+    auto_cfg = app_config.get('settings', {}).get('auto_trading', {})
+    if auto_cfg.get('enabled', False):
+        _background_tasks.append(asyncio.create_task(auto_bot_summary_loop()))
+        log.info("Auto-trading shadow bot enabled — summary loop started.")
+
     log.info("Startup complete. Background tasks running.")
 
 

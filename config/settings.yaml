@@ -179,6 +179,7 @@ settings:
     require_confirmation_for:
       - "BUY"
       - "SELL"
+      - "INCREASE"
 
   # -- News Scraper Daemon Settings --
   # Continuous scraper with tiered intervals (replaces launchd batch approach)
@@ -192,7 +193,82 @@ settings:
       timeout_seconds: 180
       fallback_to_bs4: true
 
-  # -- Position Monitor Settings --
+  # -- Position Analyst Settings --
+  # Tri-state investment analyst: HOLD / INCREASE / SELL
+  # Replaces position_monitor when enabled.
+  position_analyst:
+    enabled: true
+    min_position_age_hours: 2
+    check_interval_minutes: 30
+    exit_confidence_threshold: 0.8
+    increase_confidence_threshold: 0.75
+    max_position_multiplier: 3.0
+
+  # -- Auto-Trading Shadow Bot --
+  # Parallel paper-trading bot that auto-executes all signals without confirmation.
+  # Uses same watch list, indicators, and thresholds as the manual bot.
+  # Tracks trades with trading_strategy='auto' in the same DB.
+  auto_trading:
+    enabled: true
+    paper_trading_initial_capital: 10000.0
+    max_concurrent_positions: 5
+    summary_interval_hours: 1
+
+  # -- IPO Tracking Settings --
+  ipo_tracking:
+    enabled: true
+    auto_add_to_watchlist: true
+    detection_categories:
+      - ipo
+      - ai
+      - press_release
+    validate_ticker: true
+
+  # -- Macro Regime Detection --
+  # Classifies market as RISK_ON / CAUTION / RISK_OFF using VIX, S&P, yields, BTC.
+  # Adjusts position sizing and can suppress BUY signals in risk-off regimes.
+  macro_regime:
+    enabled: true
+    risk_on_multiplier: 1.0
+    caution_multiplier: 0.6
+    risk_off_multiplier: 0.3
+    suppress_buys_in_risk_off: true
+    vix_elevated_threshold: 18
+    vix_high_threshold: 25
+    vix_extreme_threshold: 35
+
+  # -- Correlation-Aware Sector Limits --
+  # Prevents over-concentration in correlated assets (e.g., 5 AI stocks = 1 bet).
+  sector_limits:
+    enabled: true
+    config_file: "config/sector_groups.yaml"
+    telegram_alert_on_block: false
+
+  # -- Event Calendar --
+  # Gates BUY/INCREASE signals before earnings, FOMC, CPI releases.
+  # Never blocks protective exits (SL/TP/trailing).
+  event_calendar:
+    enabled: true
+    earnings:
+      enabled: true
+      block_hours_before: 24
+      reduce_hours_before: 48
+      reduce_multiplier: 0.5
+    fomc:
+      enabled: true
+      block_hours_before: 24
+      reduce_hours_before: 48
+      reduce_multiplier: 0.5
+    cpi:
+      enabled: true
+      block_hours_before: 0
+      reduce_hours_before: 24
+      reduce_multiplier: 0.5
+    position_warnings:
+      enabled: true
+      lookahead_hours: 72
+
+  # -- Position Monitor Settings (legacy, used when position_analyst is disabled) --
   # Sub-bot that monitors open positions and asks Gemini "hold or exit?"
   position_monitor:
     enabled: true

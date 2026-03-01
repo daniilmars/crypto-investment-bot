@@ -401,6 +401,197 @@ def analyze_news_impact(headlines_by_symbol: dict, current_prices: dict,
         return None
 
 
+def analyze_position_investment(
+    position: dict, current_price: float,
+    recent_articles: list, technical_data: dict,
+    news_velocity: dict,
+    hours_held: float = None,
+    trailing_stop_info: dict = None,
+    position_additions: list = None,
+    max_position_multiplier: float = 3.0,
+) -> dict | None:
+    """Tri-state investment analyst: HOLD / INCREASE / SELL.
+
+    Args:
+        position: dict with symbol, entry_price, quantity, order_id, entry_timestamp
+        current_price: current market price
+        recent_articles: full article dicts from get_recent_articles()
+        technical_data: dict with rsi, sma, regime
+        news_velocity: dict from compute_news_velocity()
+        hours_held: how long position has been open (hours)
+        trailing_stop_info: dict with trailing stop state
+        position_additions: list of prior additions for this position
+        max_position_multiplier: maximum allowed position size as multiple of original
+
+    Returns:
+        dict with recommendation, confidence, reasoning, risk_level, etc. or None on failure.
+    """
+    project_id = os.environ.get('GCP_PROJECT_ID')
+    location = os.environ.get('GCP_LOCATION', 'us-central1')
+
+    if not project_id:
+        log.warning("GCP_PROJECT_ID not set — skipping position investment analysis.")
+        return None
+
+    symbol = position.get('symbol', 'UNKNOWN')
+    entry_price = position.get('entry_price', 0)
+    quantity = position.get('quantity', 0)
+    pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+
+    # Calculate current position multiplier from additions
+    additions = position_additions or []
+    original_value = entry_price * quantity
+    # If there are additions, estimate original value by subtracting additions
+    total_added_value = sum(a.get('addition_price', 0) * a.get('addition_quantity', 0) for a in additions)
+    if total_added_value > 0 and original_value > total_added_value:
+        estimated_original_value = original_value - total_added_value
+    else:
+        estimated_original_value = original_value
+    current_multiplier = original_value / estimated_original_value if estimated_original_value > 0 else 1.0
+    can_increase = current_multiplier < max_position_multiplier
+
+    try:
+        vertexai.init(project=project_id, location=location)
+        model = GenerativeModel('gemini-2.0-flash')
+
+        # Format articles for prompt
+        if recent_articles:
+            article_lines = []
+            for i, art in enumerate(recent_articles[:20], 1):
+                source = art.get('source', '?')
+                score = art.get('gemini_score') or art.get('vader_score')
+                score_str = f" [sentiment: {score:+.2f}]" if score is not None else ""
+                collected = art.get('collected_at', '')
+                desc = (art.get('description', '') or '')[:200]
+                line = f"{i}. [{source}]{score_str} {art.get('title', '')}"
+                if desc:
+                    line += f"\n   {desc}"
+                if collected:
+                    line += f"\n   ({collected})"
+                article_lines.append(line)
+            articles_text = "\n".join(article_lines)
+        else:
+            articles_text = "No recent articles available."
+
+        # Trailing stop context
+        trailing_context = ""
+        if trailing_stop_info:
+            peak = trailing_stop_info.get('peak_price')
+            active = trailing_stop_info.get('trailing_active', False)
+            activation = trailing_stop_info.get('activation_threshold', 0.02)
+            if peak:
+                trailing_context = (
+                    f"\n**Trailing Stop State:**\n"
+                    f"- Peak price seen: ${peak:,.2f}\n"
+                    f"- Trailing stop active: {'YES' if active else 'No (not yet at +' + f'{activation * 100:.1f}%)'}\n"
+                )
+
+        hours_context = f"- Time held: {hours_held:.1f} hours\n" if hours_held is not None else ""
+
+        # Position additions history
+        additions_context = ""
+        if additions:
+            additions_context = f"\n**Position Addition History ({len(additions)} additions):**\n"
+            for a in additions:
+                additions_context += f"- Added {a.get('addition_quantity', 0):.6f} at ${a.get('addition_price', 0):,.2f} ({a.get('reason', 'N/A')})\n"
+            additions_context += f"- Current position multiplier: {current_multiplier:.1f}x (max: {max_position_multiplier}x)\n"
+        else:
+            additions_context = f"\n- Position multiplier: 1.0x (max: {max_position_multiplier}x, can increase: {'yes' if can_increase else 'no'})\n"
+
+        # News velocity context
+        velocity_context = (
+            f"\n**News Velocity:**\n"
+            f"- Articles last 1h: {news_velocity.get('articles_last_1h', 0)}, "
+            f"4h: {news_velocity.get('articles_last_4h', 0)}, "
+            f"24h: {news_velocity.get('articles_last_24h', 0)}\n"
+            f"- Avg sentiment 1h: {news_velocity.get('avg_sentiment_1h', 0):+.3f}, "
+            f"24h: {news_velocity.get('avg_sentiment_24h', 0):+.3f}\n"
+            f"- Sentiment trend: {news_velocity.get('sentiment_trend', 'stable')}\n"
+            f"- Velocity: {news_velocity.get('velocity_status', 'normal')}\n"
+            f"- Breaking news detected: {'YES' if news_velocity.get('breaking_detected') else 'No'}\n"
+        )
+
+        prompt = (
+            f"You are a senior investment analyst for a trading bot. Evaluate this open position "
+            f"and recommend one of: HOLD, INCREASE (add capital), or SELL.\n\n"
+            f"**Bot Risk Parameters:**\n"
+            f"- Stop-loss: -3.5% (auto-closes position)\n"
+            f"- Take-profit: +8% (auto-closes position)\n"
+            f"- Trailing stop: activates at +2%, trails 1.5% from peak\n"
+            f"- The bot checks positions every 15 minutes.\n\n"
+            f"**Position Details:**\n"
+            f"- Symbol: {symbol}\n"
+            f"- Entry price: ${entry_price:,.2f}\n"
+            f"- Current price: ${current_price:,.2f}\n"
+            f"- Unrealized PnL: {pnl_pct:+.2f}%\n"
+            f"- Quantity: {quantity}\n"
+            f"{hours_context}"
+            f"{trailing_context}"
+            f"{additions_context}\n"
+            f"**Technical Indicators:**\n"
+            f"- RSI: {technical_data.get('rsi', 'N/A')}\n"
+            f"- SMA: {technical_data.get('sma', 'N/A')}\n"
+            f"- Market regime: {technical_data.get('regime', 'unknown')}\n"
+            f"{velocity_context}\n"
+            f"**Recent Articles ({len(recent_articles) if recent_articles else 0}):**\n{articles_text}\n\n"
+            "**4-STEP ANALYSIS FRAMEWORK:**\n\n"
+            "STEP 1 — NEWS MOMENTUM ASSESSMENT:\n"
+            "- Is news accelerating? Are articles increasing in frequency?\n"
+            "- Is sentiment consistent (all positive/negative) or mixed?\n"
+            "- Are there concrete catalysts (regulatory action, partnership, hack, upgrade) or just noise?\n\n"
+            "STEP 2 — INCREASE EVALUATION:\n"
+            "- ALL of these must be true to recommend INCREASE:\n"
+            "  1. Positive sentiment trend with concrete bullish catalyst identified in articles\n"
+            "  2. Technical support: RSI < 70 AND price > SMA (if available)\n"
+            f"  3. Position not at max size (current: {current_multiplier:.1f}x, max: {max_position_multiplier}x)\n"
+            "  4. NOT near take-profit (PnL < +6%)\n"
+            "- NEVER recommend INCREASE when trailing stop is active — let it protect gains\n"
+            "- NEVER recommend INCREASE based on momentum alone — require a specific catalyst\n\n"
+            "STEP 3 — SELL EVALUATION:\n"
+            "- Requires concrete adverse catalyst with HIGH confidence\n"
+            "- OR multiple converging risks: adverse news + technical weakness + breaking negative velocity\n"
+            "- A single negative headline is NOT enough — look for corroboration\n"
+            "- If trailing stop is active, it will protect gains — bias toward HOLD\n\n"
+            "STEP 4 — DEFAULT HOLD:\n"
+            "- No news = HOLD. Mixed signals = HOLD.\n"
+            "- Trailing stop active = HOLD (it handles orderly exits).\n"
+            "- Uncertain or low-confidence scenarios = HOLD.\n\n"
+            "Respond ONLY with valid JSON:\n"
+            '{"recommendation": "hold|increase|sell", "confidence": 0.0, '
+            '"reasoning": "one concise sentence", '
+            '"risk_level": "green|yellow|red", '
+            '"primary_driver": "bullish_catalyst|momentum|adverse_news|technical_weakness|sentiment_trend|breaking_news|none", '
+            '"news_momentum": "accelerating|stable|decelerating", '
+            '"increase_sizing_hint": "small|medium|large", '
+            '"key_article": "headline of most important article"}\n\n'
+            "Rules:\n"
+            "- recommendation must be 'hold', 'increase', or 'sell'\n"
+            "- confidence must be a float between 0.0 and 1.0\n"
+            "- increase_sizing_hint: only set when recommendation is 'increase' (small=25%, medium=50%, large=75% of original value). Set null otherwise.\n"
+            "- key_article: the single most impactful article headline, or null if none\n"
+            "- Do not include any text outside the JSON object"
+        )
+
+        response = model.generate_content(prompt)
+        text = response.text.strip()
+        result = _parse_gemini_json(text)
+        _validate_gemini_response(
+            result,
+            ['recommendation', 'confidence', 'risk_level', 'primary_driver'],
+            'analyze_position_investment',
+        )
+        log.info(f"Position analyst for {symbol}: {result.get('recommendation')} "
+                 f"(confidence={result.get('confidence')})")
+        return result
+
+    except json.JSONDecodeError as e:
+        log.error(f"Failed to parse Gemini position investment response as JSON: {e}")
+        return None
+    except Exception as e:
+        log.error(f"Gemini position investment analysis failed: {e}")
+        return None
+
+
 def analyze_position_health(position: dict, current_price: float,
                             recent_headlines: list, technical_data: dict,
                             hours_held: float = None,

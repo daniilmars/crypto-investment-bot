@@ -1,0 +1,140 @@
+# =============================================================
+# Sector / Correlation Groups
+# =============================================================
+# Limits concurrent open positions within correlated asset groups.
+# Symbols not in any group use the default limit.
+
+default_max_positions_per_group: 2
+
+groups:
+  # --- Crypto ---
+  l1_major:
+    max_positions: 3
+    symbols: [BTC, ETH, SOL, BNB]
+
+  l1_legacy:
+    max_positions: 2
+    symbols: [XRP, ADA, TRX, LTC, DOT]
+
+  defi:
+    max_positions: 2
+    symbols: [UNI, AAVE, MKR, CRV, SUSHI, DYDX, COMP, SNX]
+
+  l2_scaling:
+    max_positions: 2
+    symbols: [ARB, OP, MATIC, IMX, STRK]
+
+  ai_data:
+    max_positions: 2
+    symbols: [FET, RENDER, OCEAN, TAO, AKT, NEAR]
+
+  gaming:
+    max_positions: 2
+    symbols: [AXS, SAND, MANA, GALA, ILV, IMX]
+
+  meme:
+    max_positions: 2
+    symbols: [DOGE, SHIB, PEPE, FLOKI, BONK, WIF]
+
+  infra:
+    max_positions: 2
+    symbols: [LINK, ATOM, AVAX, FIL, GRT, THETA, AR]
+
+  privacy:
+    max_positions: 1
+    symbols: [XMR, ZEC, DASH]
+
+  # --- US Stocks ---
+  tech_mega:
+    max_positions: 3
+    symbols: [AAPL, MSFT, GOOGL, AMZN, META, NVDA, TSLA]
+
+  semiconductors:
+    max_positions: 2
+    symbols: [NVDA, AMD, INTC, TSM, AVGO, QCOM, MU, ASML, LRCX, KLAC]
+
+  software_cloud:
+    max_positions: 2
+    symbols: [CRM, ADBE, NOW, SNOW, PLTR, DDOG, NET, CRWD, ZS]
+
+  ai_pure_play:
+    max_positions: 2
+    symbols: [PLTR, AI, SNOW, PATH, UPST, SOUN, BBAI]
+
+  financials:
+    max_positions: 2
+    symbols: [JPM, BAC, GS, MS, V, MA, AXP, BLK, SCHW]
+
+  healthcare:
+    max_positions: 2
+    symbols: [JNJ, UNH, PFE, ABBV, MRK, LLY, TMO, ABT]
+
+  energy:
+    max_positions: 2
+    symbols: [XOM, CVX, COP, SLB, EOG, OXY, MPC, VLO]
+
+  consumer_disc:
+    max_positions: 2
+    symbols: [AMZN, TSLA, HD, NKE, SBUX, MCD, TJX, BKNG]
+
+  consumer_staples:
+    max_positions: 2
+    symbols: [PG, KO, PEP, COST, WMT, CL, MDLZ]
+
+  industrials:
+    max_positions: 2
+    symbols: [CAT, DE, HON, UPS, BA, RTX, LMT, GE]
+
+  communication:
+    max_positions: 2
+    symbols: [GOOGL, META, DIS, NFLX, CMCSA, T, VZ]
+
+  utilities_reits:
+    max_positions: 2
+    symbols: [NEE, DUK, SO, AMT, PLD, CCI, EQIX, O]
+
+  materials:
+    max_positions: 1
+    symbols: [LIN, APD, SHW, ECL, NEM, FCX, NUE]
+
+  # --- EU Stocks ---
+  uk:
+    max_positions: 2
+    symbols: [SHEL, AZN, HSBA, ULVR, BP, GSK, RIO, LSEG]
+
+  germany:
+    max_positions: 2
+    symbols: [SAP, SIE, ALV, DTE, BAS, MBG, BMW, ADS]
+
+  france:
+    max_positions: 2
+    symbols: [MC, OR, TTE, SAN, AIR, SU, BNP, DG]
+
+  netherlands_swiss:
+    max_positions: 2
+    symbols: [ASML, NESN, ROG, NOVN, UNA, INGA, ABN]
+
+  southern:
+    max_positions: 2
+    symbols: [ISP, UCG, ENEL, IBE, SAN, BBVA, EDP, GALP]
+
+  nordics:
+    max_positions: 2
+    symbols: [NOVO-B, ERIC-B, VOLV-B, SAND, NESTE, MAERSK-B]
+
+  # --- Asia Stocks ---
+  japan:
+    max_positions: 2
+    symbols: [7203, 6758, 8306, 9984, 6902, 8035, 9433]
+
+  hong_kong:
+    max_positions: 2
+    symbols: ["0700", "9988", "1299", "0005", "0941", "2318"]
+
+  korea_taiwan:
+    max_positions: 2
+    symbols: [005930, 000660, 2330, 2454, 2317, 035420]
+
+  australia_india_sg:
+    max_positions: 2
+    symbols: [BHP, CBA, CSL, RELIANCE, TCS, INFY, DBS, OCBC]

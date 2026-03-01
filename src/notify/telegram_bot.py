@@ -21,6 +21,9 @@ from src.execution.stock_trader import (
     get_stock_positions, get_stock_balance, _check_pdt_rule, get_market_hours,
 )
 from src.collectors.binance_data import get_current_price
+from src.analysis.macro_regime import get_macro_regime
+from src.analysis.sector_limits import get_sector_exposure_summary
+from src.analysis.event_calendar import get_upcoming_macro_events
 from src.state import bot_is_running
 
 # --- Bot Initialization ---
@@ -108,6 +111,13 @@ async def send_signal_for_confirmation(signal: dict) -> int:
     elif quantity and signal_type == "SELL":
         total_value = quantity * price
         message += f"💵 *Quantity:* {quantity:.6f} {symbol} (${total_value:,.2f})\n"
+    elif quantity and signal_type == "INCREASE":
+        position_data = signal.get('position', {})
+        current_qty = position_data.get('quantity', 0)
+        new_total = current_qty + quantity
+        message += f"📦 *Current:* {current_qty:.6f} {symbol}\n"
+        message += f"➕ *Adding:* {quantity:.6f} {symbol} (${quantity * price:,.2f})\n"
+        message += f"📦 *New Total:* {new_total:.6f} {symbol}\n"
 
     message += f"⏱ *Expires in {CONFIRMATION_TIMEOUT_MINUTES} min*\n"
     message += f"_{asset_label} signal_"
@@ -428,6 +438,44 @@ async def send_news_alert(triggered_symbols, sentiment_data, gemini_assessments=
     message = "\n".join(lines)
     await send_telegram_message(bot, CHAT_ID, message)
 
+async def send_auto_bot_summary(application: Application, summary: dict,
+                                positions: list, balance: dict, interval_hours: int):
+    """Sends a silent summary of auto-bot performance to the configured chat."""
+    if not telegram_config.get('enabled') or not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
+        log.warning("Telegram bot is not configured. Skipping auto-bot summary.")
+        return
+
+    total_pnl = summary.get('total_pnl', 0)
+    pnl_sign = "+" if total_pnl >= 0 else ""
+
+    message = f"*Auto-Bot Summary (last {interval_hours}h)*\n\n"
+    message += f"*Balance:* ${balance.get('total_usd', 0):,.2f}\n"
+    message += f"*Open Positions:* {len(positions)}\n"
+    message += f"*Trades:* {summary.get('total_closed', 0)} closed\n"
+    message += f"*PnL:* {pnl_sign}${total_pnl:,.2f} (win rate {summary.get('win_rate', 0):.1f}%)\n"
+
+    if positions:
+        message += "\n*Open positions:*\n"
+        for pos in positions:
+            symbol = pos.get('symbol', '?')
+            entry = pos.get('entry_price', 0)
+            qty = pos.get('quantity', 0)
+            current = _get_position_price(symbol) or entry
+            pnl = (current - entry) * qty
+            pnl_pct = ((current - entry) / entry * 100) if entry > 0 else 0
+            pnl_emoji = "+" if pnl_pct >= 0 else ""
+            message += f"- {symbol}: {pnl_emoji}{pnl_pct:.1f}% (${pnl:,.2f})\n"
+
+    try:
+        await application.bot.send_message(
+            chat_id=CHAT_ID, text=message, parse_mode='Markdown',
+            disable_notification=True
+        )
+        log.info("Sent auto-bot summary.")
+    except Exception as e:
+        log.error(f"Error sending auto-bot summary: {e}")
+
+
 async def send_performance_report(application: Application, summary: dict, interval_hours: int):
     """Formats and sends a performance report."""
     if not telegram_config.get('enabled') or not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
@@ -473,6 +521,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "`/stock_balance` - Show stock account balance.\n"
         "`/pdt` - PDT rule status (day trades remaining).\n"
         "`/market_hours` - NYSE open/closed status.\n\n"
+        "*Auto-Bot:*\n"
+        "`/auto_status` - Auto-trading shadow bot status.\n\n"
         "*System:*\n"
         "`/db_stats` - View database statistics.\n"
         "`/db_schema` - View the database schema.\n"
@@ -795,6 +845,55 @@ async def pdt_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 @authorized
+async def auto_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /auto_status command — shows auto-bot performance and positions."""
+    try:
+        auto_cfg = app_config.get('settings', {}).get('auto_trading', {})
+        if not auto_cfg.get('enabled', False):
+            await update.message.reply_text("Auto-trading shadow bot is disabled.")
+            return
+
+        auto_positions = get_open_positions(trading_strategy='auto')
+        auto_balance = get_account_balance(trading_strategy='auto')
+        auto_stats = get_trade_summary(hours_ago=24 * 365, trading_strategy='auto')  # all-time
+
+        manual_balance = get_account_balance()
+        initial = auto_cfg.get('paper_trading_initial_capital', 10000.0)
+        auto_total = auto_balance.get('total_usd', initial)
+        manual_total = manual_balance.get('total_usd', 0)
+        auto_return = ((auto_total - initial) / initial * 100) if initial > 0 else 0
+        manual_initial = app_config.get('settings', {}).get('paper_trading_initial_capital', 10000.0)
+        manual_return = ((manual_total - manual_initial) / manual_initial * 100) if manual_initial > 0 else 0
+
+        message = "*Auto-Bot Status*\n\n"
+        message += f"*Balance:* ${auto_total:,.2f}\n"
+        message += f"*Available:* ${auto_balance.get('USDT', 0):,.2f}\n"
+        message += f"*Open Positions:* {len(auto_positions)}\n"
+        message += f"*All-time PnL:* ${auto_stats.get('total_pnl', 0):,.2f}\n"
+        message += f"*Trades:* {auto_stats.get('total_closed', 0)} ({auto_stats.get('wins', 0)}W / {auto_stats.get('losses', 0)}L)\n"
+        message += f"*Win Rate:* {auto_stats.get('win_rate', 0):.1f}%\n\n"
+
+        if auto_positions:
+            message += "*Open positions:*\n"
+            for pos in auto_positions:
+                symbol = pos.get('symbol', '?')
+                entry = pos.get('entry_price', 0)
+                qty = pos.get('quantity', 0)
+                current = _get_position_price(symbol) or entry
+                pnl = (current - entry) * qty
+                pnl_pct = ((current - entry) / entry * 100) if entry > 0 else 0
+                message += f"- *{symbol}*: ${current:,.2f} ({pnl_pct:+.1f}%, ${pnl:,.2f})\n"
+            message += "\n"
+
+        message += f"_Manual: {manual_return:+.1f}% vs Auto: {auto_return:+.1f}%_"
+
+        await update.message.reply_text(message, parse_mode='Markdown')
+    except Exception as e:
+        log.error(f"Error in /auto_status: {e}")
+        await update.message.reply_text("Error fetching auto-bot status.")
+
+
+@authorized
 async def market_hours_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /market_hours command — shows NYSE open/closed status."""
     try:
@@ -810,6 +909,84 @@ async def market_hours_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         log.error(f"Error in /market_hours: {e}")
         await update.message.reply_text("Error checking market hours.")
+
+
+@authorized
+async def regime_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /regime command — shows current macro regime."""
+    try:
+        regime = get_macro_regime()
+        regime_emoji = {'RISK_ON': '🟢', 'CAUTION': '🟡', 'RISK_OFF': '🔴'}
+        emoji = regime_emoji.get(regime['regime'], '⚪')
+        signals = regime.get('signals', {})
+        message = (
+            f"{emoji} *Macro Regime: {regime['regime']}*\n\n"
+            f"*Score:* {regime.get('score', 0)}\n"
+            f"*Position multiplier:* {regime['position_size_multiplier']:.1f}x\n"
+            f"*Suppress BUYs:* {'Yes' if regime['suppress_buys'] else 'No'}\n\n"
+            f"*Signals:*\n"
+            f"  VIX level: {signals.get('vix_signal', '?')}\n"
+            f"  VIX trend: {signals.get('vix_trend', '?')}\n"
+            f"  S&P 500: {signals.get('sp500_trend', '?')}\n"
+            f"  10Y yield: {signals.get('yield_direction', '?')}\n"
+            f"  BTC trend: {signals.get('btc_trend', '?')}"
+        )
+        await update.message.reply_text(message, parse_mode='Markdown')
+    except Exception as e:
+        log.error(f"Error in /regime: {e}")
+        await update.message.reply_text("Error fetching macro regime.")
+
+
+@authorized
+async def sectors_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /sectors command — shows sector exposure."""
+    try:
+        crypto_positions = get_open_positions()
+        stock_positions = get_open_positions(asset_type='stock')
+        all_positions = crypto_positions + stock_positions
+        summary = get_sector_exposure_summary(all_positions)
+
+        if not summary:
+            await update.message.reply_text("No sector exposure — no open positions.")
+            return
+
+        lines = ["*Sector Exposure*\n"]
+        for group, data in sorted(summary.items()):
+            bar = '█' * data['current'] + '░' * (data['limit'] - data['current'])
+            syms = ', '.join(data['symbols'])
+            lines.append(f"*{group}* [{data['current']}/{data['limit']}] {bar}\n  {syms}")
+
+        await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
+    except Exception as e:
+        log.error(f"Error in /sectors: {e}")
+        await update.message.reply_text("Error fetching sector exposure.")
+
+
+@authorized
+async def events_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /events command — shows upcoming FOMC, CPI, and earnings."""
+    try:
+        events = get_upcoming_macro_events(days_ahead=30)
+        if not events:
+            await update.message.reply_text("No upcoming macro events in the next 30 days.")
+            return
+
+        lines = ["*Upcoming Macro Events (30d)*\n"]
+        for evt in events[:10]:
+            dt = evt['event_date']
+            hours = evt['hours_until']
+            days = hours / 24
+            if days < 1:
+                time_str = f"{hours:.0f}h"
+            else:
+                time_str = f"{days:.1f}d"
+            lines.append(
+                f"  {evt['event_type']}: {dt.strftime('%b %d %H:%M UTC')} ({time_str})")
+
+        await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
+    except Exception as e:
+        log.error(f"Error in /events: {e}")
+        await update.message.reply_text("Error fetching events.")
 
 
 # --- Bot Lifecycle Management ---
@@ -837,6 +1014,10 @@ async def start_bot() -> Application:
             CommandHandler("stock_balance", stock_balance_cmd),
             CommandHandler("pdt", pdt_cmd),
             CommandHandler("market_hours", market_hours_cmd),
+            CommandHandler("auto_status", auto_status_cmd),
+            CommandHandler("regime", regime_cmd),
+            CommandHandler("sectors", sectors_cmd),
+            CommandHandler("events", events_cmd),
             CallbackQueryHandler(_handle_signal_callback),
         ]
         application.add_handlers(handlers)

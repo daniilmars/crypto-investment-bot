@@ -24,7 +24,7 @@ def _cursor(conn):
 # --- Connection Pool (for PostgreSQL) ---
 _pg_pool = None
 
-ALLOWED_TABLES = frozenset({"market_prices", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles", "stoploss_cooldowns"})
+ALLOWED_TABLES = frozenset({"market_prices", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles", "stoploss_cooldowns", "position_additions", "ipo_events", "macro_regime_history"})
 
 # --- Database Connection Management ---
 
@@ -275,6 +275,99 @@ def initialize_database(db_url=None):
             )'''
         cursor.execute(stoploss_cooldowns_sql)
 
+        # Position Additions (tracks position size increases)
+        position_additions_sql = '''
+            CREATE TABLE IF NOT EXISTS position_additions (
+                id SERIAL PRIMARY KEY,
+                parent_order_id TEXT NOT NULL,
+                addition_price REAL NOT NULL,
+                addition_quantity REAL NOT NULL,
+                reason TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )''' if is_postgres_conn else '''
+            CREATE TABLE IF NOT EXISTS position_additions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                parent_order_id TEXT NOT NULL,
+                addition_price REAL NOT NULL,
+                addition_quantity REAL NOT NULL,
+                reason TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )'''
+        cursor.execute(position_additions_sql)
+
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pos_additions_order "
+            "ON position_additions (parent_order_id)"
+        )
+
+        # IPO Events (tracks detected IPOs and new listings)
+        ipo_events_sql = '''
+            CREATE TABLE IF NOT EXISTS ipo_events (
+                id SERIAL PRIMARY KEY,
+                company_name TEXT NOT NULL,
+                ticker TEXT,
+                status TEXT NOT NULL DEFAULT 'detected',
+                event_type TEXT NOT NULL,
+                event_detail TEXT,
+                source_url TEXT,
+                source_article_hash TEXT,
+                detected_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                auto_added_to_watchlist BOOLEAN DEFAULT FALSE
+            )''' if is_postgres_conn else '''
+            CREATE TABLE IF NOT EXISTS ipo_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_name TEXT NOT NULL,
+                ticker TEXT,
+                status TEXT NOT NULL DEFAULT 'detected',
+                event_type TEXT NOT NULL,
+                event_detail TEXT,
+                source_url TEXT,
+                source_article_hash TEXT,
+                detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                auto_added_to_watchlist BOOLEAN DEFAULT FALSE
+            )'''
+        cursor.execute(ipo_events_sql)
+
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_ipo_events_dedup "
+            "ON ipo_events (company_name, event_type)"
+        )
+
+        # Macro Regime History
+        macro_regime_sql = '''
+            CREATE TABLE IF NOT EXISTS macro_regime_history (
+                id SERIAL PRIMARY KEY,
+                regime TEXT NOT NULL,
+                position_size_multiplier REAL NOT NULL,
+                suppress_buys BOOLEAN DEFAULT FALSE,
+                vix_current REAL,
+                vix_signal TEXT,
+                sp500_trend TEXT,
+                yield_direction TEXT,
+                btc_trend TEXT,
+                score INTEGER,
+                recorded_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )''' if is_postgres_conn else '''
+            CREATE TABLE IF NOT EXISTS macro_regime_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                regime TEXT NOT NULL,
+                position_size_multiplier REAL NOT NULL,
+                suppress_buys BOOLEAN DEFAULT FALSE,
+                vix_current REAL,
+                vix_signal TEXT,
+                sp500_trend TEXT,
+                yield_direction TEXT,
+                btc_trend TEXT,
+                score INTEGER,
+                recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )'''
+        cursor.execute(macro_regime_sql)
+
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_macro_regime_recorded_at "
+            "ON macro_regime_history (recorded_at)"
+        )
+
         # --- Migrate trades table: add live trading columns if missing ---
         new_trade_columns = [
             ("trading_mode", "TEXT DEFAULT 'paper'"),
@@ -330,6 +423,18 @@ def initialize_database(db_url=None):
                 conn.rollback()
         except Exception as e:
             log.warning(f"Could not add column 'gemini_score' to scraped_articles: {e}")
+            if is_postgres_conn:
+                conn.rollback()
+
+        # --- Migrate trades table: add trading_strategy column (auto-trading shadow bot) ---
+        try:
+            cursor.execute("ALTER TABLE trades ADD COLUMN trading_strategy TEXT DEFAULT 'manual'")
+            log.info("Added column 'trading_strategy' to trades table.")
+        except (sqlite3.OperationalError, psycopg2.errors.DuplicateColumn):
+            if is_postgres_conn:
+                conn.rollback()
+        except Exception as e:
+            log.warning(f"Could not add column 'trading_strategy' to trades: {e}")
             if is_postgres_conn:
                 conn.rollback()
 
@@ -473,7 +578,7 @@ def get_historical_prices(symbol: str, limit: int = 5):
     finally:
         release_db_connection(conn)
 
-def get_trade_summary(hours_ago: int = 24) -> dict:
+def get_trade_summary(hours_ago: int = 24, trading_strategy: str = None) -> dict:
     """Calculates and returns a summary of trade performance over a given period."""
     conn = None
     try:
@@ -482,10 +587,18 @@ def get_trade_summary(hours_ago: int = 24) -> dict:
         with _cursor(conn) as cursor:
             if is_postgres_conn:
                 query = "SELECT * FROM trades WHERE status = 'CLOSED' AND exit_timestamp >= NOW() - INTERVAL '%s hours'"
-                cursor.execute(query, (hours_ago,))
+                params = [hours_ago]
+                if trading_strategy:
+                    query += " AND trading_strategy = %s"
+                    params.append(trading_strategy)
+                cursor.execute(query, tuple(params))
             else:
                 query = "SELECT * FROM trades WHERE status = 'CLOSED' AND exit_timestamp >= datetime('now', ? || ' hours')"
-                cursor.execute(query, (f'-{hours_ago}',))
+                params = [f'-{hours_ago}']
+                if trading_strategy:
+                    query += " AND trading_strategy = ?"
+                    params.append(trading_strategy)
+                cursor.execute(query, tuple(params))
             closed_trades = [dict(row) for row in cursor.fetchall()]
 
         total_trades = len(closed_trades)
@@ -673,7 +786,7 @@ def save_news_sentiment_batch(rows: list):
     finally:
         release_db_connection(conn)
 
-def get_trade_history_stats() -> dict:
+def get_trade_history_stats(trading_strategy: str = None) -> dict:
     """
     Calculates win rate and average win/loss ratio from all closed trades.
     Used by the Kelly Criterion position sizing algorithm.
@@ -696,9 +809,14 @@ def get_trade_history_stats() -> dict:
     }
     try:
         conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
         with _cursor(conn) as cursor:
             query = "SELECT pnl FROM trades WHERE status = 'CLOSED' AND pnl IS NOT NULL"
-            cursor.execute(query)
+            params = []
+            if trading_strategy:
+                query += " AND trading_strategy = %s" if is_pg else " AND trading_strategy = ?"
+                params.append(trading_strategy)
+            cursor.execute(query, tuple(params) if params else None)
             rows = cursor.fetchall()
 
         if not rows:
@@ -1081,5 +1199,235 @@ def clear_stoploss_cooldown(symbol: str):
         conn.commit()
     except (sqlite3.Error, psycopg2.Error) as e:
         log.error(f"Database error in clear_stoploss_cooldown: {e}", exc_info=True)
+    finally:
+        release_db_connection(conn)
+
+
+def save_position_addition(parent_order_id: str, price: float, quantity: float, reason: str = ""):
+    """Records a position size increase (addition) in the database."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            query = (
+                "INSERT INTO position_additions (parent_order_id, addition_price, addition_quantity, reason) "
+                "VALUES (%s, %s, %s, %s)"
+            ) if is_pg else (
+                "INSERT INTO position_additions (parent_order_id, addition_price, addition_quantity, reason) "
+                "VALUES (?, ?, ?, ?)"
+            )
+            cursor.execute(query, (parent_order_id, price, quantity, reason))
+        conn.commit()
+        log.info(f"Saved position addition for {parent_order_id}: +{quantity} at ${price:,.2f}")
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in save_position_addition: {e}", exc_info=True)
+    finally:
+        release_db_connection(conn)
+
+
+def get_position_additions(parent_order_id: str) -> list:
+    """Returns all position additions for a given order, ordered by created_at."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            query = (
+                "SELECT parent_order_id, addition_price, addition_quantity, reason, created_at "
+                "FROM position_additions WHERE parent_order_id = %s ORDER BY created_at"
+            ) if is_pg else (
+                "SELECT parent_order_id, addition_price, addition_quantity, reason, created_at "
+                "FROM position_additions WHERE parent_order_id = ? ORDER BY created_at"
+            )
+            cursor.execute(query, (parent_order_id,))
+            return [dict(row) for row in cursor.fetchall()]
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in get_position_additions: {e}", exc_info=True)
+        return []
+    finally:
+        release_db_connection(conn)
+
+
+def update_trade_position(order_id: str, new_entry_price: float, new_quantity: float):
+    """Updates entry_price and quantity for an open trade (used after position increase)."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            query = (
+                "UPDATE trades SET entry_price = %s, quantity = %s WHERE order_id = %s"
+            ) if is_pg else (
+                "UPDATE trades SET entry_price = ?, quantity = ? WHERE order_id = ?"
+            )
+            cursor.execute(query, (new_entry_price, new_quantity, order_id))
+        conn.commit()
+        log.info(f"Updated trade {order_id}: new avg price=${new_entry_price:,.2f}, qty={new_quantity}")
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in update_trade_position: {e}", exc_info=True)
+    finally:
+        release_db_connection(conn)
+
+
+def save_ipo_event(company_name, ticker, status, event_type, event_detail=None,
+                   source_url=None, source_article_hash=None):
+    """Saves a new IPO event. Deduplicates by company_name + event_type via unique index."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            if is_pg:
+                query = '''
+                    INSERT INTO ipo_events (company_name, ticker, status, event_type,
+                        event_detail, source_url, source_article_hash)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (company_name, event_type) DO NOTHING
+                '''
+            else:
+                query = '''
+                    INSERT OR IGNORE INTO ipo_events (company_name, ticker, status, event_type,
+                        event_detail, source_url, source_article_hash)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                '''
+            cursor.execute(query, (company_name, ticker, status, event_type,
+                                   event_detail, source_url, source_article_hash))
+        conn.commit()
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in save_ipo_event: {e}", exc_info=True)
+        if conn:
+            conn.rollback()
+    finally:
+        release_db_connection(conn)
+
+
+def get_ipo_events(status=None, since_hours=None):
+    """Returns IPO events, optionally filtered by status and time window."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            conditions = []
+            params = []
+            if status:
+                conditions.append("status = %s" if is_pg else "status = ?")
+                params.append(status)
+            if since_hours is not None:
+                if is_pg:
+                    conditions.append("detected_at >= NOW() - INTERVAL '%s hours'")
+                    params.append(since_hours)
+                else:
+                    conditions.append("detected_at >= datetime('now', ?)")
+                    params.append(f'-{since_hours} hours')
+            where_clause = " AND ".join(conditions)
+            query = f"SELECT * FROM ipo_events"
+            if where_clause:
+                query += f" WHERE {where_clause}"
+            query += " ORDER BY detected_at DESC"
+            cursor.execute(query, tuple(params))
+            rows = cursor.fetchall()
+            if is_pg:
+                return [dict(row) for row in rows]
+            # SQLite: convert Row objects
+            columns = [desc[0] for desc in cursor.description] if cursor.description else []
+            return [dict(zip(columns, row)) for row in rows]
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in get_ipo_events: {e}", exc_info=True)
+        return []
+    finally:
+        release_db_connection(conn)
+
+
+def mark_ipo_watchlist_added(event_id):
+    """Sets auto_added_to_watchlist = True for a given event."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            query = (
+                "UPDATE ipo_events SET auto_added_to_watchlist = TRUE WHERE id = %s"
+            ) if is_pg else (
+                "UPDATE ipo_events SET auto_added_to_watchlist = 1 WHERE id = ?"
+            )
+            cursor.execute(query, (event_id,))
+        conn.commit()
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in mark_ipo_watchlist_added: {e}", exc_info=True)
+        if conn:
+            conn.rollback()
+    finally:
+        release_db_connection(conn)
+
+
+def save_macro_regime(regime_data: dict):
+    """Saves a macro regime snapshot to the history table."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        signals = regime_data.get('signals', {})
+        indicators = regime_data.get('indicators', {})
+        vix_current = None
+        if indicators.get('vix') and isinstance(indicators['vix'], dict):
+            vix_current = indicators['vix'].get('current')
+
+        query = '''
+            INSERT INTO macro_regime_history
+            (regime, position_size_multiplier, suppress_buys,
+             vix_current, vix_signal, sp500_trend, yield_direction, btc_trend, score)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ''' if is_pg else '''
+            INSERT INTO macro_regime_history
+            (regime, position_size_multiplier, suppress_buys,
+             vix_current, vix_signal, sp500_trend, yield_direction, btc_trend, score)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        '''
+        with _cursor(conn) as cursor:
+            cursor.execute(query, (
+                regime_data.get('regime'),
+                regime_data.get('position_size_multiplier'),
+                regime_data.get('suppress_buys', False),
+                vix_current,
+                str(signals.get('vix_signal', '')),
+                str(signals.get('sp500_trend', '')),
+                str(signals.get('yield_direction', '')),
+                str(signals.get('btc_trend', '')),
+                regime_data.get('score', 0),
+            ))
+        conn.commit()
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in save_macro_regime: {e}", exc_info=True)
+        if conn:
+            conn.rollback()
+    finally:
+        release_db_connection(conn)
+
+
+def get_macro_regime_history(limit=10):
+    """Returns the most recent macro regime snapshots."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            query = (
+                f"SELECT * FROM macro_regime_history "
+                f"ORDER BY recorded_at DESC LIMIT %s"
+            ) if is_pg else (
+                f"SELECT * FROM macro_regime_history "
+                f"ORDER BY recorded_at DESC LIMIT ?"
+            )
+            cursor.execute(query, (limit,))
+            rows = cursor.fetchall()
+            if is_pg:
+                return [dict(row) for row in rows]
+            columns = [desc[0] for desc in cursor.description] if cursor.description else []
+            return [dict(zip(columns, row)) for row in rows]
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in get_macro_regime_history: {e}", exc_info=True)
+        return []
     finally:
         release_db_connection(conn)

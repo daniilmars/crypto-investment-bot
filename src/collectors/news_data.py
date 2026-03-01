@@ -105,6 +105,27 @@ SYMBOL_KEYWORDS = {
     'SO': ['Southern Company stock', 'Southern Co'],
     # REITs
     'AMT': ['American Tower Corp'],  # "AMT" too short
+    # AI Pure-Play Stocks
+    'AI': ['C3.ai stock', 'C3 AI'],  # "AI" alone too ambiguous
+    'BBAI': ['BBAI', 'BigBear.ai', 'BigBear AI'],
+    'UPST': ['UPST', 'Upstart stock', 'Upstart Holdings'],
+    'PATH': ['UiPath stock', 'UiPath Inc'],  # "PATH" too common
+    'SOUN': ['SOUN', 'SoundHound AI', 'SoundHound stock'],
+    'SMCI': ['SMCI', 'Super Micro Computer', 'Supermicro'],
+    'VRT': ['Vertiv stock', 'Vertiv Holdings'],  # "VRT" too short
+    'DELL': ['DELL', 'Dell Technologies'],
+    'ARM': ['Arm Holdings', 'ARM stock'],  # "ARM" needs context
+    'ANET': ['ANET', 'Arista Networks'],
+    'MDB': ['MongoDB stock', 'MongoDB Inc'],  # "MDB" too short
+    'ESTC': ['ESTC', 'Elastic stock', 'Elastic NV'],
+    'CFLT': ['CFLT', 'Confluent stock', 'Confluent Inc'],
+    'IONQ': ['IONQ', 'IonQ stock', 'IonQ Inc'],
+    'RGTI': ['RGTI', 'Rigetti Computing', 'Rigetti stock'],
+    'PLTR': ['Palantir stock', 'Palantir Technologies'],
+    'SNOW': ['Snowflake stock', 'Snowflake Inc'],
+    'NET': ['Cloudflare stock', 'Cloudflare Inc'],  # "NET" too common
+    'CRWD': ['CRWD', 'CrowdStrike stock', 'CrowdStrike Holdings'],
+    'DDOG': ['DDOG', 'Datadog stock', 'Datadog Inc'],
 }
 
 # Pre-compile regex patterns for each keyword (word-boundary matching)
@@ -179,6 +200,22 @@ RSS_FEEDS = [
     # Layer D — IPO / New listings feeds
     {'url': 'https://news.google.com/rss/search?q=IPO+%22initial+public+offering%22+stock+when:1d&hl=en-US&gl=US&ceid=US:en', 'category': 'ipo'},
     {'url': 'https://news.google.com/rss/search?q=Binance+OR+Coinbase+%22new+listing%22+crypto+when:1d&hl=en-US&gl=US&ceid=US:en', 'category': 'ipo'},
+    {'url': 'https://news.google.com/rss/search?q=%22S-1+filing%22+OR+%22SEC+filing%22+IPO+when:1d&hl=en-US&gl=US&ceid=US:en', 'category': 'ipo'},
+    {'url': 'https://news.google.com/rss/search?q=%22AI+IPO%22+OR+%22artificial+intelligence%22+%22goes+public%22+OR+%22public+offering%22+when:1d&hl=en-US&gl=US&ceid=US:en', 'category': 'ipo'},
+    # Layer G — AI industry & startup feeds
+    {'url': 'https://techcrunch.com/category/artificial-intelligence/feed/', 'category': 'ai'},
+    {'url': 'https://venturebeat.com/category/ai/feed/', 'category': 'ai'},
+    {'url': 'https://www.theverge.com/rss/ai-artificial-intelligence/index.xml', 'category': 'ai'},
+    {'url': 'https://the-decoder.com/feed/', 'category': 'ai'},
+    {'url': 'https://www.marktechpost.com/feed/', 'category': 'ai'},
+    {'url': 'https://syncedreview.com/feed/', 'category': 'ai'},
+    {'url': 'https://news.google.com/rss/search?q=%22artificial+intelligence%22+OR+%22AI+startup%22+OR+%22machine+learning%22+funding+when:1d&hl=en-US&gl=US&ceid=US:en', 'category': 'ai'},
+    {'url': 'https://news.google.com/rss/search?q=%22generative+AI%22+OR+%22large+language+model%22+OR+%22AI+chip%22+stock+when:1d&hl=en-US&gl=US&ceid=US:en', 'category': 'ai'},
+    # Layer H — AI research & corporate blogs
+    {'url': 'https://blog.research.google/feeds/posts/default?alt=rss', 'category': 'ai_research'},
+    {'url': 'https://openai.com/blog/rss.xml', 'category': 'ai_research'},
+    {'url': 'https://ai.meta.com/blog/rss/', 'category': 'ai_research'},
+    {'url': 'https://blogs.nvidia.com/feed/', 'category': 'ai_research'},
 ]
 
 _vader_analyzer = SentimentIntensityAnalyzer()
@@ -361,6 +398,18 @@ def collect_news_sentiment(symbols):
     if not all_articles:
         log.info("No news articles found.")
         return {'per_symbol': {}, 'triggered_symbols': []}
+
+    # 2d. IPO event detection
+    ipo_tracking_config = app_config.get('settings', {}).get('ipo_tracking', {})
+    if ipo_tracking_config.get('enabled', False):
+        try:
+            from src.collectors.ipo_detector import detect_ipo_events
+            from src.database import save_ipo_event
+            ipo_events = detect_ipo_events(all_articles)
+            for event in ipo_events:
+                save_ipo_event(**event)
+        except Exception as e:
+            log.warning(f"IPO detection failed, continuing: {e}")
 
     # 2b. Deep scraping: enrich important articles with full body text
     if news_config.get('deep_scraping', {}).get('enabled', False):
