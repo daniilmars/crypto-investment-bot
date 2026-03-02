@@ -20,7 +20,7 @@ def generate_market_summary(price_history: list, last_signal: dict,
     log.info("Generating market summary with Vertex AI Gemini...")
 
     project_id = os.environ.get('GCP_PROJECT_ID')
-    location = os.environ.get('GCP_LOCATION', 'us-central1')
+    location = os.environ.get('VERTEX_AI_LOCATION') or os.environ.get('GCP_LOCATION', 'europe-west4')
 
     if not project_id:
         log.error("GCP_PROJECT_ID is not configured.")

@@ -19,6 +19,39 @@ from src.logger import log
 # --- Constants ---
 FEE_RATE = 0.001
 DEFAULT_SLIPPAGE_BPS = 5  # 5 basis points (0.05%) default slippage
+DEFAULT_PARALLEL_WORKERS = 4
+
+
+# ---------------------------------------------------------------------------
+# Parallel Signal Pre-computation
+# ---------------------------------------------------------------------------
+
+def _compute_signals_for_symbol(args):
+    """Worker function: compute signals for one symbol across all its rows.
+
+    Runs in a subprocess via fork.  Returns (symbol, [signal_data_list])
+    where each entry corresponds to a row in the symbol's price DataFrame.
+    """
+    symbol, sym_prices_list, sym_ts_ns_list, params_dict = args
+
+    # Reconstruct DataFrame inside the worker
+    sym_df = pd.DataFrame({
+        'timestamp': pd.to_datetime(sym_ts_ns_list, unit='ns', utc=True),
+        'price': sym_prices_list,
+    })
+
+    from argparse import Namespace
+    params = Namespace(**params_dict)
+    strategy = Strategy(params)
+
+    results = []
+    for i in range(len(sym_df)):
+        price = sym_df.iloc[i]['price']
+        hist = sym_df.iloc[:i + 1]
+        signal_data = strategy.generate_signals(symbol, hist, price)
+        results.append(signal_data)
+
+    return symbol, results
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +186,8 @@ class Portfolio:
         self.slippage_bps = slippage_bps
         # Trailing stop state: symbol -> peak price
         self._trailing_peaks = {}
+        # Per-position metadata (entry conditions + running MFE/MAE)
+        self._position_meta = {}
 
     def _apply_slippage(self, price, side):
         """Applies slippage: worse fill for entries, worse fill for exits."""
@@ -172,7 +207,8 @@ class Portfolio:
                 total_value += pos['margin'] + (pos['entry_price'] - cp) * pos['quantity']
         return total_value
 
-    def place_order(self, symbol, side, quantity, price, timestamp):
+    def place_order(self, symbol, side, quantity, price, timestamp,
+                    exit_reason=None):
         fill_price = self._apply_slippage(price, side)
         fee = quantity * fill_price * FEE_RATE
         if side == 'BUY' and self.cash >= quantity * fill_price + fee:
@@ -201,12 +237,42 @@ class Portfolio:
             else:  # close SHORT
                 pnl = (pos['entry_price'] - actual_fill) * pos['quantity'] - fee
                 self.cash += (pos['margin'] + pnl)
-            self.trade_history.append({
+            # Attach entry metadata + MFE/MAE
+            meta = self._position_meta.pop(symbol, {})
+            trade_record = {
                 'symbol': symbol, 'side': pos['side'], 'pnl': pnl,
                 'entry_price': pos['entry_price'], 'exit_price': actual_fill,
                 'entry_time': pos['entry_timestamp'], 'exit_time': timestamp,
-            })
+                'exit_reason': exit_reason or 'unknown',
+                'rsi_at_entry': meta.get('rsi_at_entry'),
+                'sma_alignment': meta.get('sma_alignment'),
+                'regime': meta.get('regime'),
+                'effective_risk': meta.get('effective_risk'),
+                'mfe': meta.get('mfe', 0.0),
+                'mae': meta.get('mae', 0.0),
+            }
+            self.trade_history.append(trade_record)
             self._trailing_peaks.pop(symbol, None)
+
+    def set_entry_meta(self, symbol, meta: dict):
+        """Store entry-time metadata for a position (RSI, SMA, regime, etc.)."""
+        meta.setdefault('mfe', 0.0)
+        meta.setdefault('mae', 0.0)
+        self._position_meta[symbol] = meta
+
+    def update_mfe_mae(self, symbol, current_price):
+        """Update Max Favorable / Max Adverse Excursion for an open position."""
+        if symbol not in self.positions or symbol not in self._position_meta:
+            return
+        pos = self.positions[symbol]
+        entry = pos['entry_price']
+        if pos['side'] == 'LONG':
+            pnl_pct = (current_price - entry) / entry
+        else:
+            pnl_pct = (entry - current_price) / entry
+        meta = self._position_meta[symbol]
+        meta['mfe'] = max(meta['mfe'], pnl_pct)
+        meta['mae'] = min(meta['mae'], pnl_pct)
 
     def update_trailing_peak(self, symbol, current_price):
         """Updates and returns the peak price for trailing stop."""
@@ -275,6 +341,8 @@ class Strategy:
         signal['regime'] = regime
         signal['regime_params'] = regime_params
         signal['mtf_direction'] = mtf_direction
+        signal['rsi'] = rsi
+        signal['sma_alignment'] = 'above' if current_price > sma else 'below'
         return signal
 
 
@@ -310,6 +378,57 @@ class Backtester:
         self._wins = 0
         self._total_win_pnl = 0.0
         self._total_loss_pnl = 0.0
+        # Pre-computed signal cache: {symbol: {timestamp: signal_data}}
+        self._signal_cache = None
+        # Pre-split price data by symbol (avoids O(n) filter per call)
+        self._symbol_dfs = {}
+        for sym in self.watch_list:
+            self._symbol_dfs[sym] = self.prices_df[
+                self.prices_df['symbol'] == sym
+            ].reset_index(drop=True)
+
+    def precompute_signals_parallel(self, n_workers=DEFAULT_PARALLEL_WORKERS):
+        """Pre-compute signals for all symbols using multiprocessing.
+
+        Call this before run() to parallelise the expensive signal generation.
+        Uses fork context on macOS/Linux for fast startup (no re-import).
+        """
+        import multiprocessing as mp
+
+        ctx = mp.get_context('fork')
+
+        # Serialize params as a plain dict (picklable)
+        params_dict = vars(self.params)
+
+        tasks = []
+        for sym in self.watch_list:
+            sym_df = self._symbol_dfs[sym]
+            if sym_df.empty:
+                continue
+            tasks.append((
+                sym,
+                sym_df['price'].tolist(),
+                sym_df['timestamp'].astype('int64').tolist(),  # nanoseconds
+                params_dict,
+            ))
+
+        log.info(f"Pre-computing signals for {len(tasks)} symbols "
+                 f"using {n_workers} workers...")
+        with ctx.Pool(n_workers) as pool:
+            results = pool.map(_compute_signals_for_symbol, tasks)
+
+        # Store as list per symbol + build timestamp-to-index mapping
+        self._signal_cache = {}
+        self._signal_cache_idx = {}
+        for sym, signal_list in results:
+            self._signal_cache[sym] = signal_list
+            sym_df = self._symbol_dfs[sym]
+            self._signal_cache_idx[sym] = {
+                ts: i for i, ts in enumerate(sym_df['timestamp'])
+            }
+
+        total_sigs = sum(len(v) for v in self._signal_cache.values())
+        log.info(f"Signal pre-computation done: {total_sigs} signals cached.")
 
     def _get_effective_risk(self, regime_params):
         """Returns risk fraction: Kelly-based if enough history, else fixed."""
@@ -376,6 +495,9 @@ class Backtester:
             if current_price is None:
                 continue
 
+            # Track MFE/MAE every bar
+            self.portfolio.update_mfe_mae(symbol, current_price)
+
             entry_price = pos['entry_price']
             if pos['side'] == 'LONG':
                 pnl_percentage = (current_price - entry_price) / entry_price
@@ -391,7 +513,8 @@ class Backtester:
                         log.debug(f"[{timestamp}] TRAILING STOP '{symbol}': "
                                   f"peak=${peak:.2f}, now=${current_price:.2f}")
                         self.portfolio.place_order(symbol, 'CLOSE', pos['quantity'],
-                                                   current_price, timestamp)
+                                                   current_price, timestamp,
+                                                   exit_reason='trailing_stop')
                         self._update_kelly_state(self.portfolio.trade_history[-1]['pnl'])
                         continue
 
@@ -399,7 +522,8 @@ class Backtester:
             if pnl_percentage <= -self.params.stop_loss_percentage:
                 log.debug(f"[{timestamp}] STOP-LOSS '{symbol}' ({pos['side']}): PnL% {pnl_percentage:.2%}")
                 self.portfolio.place_order(symbol, 'CLOSE', pos['quantity'],
-                                           current_price, timestamp)
+                                           current_price, timestamp,
+                                           exit_reason='stop_loss')
                 self._update_kelly_state(self.portfolio.trade_history[-1]['pnl'])
                 # Set stop-loss cooldown
                 if self.stoploss_cooldown_bars > 0:
@@ -407,7 +531,8 @@ class Backtester:
             elif pnl_percentage >= self.params.take_profit_percentage:
                 log.debug(f"[{timestamp}] TAKE-PROFIT '{symbol}' ({pos['side']}): PnL% {pnl_percentage:.2%}")
                 self.portfolio.place_order(symbol, 'CLOSE', pos['quantity'],
-                                           current_price, timestamp)
+                                           current_price, timestamp,
+                                           exit_reason='take_profit')
                 self._update_kelly_state(self.portfolio.trade_history[-1]['pnl'])
 
     def check_for_entries(self, current_prices, timestamp, bar_idx=0):
@@ -425,13 +550,22 @@ class Backtester:
                 del self._stoploss_cooldowns[symbol]
 
             # --- Generate Signal (with regime + MTF filtering) ---
-            historical_prices = self.prices_df[
-                (self.prices_df['symbol'] == symbol) & (self.prices_df['timestamp'] <= timestamp)
-            ]
-
-            signal_data = self.strategy.generate_signals(
-                symbol, historical_prices, current_price,
-            )
+            if self._signal_cache and symbol in self._signal_cache:
+                idx = self._signal_cache_idx[symbol].get(timestamp)
+                if idx is None:
+                    continue
+                signal_data = self._signal_cache[symbol][idx]
+            else:
+                sym_df = self._symbol_dfs.get(symbol)
+                if sym_df is not None:
+                    historical_prices = sym_df[sym_df['timestamp'] <= timestamp]
+                else:
+                    historical_prices = self.prices_df[
+                        (self.prices_df['symbol'] == symbol) & (self.prices_df['timestamp'] <= timestamp)
+                    ]
+                signal_data = self.strategy.generate_signals(
+                    symbol, historical_prices, current_price,
+                )
 
             signal = signal_data.get('signal')
             regime_params = signal_data.get('regime_params', {})
@@ -450,19 +584,33 @@ class Backtester:
             # --- Dynamic position sizing ---
             effective_risk = self._get_effective_risk(regime_params)
 
+            if signal in ('BUY', 'SELL'):
+                entry_meta = {
+                    'rsi_at_entry': signal_data.get('rsi'),
+                    'sma_alignment': signal_data.get('sma_alignment'),
+                    'regime': signal_data.get('regime'),
+                    'effective_risk': effective_risk,
+                }
+
             if signal == 'BUY':
                 log.debug(f"[{timestamp}] ENTRY '{symbol}' LONG (risk={effective_risk:.4f})")
                 capital_to_risk = self.portfolio.cash * effective_risk
                 quantity = capital_to_risk / current_price
                 self.portfolio.place_order(symbol, 'BUY', quantity, current_price, timestamp)
+                self.portfolio.set_entry_meta(symbol, entry_meta)
             elif signal == 'SELL':
                 log.debug(f"[{timestamp}] ENTRY '{symbol}' SHORT (risk={effective_risk:.4f})")
                 capital_to_risk = self.portfolio.cash * effective_risk
                 quantity = capital_to_risk / current_price
                 self.portfolio.place_order(symbol, 'SHORT', quantity, current_price, timestamp)
+                self.portfolio.set_entry_meta(symbol, entry_meta)
 
-    def get_results(self) -> dict:
-        """Returns full results dict with risk metrics."""
+    def get_results(self, include_trades=False) -> dict:
+        """Returns full results dict with risk metrics.
+
+        If include_trades=True, adds 'trades' key with full trade_history list
+        (each trade has entry conditions, MFE/MAE, exit_reason).
+        """
         bar_interval = getattr(self.params, 'bar_interval_minutes', 60)
         metrics = calculate_risk_metrics(
             self.portfolio.equity_curve,
@@ -475,6 +623,8 @@ class Backtester:
         metrics['final_value'] = round(final_value, 2)
         metrics['total_pnl'] = round(total_pnl, 2)
         metrics['initial_capital'] = self.params.initial_capital
+        if include_trades:
+            metrics['trades'] = self.portfolio.trade_history
         return metrics
 
     def print_results(self):

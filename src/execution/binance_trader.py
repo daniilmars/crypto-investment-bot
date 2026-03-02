@@ -135,6 +135,11 @@ def place_order(symbol, side, quantity, price, order_type="MARKET", existing_ord
     """
     Places an order — dispatches to paper or live based on config.
     """
+    if price <= 0:
+        return {"status": "FAILED", "message": "Invalid price"}
+    # Stocks always use paper path — Binance live API is crypto-only
+    if asset_type == 'stock':
+        return _paper_place_order(symbol, side, quantity, price, order_type, existing_order_id, asset_type=asset_type, trading_strategy=trading_strategy)
     if _is_live_trading() and trading_strategy != 'auto':
         return _live_place_order(symbol, side, quantity, price, order_type, existing_order_id, asset_type=asset_type, trading_strategy=trading_strategy)
     else:
@@ -187,6 +192,11 @@ def _paper_place_order(symbol, side, quantity, price, order_type="MARKET", exist
             else:
                 pnl = Decimal("0")
 
+            # Deduct simulated trading fees (buy + sell sides)
+            fee_pct = Decimal(str(app_config.get('settings', {}).get('simulated_fee_pct', 0.001)))
+            simulated_fees = d_price * d_qty * fee_pct + d_entry * d_qty * fee_pct
+            pnl -= simulated_fees
+
             pnl_float = float(pnl.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
             query_update = ('UPDATE trades SET status = %s, exit_price = %s, exit_timestamp = CURRENT_TIMESTAMP, pnl = %s '
@@ -221,7 +231,7 @@ def _live_place_order(symbol, side, quantity, price, order_type="MARKET", existi
         return {"status": "FAILED", "message": "Binance client not available"}
 
     trading_mode = _get_trading_mode()
-    api_symbol = symbol if "USDT" in symbol else f"{symbol}USDT"
+    api_symbol = symbol if symbol.endswith("USDT") else f"{symbol}USDT"
 
     try:
         if side == "BUY":
@@ -499,15 +509,14 @@ def add_to_position(parent_order_id, symbol, add_quantity, add_price,
         return _live_add_to_position(parent_order_id, symbol, add_quantity, add_price,
                                      reason, asset_type)
 
-    # --- Paper trading path ---
+    # --- Paper trading path (atomic: single connection, single commit) ---
     conn = None
     try:
         conn = get_db_connection()
         is_pg = isinstance(conn, psycopg2.extensions.connection)
+        ph = '%s' if is_pg else '?'
         with _cursor(conn) as cursor:
-            q = ('SELECT entry_price, quantity FROM trades WHERE order_id = %s AND status = %s'
-                 if is_pg else
-                 'SELECT entry_price, quantity FROM trades WHERE order_id = ? AND status = ?')
+            q = f'SELECT entry_price, quantity FROM trades WHERE order_id = {ph} AND status = {ph}'
             cursor.execute(q, (parent_order_id, 'OPEN'))
             row = cursor.fetchone()
             if not row:
@@ -517,11 +526,20 @@ def add_to_position(parent_order_id, symbol, add_quantity, add_price,
             old_price = float(row[0])
             old_qty = float(row[1])
 
-        new_total = old_qty + add_quantity
-        new_avg = (old_price * old_qty + add_price * add_quantity) / new_total
+            new_total = old_qty + add_quantity
+            new_avg = (old_price * old_qty + add_price * add_quantity) / new_total
 
-        update_trade_position(parent_order_id, new_avg, new_total)
-        save_position_addition(parent_order_id, add_price, add_quantity, reason)
+            # Update trade position (inline, same cursor)
+            q_update = f'UPDATE trades SET entry_price = {ph}, quantity = {ph} WHERE order_id = {ph}'
+            cursor.execute(q_update, (new_avg, new_total, parent_order_id))
+
+            # Record position addition (inline, same cursor)
+            q_add = (f'INSERT INTO position_additions '
+                     f'(parent_order_id, addition_price, addition_quantity, reason) '
+                     f'VALUES ({ph}, {ph}, {ph}, {ph})')
+            cursor.execute(q_add, (parent_order_id, add_price, add_quantity, reason))
+
+        conn.commit()
 
         log.info(f"Paper position increase for {symbol}: +{add_quantity} at ${add_price:,.2f} "
                  f"→ avg ${new_avg:,.2f}, total {new_total}")
@@ -536,6 +554,8 @@ def add_to_position(parent_order_id, symbol, add_quantity, add_price,
 
     except (sqlite3.Error, psycopg2.Error) as e:
         log.error(f"Database error in add_to_position: {e}", exc_info=True)
+        if conn:
+            conn.rollback()
         return {"status": "FAILED", "message": str(e)}
     finally:
         release_db_connection(conn)
@@ -546,7 +566,7 @@ def _live_add_to_position(parent_order_id, symbol, add_quantity, add_price,
     """Live trading path for adding to a position (future implementation)."""
     from src.database import (save_position_addition, update_trade_position)
 
-    api_symbol = symbol if "USDT" in symbol else f"{symbol}USDT"
+    api_symbol = symbol if symbol.endswith("USDT") else f"{symbol}USDT"
     client = _get_binance_client()
     if not client:
         return {"status": "FAILED", "message": "Binance client not available"}

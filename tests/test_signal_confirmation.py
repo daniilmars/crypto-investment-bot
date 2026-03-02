@@ -1,6 +1,7 @@
 # tests/test_signal_confirmation.py
 
 import asyncio
+import itertools
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -26,11 +27,11 @@ def clear_pending_signals():
     """Clear pending signals before and after each test."""
     _pending_signals.clear()
     import src.notify.telegram_bot as tb
-    tb._signal_counter = 0
+    tb._signal_counter = itertools.count(1)
     tb._execute_callback = None
     yield
     _pending_signals.clear()
-    tb._signal_counter = 0
+    tb._signal_counter = itertools.count(1)
     tb._execute_callback = None
 
 

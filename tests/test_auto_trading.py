@@ -48,7 +48,7 @@ def test_get_trade_summary_filters_by_strategy(mock_get_conn, mock_release):
 
     with patch('src.database._cursor', fake_cursor):
         from src.database import get_trade_summary
-        result = get_trade_summary(hours_ago=24, trading_strategy='auto')
+        result = get_trade_summary.sync(hours_ago=24, trading_strategy='auto')
 
     # Verify SQL includes trading_strategy filter
     call_args = mock_cursor.execute.call_args
@@ -75,7 +75,7 @@ def test_get_trade_summary_no_strategy_filter(mock_get_conn, mock_release):
 
     with patch('src.database._cursor', fake_cursor):
         from src.database import get_trade_summary
-        result = get_trade_summary(hours_ago=24)
+        result = get_trade_summary.sync(hours_ago=24)
 
     call_args = mock_cursor.execute.call_args
     query = call_args[0][0]
@@ -99,7 +99,7 @@ def test_get_trade_history_stats_filters_by_strategy(mock_get_conn, mock_release
 
     with patch('src.database._cursor', fake_cursor):
         from src.database import get_trade_history_stats
-        result = get_trade_history_stats(trading_strategy='auto')
+        result = get_trade_history_stats.sync(trading_strategy='auto')
 
     call_args = mock_cursor.execute.call_args
     query = call_args[0][0]
@@ -287,22 +287,22 @@ def test_get_account_balance_auto_never_live(mock_live):
 
 def test_auto_update_trailing_stop():
     """_auto_update_trailing_stop tracks peak correctly."""
-    from main import _auto_update_trailing_stop, _auto_trailing_stop_peaks
+    from src.orchestration.bot_state import auto_update_trailing_stop, _auto_trailing_stop_peaks
 
     # Clear state
     _auto_trailing_stop_peaks.clear()
 
     # First call sets peak
-    peak = _auto_update_trailing_stop("ORDER_1", 100.0)
+    peak = auto_update_trailing_stop("ORDER_1", 100.0)
     assert peak == 100.0
     assert _auto_trailing_stop_peaks["ORDER_1"] == 100.0
 
     # Higher price updates peak
-    peak = _auto_update_trailing_stop("ORDER_1", 110.0)
+    peak = auto_update_trailing_stop("ORDER_1", 110.0)
     assert peak == 110.0
 
     # Lower price doesn't reduce peak
-    peak = _auto_update_trailing_stop("ORDER_1", 105.0)
+    peak = auto_update_trailing_stop("ORDER_1", 105.0)
     assert peak == 110.0
 
     _auto_trailing_stop_peaks.clear()
@@ -310,14 +310,14 @@ def test_auto_update_trailing_stop():
 
 def test_auto_clear_trailing_stop():
     """_auto_clear_trailing_stop removes the entry."""
-    from main import _auto_clear_trailing_stop, _auto_trailing_stop_peaks
+    from src.orchestration.bot_state import auto_clear_trailing_stop, _auto_trailing_stop_peaks
 
     _auto_trailing_stop_peaks["ORDER_2"] = 200.0
-    _auto_clear_trailing_stop("ORDER_2")
+    auto_clear_trailing_stop("ORDER_2")
     assert "ORDER_2" not in _auto_trailing_stop_peaks
 
     # Clearing non-existent key doesn't error
-    _auto_clear_trailing_stop("NONEXISTENT")
+    auto_clear_trailing_stop("NONEXISTENT")
 
 
 # ---------------------------------------------------------------------------

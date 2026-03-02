@@ -3,48 +3,139 @@ Event Calendar — gates BUY/INCREASE signals around known market-moving events.
 
 Data sources:
 - Earnings dates: yfinance Ticker.calendar (24h cache per symbol)
-- FOMC 2026: hardcoded 8 dates
-- CPI 2026: hardcoded 12 dates
+- FOMC / CPI: loaded from config/event_dates.yaml (fallback to hardcoded 2026 dates)
 
 Never blocks exits (SL/TP/trailing stop).
 """
 
+import os
 import time
 from datetime import datetime, timezone, timedelta
 
+import yaml
 import yfinance as yf
 
 from src.config import app_config
 from src.logger import log
 
 
-# FOMC announcement dates 2026 (Federal Reserve meeting conclusions)
-FOMC_DATES_2026 = [
-    datetime(2026, 1, 28, 19, 0, tzinfo=timezone.utc),   # Jan
-    datetime(2026, 3, 18, 18, 0, tzinfo=timezone.utc),    # Mar
-    datetime(2026, 5, 6, 18, 0, tzinfo=timezone.utc),     # May
-    datetime(2026, 6, 17, 18, 0, tzinfo=timezone.utc),    # Jun
-    datetime(2026, 7, 29, 18, 0, tzinfo=timezone.utc),    # Jul
-    datetime(2026, 9, 16, 18, 0, tzinfo=timezone.utc),    # Sep
-    datetime(2026, 11, 4, 18, 0, tzinfo=timezone.utc),    # Nov
-    datetime(2026, 12, 16, 19, 0, tzinfo=timezone.utc),   # Dec
+# --- Hardcoded fallback dates (2026) ---
+_FOMC_DATES_2026_FALLBACK = [
+    datetime(2026, 1, 28, 19, 0, tzinfo=timezone.utc),
+    datetime(2026, 3, 18, 18, 0, tzinfo=timezone.utc),
+    datetime(2026, 5, 6, 18, 0, tzinfo=timezone.utc),
+    datetime(2026, 6, 17, 18, 0, tzinfo=timezone.utc),
+    datetime(2026, 7, 29, 18, 0, tzinfo=timezone.utc),
+    datetime(2026, 9, 16, 18, 0, tzinfo=timezone.utc),
+    datetime(2026, 11, 4, 18, 0, tzinfo=timezone.utc),
+    datetime(2026, 12, 16, 19, 0, tzinfo=timezone.utc),
 ]
 
-# CPI release dates 2026 (Bureau of Labor Statistics, 8:30 AM ET = 13:30 UTC)
-CPI_DATES_2026 = [
-    datetime(2026, 1, 14, 13, 30, tzinfo=timezone.utc),   # Jan
-    datetime(2026, 2, 12, 13, 30, tzinfo=timezone.utc),   # Feb
-    datetime(2026, 3, 11, 13, 30, tzinfo=timezone.utc),   # Mar
-    datetime(2026, 4, 14, 12, 30, tzinfo=timezone.utc),   # Apr (DST)
-    datetime(2026, 5, 12, 12, 30, tzinfo=timezone.utc),   # May
-    datetime(2026, 6, 10, 12, 30, tzinfo=timezone.utc),   # Jun
-    datetime(2026, 7, 14, 12, 30, tzinfo=timezone.utc),   # Jul
-    datetime(2026, 8, 12, 12, 30, tzinfo=timezone.utc),   # Aug
-    datetime(2026, 9, 15, 12, 30, tzinfo=timezone.utc),   # Sep
-    datetime(2026, 10, 13, 12, 30, tzinfo=timezone.utc),  # Oct
-    datetime(2026, 11, 12, 13, 30, tzinfo=timezone.utc),  # Nov (DST end)
-    datetime(2026, 12, 10, 13, 30, tzinfo=timezone.utc),  # Dec
+_CPI_DATES_2026_FALLBACK = [
+    datetime(2026, 1, 14, 13, 30, tzinfo=timezone.utc),
+    datetime(2026, 2, 12, 13, 30, tzinfo=timezone.utc),
+    datetime(2026, 3, 11, 13, 30, tzinfo=timezone.utc),
+    datetime(2026, 4, 14, 12, 30, tzinfo=timezone.utc),
+    datetime(2026, 5, 12, 12, 30, tzinfo=timezone.utc),
+    datetime(2026, 6, 10, 12, 30, tzinfo=timezone.utc),
+    datetime(2026, 7, 14, 12, 30, tzinfo=timezone.utc),
+    datetime(2026, 8, 12, 12, 30, tzinfo=timezone.utc),
+    datetime(2026, 9, 15, 12, 30, tzinfo=timezone.utc),
+    datetime(2026, 10, 13, 12, 30, tzinfo=timezone.utc),
+    datetime(2026, 11, 12, 13, 30, tzinfo=timezone.utc),
+    datetime(2026, 12, 10, 13, 30, tzinfo=timezone.utc),
 ]
+
+# --- Dynamic event date loading ---
+_loaded_event_dates: dict | None = None
+
+
+def _load_event_dates() -> dict:
+    """Loads event dates from config/event_dates.yaml, falls back to hardcoded."""
+    global _loaded_event_dates
+    if _loaded_event_dates is not None:
+        return _loaded_event_dates
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    yaml_path = os.path.join(script_dir, '..', '..', 'config', 'event_dates.yaml')
+
+    fomc_dates = []
+    cpi_dates = []
+
+    try:
+        with open(yaml_path, 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f) or {}
+
+        fomc_raw = data.get('fomc', {})
+        cpi_raw = data.get('cpi', {})
+
+        for year_dates in fomc_raw.values():
+            if isinstance(year_dates, list):
+                for ds in year_dates:
+                    fomc_dates.append(_parse_iso_date(ds))
+
+        for year_dates in cpi_raw.values():
+            if isinstance(year_dates, list):
+                for ds in year_dates:
+                    cpi_dates.append(_parse_iso_date(ds))
+
+        fomc_dates = sorted([d for d in fomc_dates if d is not None])
+        cpi_dates = sorted([d for d in cpi_dates if d is not None])
+
+        if fomc_dates or cpi_dates:
+            log.info(f"Loaded event_dates.yaml: {len(fomc_dates)} FOMC, {len(cpi_dates)} CPI dates")
+        else:
+            log.warning("event_dates.yaml loaded but empty — using hardcoded fallback")
+            fomc_dates = _FOMC_DATES_2026_FALLBACK
+            cpi_dates = _CPI_DATES_2026_FALLBACK
+
+    except FileNotFoundError:
+        log.info("config/event_dates.yaml not found — using hardcoded 2026 dates")
+        fomc_dates = _FOMC_DATES_2026_FALLBACK
+        cpi_dates = _CPI_DATES_2026_FALLBACK
+    except Exception as e:
+        log.warning(f"Failed to load event_dates.yaml: {e} — using hardcoded fallback")
+        fomc_dates = _FOMC_DATES_2026_FALLBACK
+        cpi_dates = _CPI_DATES_2026_FALLBACK
+
+    _loaded_event_dates = {'fomc': fomc_dates, 'cpi': cpi_dates}
+    return _loaded_event_dates
+
+
+def _parse_iso_date(s: str) -> datetime | None:
+    """Parse an ISO date string (with Z timezone) to a tz-aware datetime."""
+    try:
+        s = s.replace('Z', '+00:00')
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def _get_fomc_dates() -> list:
+    return _load_event_dates()['fomc']
+
+
+def _get_cpi_dates() -> list:
+    return _load_event_dates()['cpi']
+
+
+def reload_event_dates():
+    """Force-reloads event dates from YAML. For tests and optional Telegram command."""
+    global _loaded_event_dates
+    _loaded_event_dates = None
+    _load_event_dates()
+
+
+# Backwards-compatible aliases for external consumers (tests, market_alerts)
+# These are lazily evaluated properties, but since tests import at module level,
+# we provide them as module-level references to the fallback lists.
+# The actual runtime code uses _get_fomc_dates() / _get_cpi_dates() which load from YAML.
+FOMC_DATES_2026 = _FOMC_DATES_2026_FALLBACK
+CPI_DATES_2026 = _CPI_DATES_2026_FALLBACK
+
 
 # Earnings cache: {symbol: {earnings_date: datetime|None, fetched_at: float}}
 _earnings_cache = {}
@@ -60,11 +151,6 @@ def check_event_gate(symbol: str, signal_type: str,
     """Check if an upcoming event should gate this signal.
 
     Only called for BUY and INCREASE signals. Never blocks exits.
-
-    Args:
-        symbol: Ticker symbol.
-        signal_type: 'BUY' or 'INCREASE'.
-        asset_type: 'crypto' or 'stock'.
 
     Returns:
         (action: str, size_multiplier: float, reason: str)
@@ -88,7 +174,7 @@ def check_event_gate(symbol: str, signal_type: str,
     fomc_cfg = cfg.get('fomc', {})
     if fomc_cfg.get('enabled', True):
         action, mult, reason = _check_macro_event_gate(
-            now, FOMC_DATES_2026, 'FOMC', fomc_cfg)
+            now, _get_fomc_dates(), 'FOMC', fomc_cfg)
         if action != 'allow':
             return action, mult, reason
 
@@ -96,7 +182,7 @@ def check_event_gate(symbol: str, signal_type: str,
     cpi_cfg = cfg.get('cpi', {})
     if cpi_cfg.get('enabled', True):
         action, mult, reason = _check_macro_event_gate(
-            now, CPI_DATES_2026, 'CPI', cpi_cfg)
+            now, _get_cpi_dates(), 'CPI', cpi_cfg)
         if action != 'allow':
             return action, mult, reason
 
@@ -116,7 +202,6 @@ def _check_earnings_gate(symbol: str, now: datetime, cfg: dict) -> tuple:
     hours_until = (earnings_dt - now).total_seconds() / 3600
 
     if hours_until < 0:
-        # Earnings already passed
         return 'allow', 1.0, ''
     elif hours_until <= block_hours:
         return 'block', 0.0, (f"Earnings for {symbol} in "
@@ -171,7 +256,6 @@ def _get_earnings_date(symbol: str) -> datetime | None:
         ticker = yf.Ticker(symbol)
         cal = ticker.calendar
         if cal is not None:
-            # yfinance returns a dict or DataFrame depending on version
             if isinstance(cal, dict):
                 earnings_raw = cal.get('Earnings Date')
                 if earnings_raw:
@@ -180,7 +264,6 @@ def _get_earnings_date(symbol: str) -> datetime | None:
                     else:
                         earnings_dt = _parse_earnings_date(earnings_raw)
             elif hasattr(cal, 'iloc'):
-                # DataFrame format
                 if 'Earnings Date' in cal.index:
                     val = cal.loc['Earnings Date'].iloc[0]
                     earnings_dt = _parse_earnings_date(val)
@@ -202,13 +285,11 @@ def _parse_earnings_date(raw) -> datetime | None:
         if raw.tzinfo is None:
             return raw.replace(tzinfo=timezone.utc)
         return raw
-    # Handle pandas Timestamp
     if hasattr(raw, 'to_pydatetime'):
         dt = raw.to_pydatetime()
         if dt.tzinfo is None:
             return dt.replace(tzinfo=timezone.utc)
         return dt
-    # Try string parsing
     try:
         dt = datetime.fromisoformat(str(raw))
         if dt.tzinfo is None:
@@ -220,10 +301,7 @@ def _parse_earnings_date(raw) -> datetime | None:
 
 def get_event_warnings_for_positions(open_positions: list,
                                      lookahead_hours: int = 72) -> list:
-    """Returns warnings for open positions with upcoming events.
-
-    Returns list of dicts: {symbol, event_type, event_date, hours_until}
-    """
+    """Returns warnings for open positions with upcoming events."""
     cfg = app_config.get('settings', {}).get('event_calendar', {})
     if not cfg.get('enabled', True):
         return []
@@ -242,88 +320,73 @@ def get_event_warnings_for_positions(open_positions: list,
         symbol = pos.get('symbol', '')
         asset_type = pos.get('asset_type', 'crypto')
 
-        # Check per-symbol cooldown
         last_warned = _warning_cooldown.get(symbol, 0)
         if time.time() - last_warned < _WARNING_COOLDOWN_SECONDS:
             continue
 
-        # Earnings (stocks only)
         if asset_type == 'stock':
             earnings_dt = _get_earnings_date(symbol)
             if earnings_dt:
                 hours_until = (earnings_dt - now).total_seconds() / 3600
                 if 0 < hours_until <= lookahead:
                     warnings.append({
-                        'symbol': symbol,
-                        'event_type': 'Earnings',
-                        'event_date': earnings_dt,
-                        'hours_until': hours_until,
+                        'symbol': symbol, 'event_type': 'Earnings',
+                        'event_date': earnings_dt, 'hours_until': hours_until,
                     })
                     _warning_cooldown[symbol] = time.time()
 
-        # FOMC
-        next_fomc = _get_next_event(now, FOMC_DATES_2026)
+        next_fomc = _get_next_event(now, _get_fomc_dates())
         if next_fomc:
             hours_until = (next_fomc - now).total_seconds() / 3600
             if 0 < hours_until <= lookahead:
                 warnings.append({
-                    'symbol': symbol,
-                    'event_type': 'FOMC',
-                    'event_date': next_fomc,
-                    'hours_until': hours_until,
+                    'symbol': symbol, 'event_type': 'FOMC',
+                    'event_date': next_fomc, 'hours_until': hours_until,
                 })
 
-        # CPI
-        next_cpi = _get_next_event(now, CPI_DATES_2026)
+        next_cpi = _get_next_event(now, _get_cpi_dates())
         if next_cpi:
             hours_until = (next_cpi - now).total_seconds() / 3600
             if 0 < hours_until <= lookahead:
                 warnings.append({
-                    'symbol': symbol,
-                    'event_type': 'CPI',
-                    'event_date': next_cpi,
-                    'hours_until': hours_until,
+                    'symbol': symbol, 'event_type': 'CPI',
+                    'event_date': next_cpi, 'hours_until': hours_until,
                 })
 
     return warnings
 
 
 def get_upcoming_macro_events(days_ahead: int = 30) -> list:
-    """Returns upcoming FOMC and CPI events for the /events command.
-
-    Returns list of dicts: {event_type, event_date, hours_until}
-    """
+    """Returns upcoming FOMC and CPI events for the /events command."""
     now = datetime.now(timezone.utc)
     cutoff = now + timedelta(days=days_ahead)
     events = []
 
-    for dt in FOMC_DATES_2026:
+    for dt in _get_fomc_dates():
         if now < dt <= cutoff:
             events.append({
-                'event_type': 'FOMC',
-                'event_date': dt,
+                'event_type': 'FOMC', 'event_date': dt,
                 'hours_until': (dt - now).total_seconds() / 3600,
             })
 
-    for dt in CPI_DATES_2026:
+    for dt in _get_cpi_dates():
         if now < dt <= cutoff:
             events.append({
-                'event_type': 'CPI',
-                'event_date': dt,
+                'event_type': 'CPI', 'event_date': dt,
                 'hours_until': (dt - now).total_seconds() / 3600,
             })
 
-    # Check if we're past all hardcoded dates
-    all_dates = FOMC_DATES_2026 + CPI_DATES_2026
+    all_dates = _get_fomc_dates() + _get_cpi_dates()
     if all_dates and now > max(all_dates):
-        log.warning("Event calendar: All hardcoded 2026 dates have expired. "
-                     "Update FOMC_DATES and CPI_DATES for the new year.")
+        log.warning("Event calendar: All loaded dates have expired. "
+                     "Update config/event_dates.yaml for the new year.")
 
     events.sort(key=lambda e: e['event_date'])
     return events
 
 
 def clear_event_cache():
-    """Clears earnings and warning caches. For tests."""
+    """Clears earnings, warning, and event date caches. For tests."""
     _earnings_cache.clear()
     _warning_cooldown.clear()
+    reload_event_dates()

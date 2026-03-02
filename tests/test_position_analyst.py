@@ -262,7 +262,7 @@ class TestPositionAdditionsDB:
         with patch('src.database._cursor') as mock_ctx:
             mock_ctx.return_value.__enter__ = MagicMock(return_value=cursor_mock)
             mock_ctx.return_value.__exit__ = MagicMock(return_value=False)
-            result = get_position_additions('ORDER_123')
+            result = get_position_additions.sync('ORDER_123')
 
         assert len(result) == 1
         assert result[0]['addition_price'] == 52000.0
@@ -425,14 +425,14 @@ class TestExecuteConfirmedIncrease:
     """Tests for the INCREASE branch in execute_confirmed_signal."""
 
     def setup_method(self):
-        import main
-        main._trailing_stop_peaks.clear()
-        main._analyst_last_run.clear()
+        from src.orchestration import bot_state
+        bot_state._trailing_stop_peaks.clear()
+        bot_state._analyst_last_run.clear()
 
-    @patch('main.add_to_position')
-    @patch('main._get_trading_mode', return_value='paper')
+    @patch('src.orchestration.trade_executor.add_to_position')
+    @patch('src.orchestration.trade_executor._get_trading_mode', return_value='paper')
     def test_crypto_increase_calls_add_to_position(self, mock_mode, mock_add):
-        import main
+        from src.orchestration.trade_executor import execute_confirmed_signal
         mock_add.return_value = {'status': 'FILLED', 'new_avg_price': 51000, 'new_total_quantity': 0.15, 'price': 52000}
 
         signal = {
@@ -446,7 +446,7 @@ class TestExecuteConfirmedIncrease:
         }
 
         loop = asyncio.get_event_loop()
-        result = loop.run_until_complete(main.execute_confirmed_signal(signal))
+        result = loop.run_until_complete(execute_confirmed_signal(signal))
 
         mock_add.assert_called_once_with(
             'ORDER_1', 'BTC', 0.05, 52000.0,
@@ -454,11 +454,11 @@ class TestExecuteConfirmedIncrease:
         )
         assert result['status'] == 'FILLED'
 
-    @patch('main.add_to_position')
-    @patch('main._get_trading_mode', return_value='paper')
-    @patch('main.app_config', {'settings': {'stock_trading': {'broker': 'paper_only'}}})
+    @patch('src.orchestration.trade_executor.add_to_position')
+    @patch('src.orchestration.trade_executor._get_trading_mode', return_value='paper')
+    @patch('src.orchestration.trade_executor.app_config', {'settings': {'stock_trading': {'broker': 'paper_only'}}})
     def test_stock_increase_calls_add_to_position(self, mock_mode, mock_add):
-        import main
+        from src.orchestration.trade_executor import execute_confirmed_signal
         mock_add.return_value = {'status': 'FILLED', 'new_avg_price': 105, 'new_total_quantity': 15, 'price': 105}
 
         signal = {
@@ -472,18 +472,19 @@ class TestExecuteConfirmedIncrease:
         }
 
         loop = asyncio.get_event_loop()
-        result = loop.run_until_complete(main.execute_confirmed_signal(signal))
+        result = loop.run_until_complete(execute_confirmed_signal(signal))
 
         mock_add.assert_called_once()
         assert result['status'] == 'FILLED'
 
-    @patch('main.place_order')
-    @patch('main._get_trading_mode', return_value='paper')
+    @patch('src.orchestration.trade_executor.place_order')
+    @patch('src.orchestration.trade_executor._get_trading_mode', return_value='paper')
     def test_sell_clears_analyst_run(self, mock_mode, mock_place):
         """SELL via execute_confirmed_signal should clean up _analyst_last_run."""
-        import main
+        from src.orchestration.trade_executor import execute_confirmed_signal
+        from src.orchestration import bot_state
 
-        main._analyst_last_run['ORDER_1'] = datetime.now(timezone.utc)
+        bot_state._analyst_last_run['ORDER_1'] = datetime.now(timezone.utc)
         mock_place.return_value = {'status': 'CLOSED', 'pnl': 50.0}
 
         signal = {
@@ -496,9 +497,9 @@ class TestExecuteConfirmedIncrease:
         }
 
         loop = asyncio.get_event_loop()
-        loop.run_until_complete(main.execute_confirmed_signal(signal))
+        loop.run_until_complete(execute_confirmed_signal(signal))
 
-        assert 'ORDER_1' not in main._analyst_last_run
+        assert 'ORDER_1' not in bot_state._analyst_last_run
 
 
 # ---------- Config ----------

@@ -1,0 +1,214 @@
+"""Trade executor — executes confirmed signals and BUY/SELL trade logic.
+
+Contains execute_confirmed_signal (callback for Telegram approval)
+and helpers for the BUY/SELL execution patterns used in bot cycles.
+"""
+
+from src.execution.binance_trader import (
+    add_to_position, get_account_balance, place_order,
+    _is_live_trading, _get_trading_mode,
+)
+from src.execution.stock_trader import place_stock_order
+from src.logger import log
+from src.notify.telegram_bot import (
+    is_confirmation_required, send_signal_for_confirmation, send_telegram_alert,
+)
+from src.orchestration import bot_state
+from src.config import app_config
+
+
+async def execute_confirmed_signal(signal: dict) -> dict:
+    """Executes a trade after user confirmation via Telegram.
+
+    Called by the telegram_bot callback handler when user taps Approve.
+    """
+    signal_type = signal.get('signal')
+    symbol = signal.get('symbol')
+    current_price = signal.get('current_price', 0)
+    asset_type = signal.get('asset_type', 'crypto')
+    quantity = signal.get('quantity', 0)
+    position = signal.get('position')
+    order_result = None
+
+    trading_mode = _get_trading_mode()
+    log.info(f"Executing confirmed {signal_type} for {symbol} "
+             f"({asset_type}, {trading_mode})")
+
+    if asset_type == 'stock':
+        settings = app_config.get('settings', {})
+        stock_settings = settings.get('stock_trading', {})
+        broker = stock_settings.get('broker', 'paper_only')
+
+        if broker == 'alpaca':
+            order_result = place_stock_order(
+                symbol, signal_type, quantity, current_price)
+        else:
+            if signal_type == "BUY":
+                order_result = place_order(
+                    symbol, "BUY", quantity, current_price, asset_type='stock')
+            elif signal_type == "SELL" and position:
+                order_result = place_order(
+                    symbol, "SELL", quantity, current_price,
+                    existing_order_id=position.get('order_id'),
+                    asset_type='stock')
+                bot_state.clear_trailing_stop(position.get('order_id', ''))
+                bot_state.remove_analyst_last_run(position.get('order_id', ''))
+            elif signal_type == "INCREASE" and position:
+                order_result = add_to_position(
+                    position.get('order_id'), symbol, quantity, current_price,
+                    reason=signal.get('reason', ''), asset_type=asset_type)
+    else:
+        # Crypto
+        if signal_type == "BUY":
+            order_result = place_order(symbol, "BUY", quantity, current_price)
+        elif signal_type == "SELL" and position:
+            order_result = place_order(
+                symbol, "SELL", quantity, current_price,
+                existing_order_id=position.get('order_id'))
+            bot_state.clear_trailing_stop(position.get('order_id', ''))
+            bot_state.remove_analyst_last_run(position.get('order_id', ''))
+        elif signal_type == "INCREASE" and position:
+            order_result = add_to_position(
+                position.get('order_id'), symbol, quantity, current_price,
+                reason=signal.get('reason', ''), asset_type=asset_type)
+
+    return order_result or {}
+
+
+async def execute_buy(
+    symbol: str,
+    signal: dict,
+    current_price: float,
+    current_balance: float,
+    risk_pct: float,
+    size_mult: float,
+    *,
+    asset_type: str = 'crypto',
+    trading_strategy: str = 'manual',
+    broker: str | None = None,
+    label: str = '',
+):
+    """Calculate quantity and execute a BUY signal (or send for confirmation).
+
+    For auto-trading (trading_strategy='auto'), skips confirmation and alerts.
+    """
+    prefix = f"[{label}] " if label else ""
+    is_auto = trading_strategy == 'auto'
+
+    capital_to_risk = current_balance * risk_pct * size_mult
+    quantity = capital_to_risk / current_price if current_price > 0 else 0
+
+    if quantity <= 0 or quantity * current_price > current_balance:
+        log.warning(f"{prefix}Skipping BUY for {symbol}: Insufficient balance.")
+        return None
+
+    if is_auto:
+        log.info(f"{prefix}Executing BUY {quantity:.6f} {symbol} "
+                 f"(size_mult={size_mult:.2f})")
+        order_kw = {'trading_strategy': 'auto'}
+        if asset_type == 'stock':
+            order_kw['asset_type'] = 'stock'
+        return place_order(symbol, "BUY", quantity, current_price, **order_kw)
+
+    # Manual trading
+    signal['quantity'] = quantity
+    signal['asset_type'] = asset_type
+
+    if broker == 'alpaca':
+        if is_confirmation_required("BUY"):
+            log.info(f"{prefix}Sending BUY {symbol} (Alpaca) for confirmation.")
+            await send_signal_for_confirmation(signal)
+            return None
+        else:
+            log.info(f"{prefix}Executing Alpaca trade: BUY {quantity:.4f} {symbol} "
+                     f"(size_mult={size_mult:.2f}).")
+            order_result = place_stock_order(symbol, "BUY", quantity, current_price)
+            if order_result.get('status') == 'FILLED':
+                signal['order_result'] = order_result
+            await send_telegram_alert(signal)
+            return order_result
+
+    # Paper/live crypto or paper stock
+    if is_confirmation_required("BUY"):
+        log.info(f"{prefix}Sending BUY {symbol} for confirmation "
+                 f"(qty={quantity:.6f}).")
+        await send_signal_for_confirmation(signal)
+        return None
+    else:
+        log.info(f"{prefix}Executing trade: BUY {quantity:.6f} {symbol} "
+                 f"(risk={risk_pct:.4f}, size_mult={size_mult:.2f}).")
+        order_kw = {}
+        if asset_type == 'stock':
+            order_kw['asset_type'] = 'stock'
+        order_result = place_order(symbol, "BUY", quantity, current_price, **order_kw)
+        if order_result.get('status') == 'FILLED':
+            signal['order_result'] = order_result
+        await send_telegram_alert(signal)
+        return order_result
+
+
+async def execute_sell(
+    symbol: str,
+    signal: dict,
+    position: dict,
+    current_price: float,
+    *,
+    asset_type: str = 'crypto',
+    trading_strategy: str = 'manual',
+    broker: str | None = None,
+    label: str = '',
+):
+    """Execute a SELL signal (or send for confirmation).
+
+    For auto-trading (trading_strategy='auto'), skips confirmation and alerts.
+    """
+    prefix = f"[{label}] " if label else ""
+    is_auto = trading_strategy == 'auto'
+    qty = position['quantity']
+    order_id = position['order_id']
+
+    signal['quantity'] = qty
+    signal['position'] = position
+    signal['asset_type'] = asset_type
+
+    if is_auto:
+        log.info(f"{prefix}Executing SELL {qty:.6f} {symbol}")
+        order_kw = {'trading_strategy': 'auto'}
+        if asset_type == 'stock':
+            order_kw['asset_type'] = 'stock'
+        result = place_order(symbol, "SELL", qty, current_price,
+                             existing_order_id=order_id, **order_kw)
+        bot_state.auto_clear_trailing_stop(order_id)
+        return result
+
+    # Manual trading
+    if broker == 'alpaca':
+        if is_confirmation_required("SELL"):
+            log.info(f"{prefix}Sending SELL {symbol} (Alpaca) for confirmation.")
+            await send_signal_for_confirmation(signal)
+            return None
+        else:
+            log.info(f"{prefix}Executing Alpaca trade: SELL {qty:.4f} {symbol}.")
+            order_result = place_stock_order(symbol, "SELL", qty, current_price)
+            if order_result.get('status') == 'FILLED':
+                signal['order_result'] = order_result
+            await send_telegram_alert(signal)
+            return order_result
+
+    # Paper/live crypto or paper stock
+    if is_confirmation_required("SELL"):
+        log.info(f"{prefix}Sending SELL {symbol} for confirmation.")
+        await send_signal_for_confirmation(signal)
+        return None
+    else:
+        log.info(f"{prefix}Executing trade: SELL {qty:.6f} {symbol}.")
+        order_kw = {}
+        if asset_type == 'stock':
+            order_kw['asset_type'] = 'stock'
+        order_result = place_order(symbol, "SELL", qty, current_price,
+                                   existing_order_id=order_id, **order_kw)
+        bot_state.clear_trailing_stop(order_id)
+        if order_result.get('status') == 'CLOSED':
+            signal['order_result'] = order_result
+        await send_telegram_alert(signal)
+        return order_result

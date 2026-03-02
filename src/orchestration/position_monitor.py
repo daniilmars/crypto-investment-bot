@@ -1,0 +1,122 @@
+"""Position monitor — unified SL/TP/trailing stop for all position types.
+
+Handles: crypto manual, crypto auto, stock manual, stock auto.
+Never blocks exits (these are protective exits).
+"""
+
+from datetime import datetime, timedelta, timezone
+
+from src.database import save_stoploss_cooldown
+from src.execution.binance_trader import place_order
+from src.logger import log
+from src.notify.telegram_bot import send_telegram_alert
+from src.orchestration import bot_state
+
+
+async def monitor_position(
+    position: dict,
+    current_price: float,
+    *,
+    stop_loss_pct: float,
+    take_profit_pct: float,
+    trailing_stop_enabled: bool,
+    trailing_stop_activation: float,
+    trailing_stop_distance: float,
+    stoploss_cooldown_hours: int = 0,
+    asset_type: str = 'crypto',
+    trading_strategy: str = 'manual',
+    mode_label: str = 'PAPER',
+) -> str:
+    """Monitor a single open position for SL/TP/trailing stop triggers.
+
+    Returns 'trailing_stop', 'stop_loss', 'take_profit', or 'none'.
+    """
+    symbol = position['symbol']
+    entry_price = position['entry_price']
+    pnl_pct = (current_price - entry_price) / entry_price
+    order_id = position['order_id']
+    qty = position['quantity']
+    is_auto = trading_strategy == 'auto'
+
+    # Update trailing stop peak tracker
+    if is_auto:
+        peak_price = bot_state.auto_update_trailing_stop(order_id, current_price)
+    else:
+        peak_price = bot_state.update_trailing_stop(order_id, current_price)
+    drawdown = (peak_price - current_price) / peak_price if peak_price > 0 else 0
+
+    # Build order kwargs
+    order_kw = {}
+    if is_auto:
+        order_kw['trading_strategy'] = 'auto'
+    if asset_type == 'stock':
+        order_kw['asset_type'] = 'stock'
+
+    # --- Trailing stop ---
+    if trailing_stop_enabled and pnl_pct >= trailing_stop_activation:
+        if drawdown >= trailing_stop_distance:
+            locked_gain = (peak_price - entry_price) / entry_price
+            log.info(f"[{mode_label}] Trailing stop triggered for {symbol}. "
+                     f"Peak: ${peak_price:,.2f}, Current: ${current_price:,.2f}")
+            place_order(symbol, "SELL", qty, current_price,
+                        existing_order_id=order_id, **order_kw)
+            _cleanup_position_state(order_id, is_auto)
+            if not is_auto:
+                await _send_exit_alert(symbol, current_price, asset_type,
+                                       f"Trailing stop hit (peak ${peak_price:,.2f}, "
+                                       f"locked ~{locked_gain * 100:.1f}% gain).")
+            return 'trailing_stop'
+
+    # --- Fixed stop-loss ---
+    if pnl_pct <= -stop_loss_pct:
+        log.info(f"[{mode_label}] Stop-loss hit for {symbol}. Closing position.")
+        place_order(symbol, "SELL", qty, current_price,
+                    existing_order_id=order_id, **order_kw)
+        _cleanup_position_state(order_id, is_auto)
+        if stoploss_cooldown_hours > 0:
+            expires_at = datetime.now(timezone.utc) + timedelta(hours=stoploss_cooldown_hours)
+            if is_auto:
+                bot_state.set_auto_stoploss_cooldown(symbol, expires_at)
+            else:
+                bot_state.set_stoploss_cooldown(symbol, expires_at)
+                await save_stoploss_cooldown(symbol, expires_at)
+                log.info(f"[{symbol}] Stop-loss cooldown set for {stoploss_cooldown_hours}h")
+        if not is_auto:
+            await _send_exit_alert(symbol, current_price, asset_type,
+                                   f"Stop-loss hit ({stop_loss_pct * 100:.2f}% loss).")
+        return 'stop_loss'
+
+    # --- Take profit ---
+    if pnl_pct >= take_profit_pct:
+        log.info(f"[{mode_label}] Take-profit hit for {symbol}. Closing position.")
+        place_order(symbol, "SELL", qty, current_price,
+                    existing_order_id=order_id, **order_kw)
+        _cleanup_position_state(order_id, is_auto)
+        if not is_auto:
+            await _send_exit_alert(symbol, current_price, asset_type,
+                                   f"Take-profit hit ({take_profit_pct * 100:.2f}% gain).")
+        return 'take_profit'
+
+    return 'none'
+
+
+def _cleanup_position_state(order_id: str, is_auto: bool):
+    """Clear trailing stop and analyst state for a closed position."""
+    if is_auto:
+        bot_state.auto_clear_trailing_stop(order_id)
+        bot_state.remove_auto_analyst_last_run(order_id)
+    else:
+        bot_state.clear_trailing_stop(order_id)
+        bot_state.remove_analyst_last_run(order_id)
+
+
+async def _send_exit_alert(symbol: str, current_price: float,
+                           asset_type: str, reason: str):
+    """Send a SELL alert via Telegram for manual positions."""
+    alert = {
+        "signal": "SELL", "symbol": symbol,
+        "current_price": current_price, "reason": reason,
+    }
+    if asset_type == 'stock':
+        alert['asset_type'] = 'stock'
+    await send_telegram_alert(alert)

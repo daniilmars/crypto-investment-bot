@@ -63,7 +63,7 @@ def test_get_historical_prices(mock_get_db_connection, mock_release):
 
     # Act
     from src.database import get_historical_prices
-    prices = get_historical_prices('BTCUSDT', limit=5)
+    prices = get_historical_prices.sync('BTCUSDT', limit=5)
 
     # Assert
     # 1. Check if the correct query was executed
@@ -154,7 +154,7 @@ class TestArticleArchive:
 
         from src.database import get_recent_articles
 
-        result = get_recent_articles('BTC', hours=24)
+        result = get_recent_articles.sync('BTC', hours=24)
 
         mock_cursor.execute.assert_called_once()
         assert len(result) == 1
@@ -195,7 +195,7 @@ class TestTrailingStopPersistence:
 
         from src.database import save_trailing_stop_peak
 
-        save_trailing_stop_peak('order_123', 50500.0)
+        save_trailing_stop_peak.sync('order_123', 50500.0)
 
         mock_cursor.execute.assert_called_once()
         call_args = mock_cursor.execute.call_args
@@ -221,7 +221,7 @@ class TestTrailingStopPersistence:
 
         from src.database import load_trailing_stop_peaks
 
-        result = load_trailing_stop_peaks()
+        result = load_trailing_stop_peaks.sync()
 
         assert result == {'order_1': 50500.0, 'order_2': 3200.0}
         # Verify the query filters for OPEN and NOT NULL
@@ -244,7 +244,7 @@ class TestTrailingStopPersistence:
 
         from src.database import load_trailing_stop_peaks
 
-        result = load_trailing_stop_peaks()
+        result = load_trailing_stop_peaks.sync()
         assert result == {}
 
     @patch('src.database.release_db_connection')
@@ -260,8 +260,8 @@ class TestTrailingStopPersistence:
 
         from src.database import save_trailing_stop_peak
 
-        save_trailing_stop_peak('order_1', 50000.0)
-        save_trailing_stop_peak('order_1', 51000.0)
+        save_trailing_stop_peak.sync('order_1', 50000.0)
+        save_trailing_stop_peak.sync('order_1', 51000.0)
 
         assert mock_cursor.execute.call_count == 2
         last_call = mock_cursor.execute.call_args

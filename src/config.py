@@ -178,3 +178,12 @@ def load_config():
 
 # Create a single, memoized config instance.
 app_config = load_config()
+
+# Validate config at startup (fails fast with clear error)
+try:
+    from src.config_validation import validate_config
+    validate_config(app_config)
+except SystemExit:
+    raise
+except Exception as e:
+    log.warning(f"Config validation could not run: {e}")

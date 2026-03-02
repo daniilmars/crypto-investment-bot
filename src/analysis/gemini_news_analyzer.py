@@ -133,7 +133,7 @@ def score_articles_batch(articles: list, batch_size: int = 50) -> dict:
         log.warning("GCP_PROJECT_ID not set — skipping Gemini article scoring.")
         return {}
 
-    location = os.environ.get('GCP_LOCATION', 'us-central1')
+    location = os.environ.get('VERTEX_AI_LOCATION') or os.environ.get('GCP_LOCATION', 'europe-west4')
 
     try:
         vertexai.init(project=project_id, location=location)
@@ -190,7 +190,7 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
             return cached_result
 
     project_id = os.environ.get('GCP_PROJECT_ID')
-    location = os.environ.get('GCP_LOCATION', 'us-central1')
+    location = os.environ.get('VERTEX_AI_LOCATION') or os.environ.get('GCP_LOCATION', 'europe-west4')
 
     if not project_id:
         log.warning("GCP_PROJECT_ID not set — skipping Gemini grounded news analysis.")
@@ -282,7 +282,7 @@ def analyze_news_impact(headlines_by_symbol: dict, current_prices: dict,
         dict with 'symbol_assessments' and 'market_mood', or None on failure.
     """
     project_id = os.environ.get('GCP_PROJECT_ID')
-    location = os.environ.get('GCP_LOCATION', 'us-central1')
+    location = os.environ.get('VERTEX_AI_LOCATION') or os.environ.get('GCP_LOCATION', 'europe-west4')
 
     if not project_id:
         log.warning("GCP_PROJECT_ID not set — skipping Gemini news analysis.")
@@ -427,7 +427,7 @@ def analyze_position_investment(
         dict with recommendation, confidence, reasoning, risk_level, etc. or None on failure.
     """
     project_id = os.environ.get('GCP_PROJECT_ID')
-    location = os.environ.get('GCP_LOCATION', 'us-central1')
+    location = os.environ.get('VERTEX_AI_LOCATION') or os.environ.get('GCP_LOCATION', 'europe-west4')
 
     if not project_id:
         log.warning("GCP_PROJECT_ID not set — skipping position investment analysis.")
@@ -614,7 +614,7 @@ def analyze_position_health(position: dict, current_price: float,
         or None on failure.
     """
     project_id = os.environ.get('GCP_PROJECT_ID')
-    location = os.environ.get('GCP_LOCATION', 'us-central1')
+    location = os.environ.get('VERTEX_AI_LOCATION') or os.environ.get('GCP_LOCATION', 'europe-west4')
 
     if not project_id:
         log.warning("GCP_PROJECT_ID not set — skipping position health analysis.")

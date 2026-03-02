@@ -1,3 +1,4 @@
+import itertools
 import re
 from datetime import datetime, timezone
 from functools import wraps
@@ -34,7 +35,7 @@ AUTHORIZED_USER_IDS = telegram_config.get('authorized_user_ids', [])
 
 # --- Signal Confirmation State ---
 _pending_signals: dict[int, dict] = {}  # signal_id → {signal, message_id, chat_id, created_at}
-_signal_counter: int = 0
+_signal_counter = itertools.count(1)
 _execute_callback: Optional[Callable] = None  # registered by main.py
 
 # Load confirmation config
@@ -81,13 +82,11 @@ def is_confirmation_required(signal_type: str) -> bool:
 async def send_signal_for_confirmation(signal: dict) -> int:
     """Sends a signal to Telegram with inline Approve/Reject buttons.
     Returns the signal_id assigned to this pending signal."""
-    global _signal_counter
     if not telegram_config.get('enabled') or not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
         log.error("Telegram bot is not configured. Cannot send confirmation.")
         return -1
 
-    _signal_counter += 1
-    signal_id = _signal_counter
+    signal_id = next(_signal_counter)
 
     bot = Bot(token=TOKEN)
     signal_type = signal.get('signal', 'N/A')
@@ -476,6 +475,90 @@ async def send_auto_bot_summary(application: Application, summary: dict,
         log.error(f"Error sending auto-bot summary: {e}")
 
 
+async def send_market_event_alert(alert: dict):
+    """Formats and sends a proactive market event alert.
+
+    Supports 4 alert types: daily_digest, event_urgency, breaking, sector_move.
+    """
+    if not telegram_config.get('enabled') or not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
+        log.warning("Telegram bot is not configured. Skipping market alert.")
+        return
+    bot = Bot(token=TOKEN)
+
+    alert_type = alert.get('type', '')
+
+    if alert_type == 'daily_digest':
+        events = alert.get('events', [])
+        lookahead = alert.get('lookahead_hours', 72)
+        message = f"*Daily Market Calendar* (next {lookahead}h)\n\n"
+        for ev in events:
+            hours = ev.get('hours_until', 0)
+            urgency = " \\- NOW" if hours <= 24 else ""
+            event_type = _escape_md(ev.get('event_type', '?'))
+            dt = ev.get('event_date')
+            date_str = dt.strftime('%b %d %H:%M UTC') if hasattr(dt, 'strftime') else str(dt)
+            message += f"{'\\*' if hours <= 24 else '  '} {event_type} \\- {_escape_md(date_str)} ({hours:.0f}h){urgency}\n"
+        if not events:
+            message += "No major events scheduled\\.\n"
+
+    elif alert_type == 'event_urgency':
+        event_type = alert.get('event_type', 'Event')
+        hours = alert.get('hours_until', 0)
+        message = (
+            f"*Event Alert: {_escape_md(event_type)} in {hours:.0f}h*\n\n"
+            f"Review your exposure before this event\\."
+        )
+
+    elif alert_type == 'breaking':
+        symbols = alert.get('symbols', [])
+        catalyst = _escape_md(alert.get('catalyst_type', 'unknown'))
+        market_wide = alert.get('market_wide', False)
+        theme = alert.get('cross_asset_theme')
+        assessments = alert.get('assessments', {})
+
+        if market_wide:
+            header = "Breaking: MARKET\\-WIDE Alert"
+        else:
+            header = f"Breaking: {_escape_md(', '.join(symbols))}"
+
+        message = f"*{header}*\n"
+        message += f"*Catalyst:* {catalyst}\n"
+        if theme:
+            message += f"*Theme:* {_escape_md(theme)}\n"
+        message += f"*Symbols:* {', '.join(symbols)}\n"
+
+        for sym, assessment in assessments.items():
+            direction = assessment.get('direction', '?')
+            confidence = assessment.get('confidence', 0)
+            headline = assessment.get('key_headline', '')
+            arrow = '+' if direction == 'bullish' else '-' if direction == 'bearish' else '~'
+            message += f"\n{arrow} *{sym}* ({direction}, {confidence:.0%})"
+            if headline:
+                message += f"\n  {_escape_md(headline[:80])}"
+
+    elif alert_type == 'sector_move':
+        group = _escape_md(alert.get('group', '?'))
+        direction = alert.get('direction', '?')
+        symbols = alert.get('symbols', [])
+        avg_conf = alert.get('avg_confidence', 0)
+        velocity_support = alert.get('velocity_support', False)
+        arrow = 'up' if direction == 'bullish' else 'down'
+
+        message = f"*Sector Move: {group} \\({arrow}\\)*\n\n"
+        message += f"*Direction:* {direction}\n"
+        message += f"*Confidence:* {avg_conf:.0%}\n"
+        message += f"*Symbols:* {', '.join(symbols)}\n"
+        if velocity_support:
+            message += "News velocity confirms trend\\.\n"
+
+    else:
+        log.warning(f"Unknown market alert type: {alert_type}")
+        return
+
+    await send_telegram_message(bot, CHAT_ID, message)
+    log.info(f"Sent market alert: {alert_type}")
+
+
 async def send_performance_report(application: Application, summary: dict, interval_hours: int):
     """Formats and sends a performance report."""
     if not telegram_config.get('enabled') or not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
@@ -598,7 +681,7 @@ async def performance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /performance command."""
     try:
         report_hours = app_config.get('settings', {}).get('status_report_hours', 24)
-        summary = get_trade_summary(hours_ago=report_hours)
+        summary = await get_trade_summary(hours_ago=report_hours)
         message = (
             f"📈 *Performance Report ({report_hours}h)* 📈\n\n"
             f"*Trades (Paper Trading):*\n"
@@ -855,7 +938,7 @@ async def auto_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         auto_positions = get_open_positions(trading_strategy='auto')
         auto_balance = get_account_balance(trading_strategy='auto')
-        auto_stats = get_trade_summary(hours_ago=24 * 365, trading_strategy='auto')  # all-time
+        auto_stats = await get_trade_summary(hours_ago=24 * 365, trading_strategy='auto')  # all-time
 
         manual_balance = get_account_balance()
         initial = auto_cfg.get('paper_trading_initial_capital', 10000.0)

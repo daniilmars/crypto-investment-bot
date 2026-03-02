@@ -1,7 +1,9 @@
+import asyncio
 import hashlib
 import os
 import sqlite3
 from contextlib import contextmanager
+from functools import wraps
 
 import psycopg2
 import psycopg2.pool
@@ -9,6 +11,20 @@ import pandas as pd
 from psycopg2.extras import RealDictCursor
 from src.config import app_config
 from src.logger import log
+
+
+def async_db(func):
+    """Wraps a sync DB function so it can be awaited in async code.
+
+    Usage:
+        result = await get_open_positions()     # async caller
+        result = get_open_positions.sync()      # sync caller (e.g., tests)
+    """
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        return await asyncio.to_thread(func, *args, **kwargs)
+    wrapper.sync = func
+    return wrapper
 
 
 @contextmanager
@@ -95,7 +111,7 @@ def get_db_connection(db_url=None):
     db_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
     db_path = os.path.join(db_dir, 'crypto_data.db')
     os.makedirs(db_dir, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -518,6 +534,7 @@ def get_db_stats() -> dict:
 
 # --- Data Access Functions ---
 
+@async_db
 def save_signal(signal_data: dict):
     """Saves a generated signal to the database."""
     conn = None
@@ -559,6 +576,7 @@ def get_last_signal():
     finally:
         release_db_connection(conn)
 
+@async_db
 def get_historical_prices(symbol: str, limit: int = 5):
     """Retrieves the most recent 'limit' number of prices for a given symbol."""
     conn = None
@@ -578,6 +596,7 @@ def get_historical_prices(symbol: str, limit: int = 5):
     finally:
         release_db_connection(conn)
 
+@async_db
 def get_trade_summary(hours_ago: int = 24, trading_strategy: str = None) -> dict:
     """Calculates and returns a summary of trade performance over a given period."""
     conn = None
@@ -786,6 +805,7 @@ def save_news_sentiment_batch(rows: list):
     finally:
         release_db_connection(conn)
 
+@async_db
 def get_trade_history_stats(trading_strategy: str = None) -> dict:
     """
     Calculates win rate and average win/loss ratio from all closed trades.
@@ -816,7 +836,10 @@ def get_trade_history_stats(trading_strategy: str = None) -> dict:
             if trading_strategy:
                 query += " AND trading_strategy = %s" if is_pg else " AND trading_strategy = ?"
                 params.append(trading_strategy)
-            cursor.execute(query, tuple(params) if params else None)
+            if params:
+                cursor.execute(query, tuple(params))
+            else:
+                cursor.execute(query)
             rows = cursor.fetchall()
 
         if not rows:
@@ -1020,6 +1043,7 @@ def update_gemini_scores_batch(scores: dict):
         release_db_connection(conn)
 
 
+@async_db
 def get_recent_articles(symbol: str, hours: int = 24, limit: int = 20) -> list:
     """
     Returns recent archived articles for a symbol, ordered by newest first.
@@ -1057,6 +1081,7 @@ def get_recent_articles(symbol: str, hours: int = 24, limit: int = 20) -> list:
         release_db_connection(conn)
 
 
+@async_db
 def load_trailing_stop_peaks() -> dict:
     """Loads trailing stop peaks for all open positions from the database.
 
@@ -1080,6 +1105,7 @@ def load_trailing_stop_peaks() -> dict:
         release_db_connection(conn)
 
 
+@async_db
 def save_trailing_stop_peak(order_id: str, peak_price: float):
     """Persists the trailing stop peak price for a trade.
 
@@ -1124,6 +1150,7 @@ def get_article_count(hours: int = 24) -> int:
         release_db_connection(conn)
 
 
+@async_db
 def save_stoploss_cooldown(symbol: str, expires_at):
     """Persists a stoploss cooldown expiry for a symbol (UPSERT)."""
     conn = None
@@ -1150,6 +1177,7 @@ def save_stoploss_cooldown(symbol: str, expires_at):
         release_db_connection(conn)
 
 
+@async_db
 def load_stoploss_cooldowns() -> dict:
     """Loads non-expired stoploss cooldowns from the database.
 
@@ -1186,6 +1214,7 @@ def load_stoploss_cooldowns() -> dict:
         release_db_connection(conn)
 
 
+@async_db
 def clear_stoploss_cooldown(symbol: str):
     """Removes a stoploss cooldown entry for a symbol."""
     conn = None
@@ -1226,6 +1255,7 @@ def save_position_addition(parent_order_id: str, price: float, quantity: float, 
         release_db_connection(conn)
 
 
+@async_db
 def get_position_additions(parent_order_id: str) -> list:
     """Returns all position additions for a given order, ordered by created_at."""
     conn = None
@@ -1362,6 +1392,7 @@ def mark_ipo_watchlist_added(event_id):
         release_db_connection(conn)
 
 
+@async_db
 def save_macro_regime(regime_data: dict):
     """Saves a macro regime snapshot to the history table."""
     conn = None
