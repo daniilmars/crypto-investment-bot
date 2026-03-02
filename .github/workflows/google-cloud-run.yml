@@ -60,6 +60,7 @@ jobs:
           NEWSAPI_ORG_KEY=${{ secrets.NEWSAPI_ORG_KEY }}
           GCP_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }}
           GCP_LOCATION=europe-west3
+          VERTEX_AI_LOCATION=europe-west4
           ALPHA_VANTAGE_API_KEY=${{ secrets.ALPHA_VANTAGE_API_KEY }}
           ALPACA_API_KEY=${{ secrets.ALPACA_API_KEY }}
           ALPACA_API_SECRET=${{ secrets.ALPACA_API_SECRET }}
