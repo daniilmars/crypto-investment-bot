@@ -5,7 +5,7 @@ and helpers for the BUY/SELL execution patterns used in bot cycles.
 """
 
 from src.execution.binance_trader import (
-    add_to_position, get_account_balance, place_order,
+    add_to_position, get_account_balance, get_open_positions, place_order,
     _is_live_trading, _get_trading_mode,
 )
 from src.execution.stock_trader import place_stock_order
@@ -29,6 +29,17 @@ async def execute_confirmed_signal(signal: dict) -> dict:
     quantity = signal.get('quantity', 0)
     position = signal.get('position')
     order_result = None
+
+    # Re-check for duplicate position (guards against TOCTOU race between
+    # signal generation and user approval)
+    if signal_type == "BUY":
+        open_positions = get_open_positions(asset_type=asset_type)
+        if any(p['symbol'] == symbol and p.get('status', 'OPEN') == 'OPEN'
+               for p in open_positions):
+            log.info(f"Skipping confirmed BUY for {symbol}: "
+                     f"position already open.")
+            return {"status": "SKIPPED",
+                    "message": f"Position already open for {symbol}"}
 
     trading_mode = _get_trading_mode()
     log.info(f"Executing confirmed {signal_type} for {symbol} "

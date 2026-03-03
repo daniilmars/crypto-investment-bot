@@ -215,6 +215,19 @@ async def _handle_signal_callback(update: Update, context: ContextTypes.DEFAULT_
                 await _safe_edit(query, error_msg)
                 return
 
+        # Check if execution was skipped (e.g., duplicate position)
+        if order_result and order_result.get('status') == 'SKIPPED':
+            skip_reason = _escape_md(order_result.get('message', 'Unknown reason'))
+            message = (
+                f"⚠️ *SKIPPED: {signal_type} {symbol}*\n\n"
+                f"*Reason:* {skip_reason}\n\n"
+                f"_Signal was approved but could not be executed_"
+            )
+            await _safe_edit(query, message)
+            log.info(f"Signal #{signal_id} skipped: {signal_type} {symbol} "
+                     f"— {order_result.get('message')}")
+            return
+
         # Build success message
         message = f"✅ *EXECUTED: {signal_type} {symbol}*\n\n"
         if order_result:
