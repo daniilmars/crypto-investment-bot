@@ -341,7 +341,7 @@ def test_send_auto_bot_summary():
          patch('src.notify.telegram_bot.TOKEN', 'test_token'), \
          patch('src.notify.telegram_bot.CHAT_ID', '12345'), \
          patch('src.notify.telegram_bot._get_position_price', return_value=51000.0):
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             send_auto_bot_summary(mock_app, summary, positions, balance, 1)
         )
 
@@ -375,7 +375,7 @@ def test_auto_status_command():
              "total_closed": 0, "wins": 0, "losses": 0, "total_pnl": 0, "win_rate": 0
          }), \
          patch('src.notify.telegram_bot.AUTHORIZED_USER_IDS', [7910661624]):
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             auto_status_cmd(mock_update, mock_context)
         )
 
@@ -399,7 +399,7 @@ def test_auto_status_disabled():
         'settings': {'auto_trading': {'enabled': False}}
     }), \
          patch('src.notify.telegram_bot.AUTHORIZED_USER_IDS', [7910661624]):
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             auto_status_cmd(mock_update, mock_context)
         )
 

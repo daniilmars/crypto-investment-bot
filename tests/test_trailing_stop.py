@@ -117,7 +117,7 @@ class TestStartupLoadsPeaks:
         with patch('asyncio.create_task') as mock_task:
             with patch.object(main, 'os') as mock_os:
                 mock_os.environ.get.return_value = None
-                asyncio.get_event_loop().run_until_complete(main.startup_event())
+                asyncio.run(main.startup_event())
 
         assert bot_state._trailing_stop_peaks == {'order_a': 60000.0, 'order_b': 3500.0}
         mock_load.assert_called_once()
@@ -138,6 +138,6 @@ class TestStartupLoadsPeaks:
             with patch.object(main, 'os') as mock_os:
                 mock_os.environ.get.return_value = None
                 # Should not raise
-                asyncio.get_event_loop().run_until_complete(main.startup_event())
+                asyncio.run(main.startup_event())
 
         assert bot_state._trailing_stop_peaks == {}

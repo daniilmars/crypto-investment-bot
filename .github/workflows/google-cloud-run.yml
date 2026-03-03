@@ -90,13 +90,14 @@ jobs:
             signal_mode: "sentiment"
 
             sentiment_signal:
-              min_gemini_confidence: 0.7
+              min_gemini_confidence: 0.5
               min_vader_score: 0.3
               rsi_buy_veto_threshold: 75
               rsi_sell_veto_threshold: 25
               adx_min_threshold: 20
 
             stoploss_cooldown_hours: 6
+            signal_cooldown_hours: 4
 
             status_report_hours: 24
 
@@ -116,6 +117,8 @@ jobs:
               enabled: true
               interval_hours: 1
 
+            simulated_fee_pct: 0.001
+
             news_analysis:
               enabled: true
               use_grounded_search: false
@@ -123,12 +126,13 @@ jobs:
                 enabled: true
               deep_scraping:
                 enabled: true
+              use_gemini_scoring: true
               cache_ttl_minutes: 30
               volume_spike_multiplier: 3.0
               sentiment_shift_threshold: 0.3
               sentiment_buy_threshold: 0.15
               sentiment_sell_threshold: -0.15
-              min_gemini_confidence: 0.6
+              min_gemini_confidence: 0.5
 
             live_trading:
               enabled: true
@@ -166,6 +170,7 @@ jobs:
               require_confirmation_for:
                 - "BUY"
                 - "SELL"
+                - "INCREASE"
 
             news_scraper_daemon:
               rss_interval_seconds: 300
@@ -176,6 +181,84 @@ jobs:
                 enabled: true
                 timeout_seconds: 180
                 fallback_to_bs4: true
+
+            position_analyst:
+              enabled: true
+              min_position_age_hours: 2
+              check_interval_minutes: 30
+              exit_confidence_threshold: 0.8
+              increase_confidence_threshold: 0.75
+              max_position_multiplier: 3.0
+
+            auto_trading:
+              enabled: true
+              paper_trading_initial_capital: 10000.0
+              max_concurrent_positions: 5
+              summary_interval_hours: 1
+
+            ipo_tracking:
+              enabled: true
+              auto_add_to_watchlist: true
+              detection_categories:
+                - ipo
+                - ai
+                - press_release
+              validate_ticker: true
+
+            macro_regime:
+              enabled: true
+              risk_on_multiplier: 1.0
+              caution_multiplier: 0.6
+              risk_off_multiplier: 0.3
+              suppress_buys_in_risk_off: true
+              vix_elevated_threshold: 18
+              vix_high_threshold: 25
+              vix_extreme_threshold: 35
+
+            sector_limits:
+              enabled: true
+              config_file: "config/sector_groups.yaml"
+              telegram_alert_on_block: false
+
+            event_calendar:
+              enabled: true
+              earnings:
+                enabled: true
+                block_hours_before: 24
+                reduce_hours_before: 48
+                reduce_multiplier: 0.5
+              fomc:
+                enabled: true
+                block_hours_before: 24
+                reduce_hours_before: 48
+                reduce_multiplier: 0.5
+              cpi:
+                enabled: true
+                block_hours_before: 0
+                reduce_hours_before: 24
+                reduce_multiplier: 0.5
+              position_warnings:
+                enabled: true
+                lookahead_hours: 72
+
+            market_alerts:
+              enabled: true
+              daily_digest_hour_utc: 8
+              daily_digest_lookahead_hours: 72
+              breaking_news:
+                enabled: true
+                min_confidence: 0.7
+                catalyst_types: [regulatory, hack_exploit, macro, etf]
+                cooldown_hours: 4
+              sector_moves:
+                enabled: true
+                min_symbols_for_alert: 3
+                min_avg_confidence: 0.5
+                cooldown_hours: 6
+              event_urgency:
+                enabled: true
+                urgency_hours_before: 24
+                cooldown_hours: 12
 
             position_monitor:
               enabled: true

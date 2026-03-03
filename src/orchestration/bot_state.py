@@ -9,9 +9,13 @@ and interleave at await points.
 import asyncio
 from src.logger import log
 from src.database import save_trailing_stop_peak as _async_save_peak
+from src.database import save_signal_cooldown as _async_save_signal_cd
+from src.database import clear_signal_cooldown as _async_clear_signal_cd
 
 # Use the sync version since bot_state functions are called from sync contexts
 _db_save_peak = _async_save_peak.sync
+_db_save_signal_cd = _async_save_signal_cd.sync
+_db_clear_signal_cd = _async_clear_signal_cd.sync
 
 # --- Trailing Stop-Loss State ---
 _trailing_stop_peaks: dict[str, float] = {}
@@ -20,6 +24,10 @@ _auto_trailing_stop_peaks: dict[str, float] = {}
 # --- Stop-Loss Cooldown State ---
 _stoploss_cooldowns: dict = {}
 _auto_stoploss_cooldowns: dict = {}
+
+# --- Signal Cooldown State ---
+_signal_cooldowns: dict[str, 'datetime'] = {}    # key: "symbol:signal_type"
+_auto_signal_cooldowns: dict[str, 'datetime'] = {}
 
 # --- Position Analyst Cooldown ---
 _analyst_last_run: dict = {}
@@ -98,6 +106,48 @@ def remove_auto_stoploss_cooldown(symbol: str):
     _auto_stoploss_cooldowns.pop(symbol, None)
 
 
+# --- Signal Cooldowns ---
+
+def get_signal_cooldown(symbol: str, signal_type: str):
+    return _signal_cooldowns.get(f"{symbol}:{signal_type}")
+
+
+def set_signal_cooldown(symbol: str, signal_type: str, expires_at):
+    _signal_cooldowns[f"{symbol}:{signal_type}"] = expires_at
+    try:
+        _db_save_signal_cd(symbol, signal_type, expires_at, False)
+    except Exception as e:
+        log.warning(f"Failed to persist signal cooldown for {symbol}:{signal_type}: {e}")
+
+
+def remove_signal_cooldown(symbol: str, signal_type: str):
+    _signal_cooldowns.pop(f"{symbol}:{signal_type}", None)
+    try:
+        _db_clear_signal_cd(symbol, signal_type, False)
+    except Exception as e:
+        log.warning(f"Failed to clear signal cooldown for {symbol}:{signal_type}: {e}")
+
+
+def get_auto_signal_cooldown(symbol: str, signal_type: str):
+    return _auto_signal_cooldowns.get(f"{symbol}:{signal_type}")
+
+
+def set_auto_signal_cooldown(symbol: str, signal_type: str, expires_at):
+    _auto_signal_cooldowns[f"{symbol}:{signal_type}"] = expires_at
+    try:
+        _db_save_signal_cd(symbol, signal_type, expires_at, True)
+    except Exception as e:
+        log.warning(f"Failed to persist auto signal cooldown for {symbol}:{signal_type}: {e}")
+
+
+def remove_auto_signal_cooldown(symbol: str, signal_type: str):
+    _auto_signal_cooldowns.pop(f"{symbol}:{signal_type}", None)
+    try:
+        _db_clear_signal_cd(symbol, signal_type, True)
+    except Exception as e:
+        log.warning(f"Failed to clear auto signal cooldown for {symbol}:{signal_type}: {e}")
+
+
 # --- Analyst Cooldowns ---
 
 def get_analyst_last_run(order_id: str):
@@ -134,11 +184,18 @@ def load_cooldowns(cooldowns: dict):
     _stoploss_cooldowns.update(cooldowns)
 
 
+def load_signal_cooldown_state(manual: dict, auto: dict):
+    _signal_cooldowns.update(manual)
+    _auto_signal_cooldowns.update(auto)
+
+
 def clear_all():
     """Clears all state. For tests."""
     _trailing_stop_peaks.clear()
     _auto_trailing_stop_peaks.clear()
     _stoploss_cooldowns.clear()
     _auto_stoploss_cooldowns.clear()
+    _signal_cooldowns.clear()
+    _auto_signal_cooldowns.clear()
     _analyst_last_run.clear()
     _auto_analyst_last_run.clear()

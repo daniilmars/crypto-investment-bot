@@ -73,7 +73,7 @@ settings:
 
   # -- Sentiment Signal Settings (used when signal_mode = "sentiment") --
   sentiment_signal:
-    min_gemini_confidence: 0.7
+    min_gemini_confidence: 0.5
     min_vader_score: 0.3
     rsi_buy_veto_threshold: 75
     rsi_sell_veto_threshold: 25
@@ -81,6 +81,9 @@ settings:
 
   # Per-symbol cooldown (hours) after a stop-loss exit before re-entering.
   stoploss_cooldown_hours: 6
+
+  # Per-symbol cooldown (hours) to suppress repeat BUY/SELL for the same symbol.
+  signal_cooldown_hours: 4
 
   # -- Telegram Bot Settings --
   # The number of hours to look back for the /status report.
@@ -137,7 +140,7 @@ settings:
     sentiment_buy_threshold: 0.15
     sentiment_sell_threshold: -0.15
     # Minimum Gemini confidence to override VADER
-    min_gemini_confidence: 0.6
+    min_gemini_confidence: 0.5
 
   # -- Live Trading Settings --
   live_trading:

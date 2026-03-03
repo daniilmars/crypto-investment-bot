@@ -403,8 +403,7 @@ class TestTelegramIncreaseSignal:
             'position': {'order_id': 'ORDER_1', 'quantity': 0.1},
         }
 
-        loop = asyncio.get_event_loop()
-        signal_id = loop.run_until_complete(send_signal_for_confirmation(signal))
+        signal_id = asyncio.run(send_signal_for_confirmation(signal))
 
         assert signal_id > 0
         assert signal_id in _pending_signals
@@ -445,8 +444,7 @@ class TestExecuteConfirmedIncrease:
             'position': {'order_id': 'ORDER_1', 'quantity': 0.1},
         }
 
-        loop = asyncio.get_event_loop()
-        result = loop.run_until_complete(execute_confirmed_signal(signal))
+        result = asyncio.run(execute_confirmed_signal(signal))
 
         mock_add.assert_called_once_with(
             'ORDER_1', 'BTC', 0.05, 52000.0,
@@ -471,8 +469,7 @@ class TestExecuteConfirmedIncrease:
             'position': {'order_id': 'PAPER_AAPL_BUY_123', 'quantity': 10.0},
         }
 
-        loop = asyncio.get_event_loop()
-        result = loop.run_until_complete(execute_confirmed_signal(signal))
+        result = asyncio.run(execute_confirmed_signal(signal))
 
         mock_add.assert_called_once()
         assert result['status'] == 'FILLED'
@@ -496,8 +493,7 @@ class TestExecuteConfirmedIncrease:
             'position': {'order_id': 'ORDER_1', 'quantity': 0.1},
         }
 
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(execute_confirmed_signal(signal))
+        asyncio.run(execute_confirmed_signal(signal))
 
         assert 'ORDER_1' not in bot_state._analyst_last_run
 

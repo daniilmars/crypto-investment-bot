@@ -4,10 +4,11 @@ Supports both the new position_analyst (Gemini investment analysis) and the
 legacy position_monitor (Gemini health check) as fallback.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from src.analysis.gemini_news_analyzer import analyze_position_health, analyze_position_investment
 from src.analysis.news_velocity import compute_news_velocity
+from src.config import app_config
 from src.database import get_position_additions, get_recent_articles
 from src.execution.binance_trader import add_to_position, get_account_balance, place_order
 from src.logger import log
@@ -16,6 +17,7 @@ from src.notify.telegram_bot import (
     send_signal_for_confirmation, send_telegram_alert,
 )
 from src.orchestration import bot_state
+from src.orchestration.pre_trade_gates import check_signal_cooldown
 
 
 async def run_position_analyst(
@@ -121,10 +123,18 @@ async def _run_investment_analyst(
         reasoning = result.get('reasoning', '')
         risk_level = result.get('risk_level', 'green')
 
+        signal_cooldown_hours = app_config.get('settings', {}).get('signal_cooldown_hours', 4)
+
         if rec == 'increase' and confidence >= analyst_cfg.get('increase_confidence_threshold', 0.75):
-            await _handle_increase(
-                position, symbol, current_price, entry_price,
-                additions, result, reasoning, analyst_cfg, asset_type)
+            if await check_signal_cooldown(symbol, "INCREASE", signal_cooldown_hours):
+                log.debug(f"[{symbol}] Skipping INCREASE: signal cooldown active.")
+            else:
+                await _handle_increase(
+                    position, symbol, current_price, entry_price,
+                    additions, result, reasoning, analyst_cfg, asset_type)
+                bot_state.set_signal_cooldown(
+                    symbol, "INCREASE",
+                    datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours))
 
         elif rec == 'sell' and confidence >= analyst_cfg.get('exit_confidence_threshold', 0.8):
             await _handle_analyst_sell(

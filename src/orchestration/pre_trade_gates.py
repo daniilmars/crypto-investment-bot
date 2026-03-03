@@ -104,3 +104,29 @@ async def check_stoploss_cooldown(symbol: str, signal_type: str,
                 bot_state.remove_stoploss_cooldown(symbol)
                 await clear_stoploss_cooldown(symbol)
     return False
+
+
+async def check_signal_cooldown(symbol: str, signal_type: str,
+                                 cooldown_hours: float,
+                                 is_auto: bool = False) -> bool:
+    """Check if a recent signal cooldown is active for this symbol+type.
+
+    Returns True if the signal should be blocked (cooldown active).
+    """
+    if signal_type not in ("BUY", "SELL", "INCREASE"):
+        return False
+
+    now = datetime.now(timezone.utc)
+    if is_auto:
+        expires = bot_state.get_auto_signal_cooldown(symbol, signal_type)
+        if expires and now < expires:
+            return True
+        elif expires:
+            bot_state.remove_auto_signal_cooldown(symbol, signal_type)
+    else:
+        expires = bot_state.get_signal_cooldown(symbol, signal_type)
+        if expires and now < expires:
+            return True
+        elif expires:
+            bot_state.remove_signal_cooldown(symbol, signal_type)
+    return False

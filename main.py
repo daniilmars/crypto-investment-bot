@@ -31,7 +31,8 @@ from src.database import (get_historical_prices,
                           get_trade_history_stats, get_trade_summary,
                           initialize_database,
                           load_trailing_stop_peaks, save_signal,
-                          load_stoploss_cooldowns,
+                          load_stoploss_cooldowns, load_signal_cooldowns,
+                          save_signal_cooldown,
                           save_macro_regime)
 from src.execution.binance_trader import (get_account_balance,
                                           get_open_positions, place_order,
@@ -54,7 +55,9 @@ from src.state import bot_is_running
 from src.orchestration import bot_state
 from src.orchestration.position_monitor import monitor_position
 from src.orchestration.position_analyst import run_position_analyst
-from src.orchestration.pre_trade_gates import check_buy_gates, check_stoploss_cooldown
+from src.orchestration.pre_trade_gates import (
+    check_buy_gates, check_stoploss_cooldown, check_signal_cooldown,
+)
 from src.orchestration.trade_executor import (
     execute_confirmed_signal, execute_buy, execute_sell,
 )
@@ -92,6 +95,7 @@ async def run_bot_cycle():
     rsi_overbought_threshold = settings.get('rsi_overbought_threshold', 70)
     rsi_oversold_threshold = settings.get('rsi_oversold_threshold', 30)
     stoploss_cooldown_hours = settings.get('stoploss_cooldown_hours', 6)
+    signal_cooldown_hours = settings.get('signal_cooldown_hours', 4)
 
     signal_mode = settings.get('signal_mode', 'scoring')
     sentiment_signal_cfg = settings.get('sentiment_signal', {})
@@ -318,6 +322,11 @@ async def run_bot_cycle():
                 log.info(f"Skipping {signal['signal']} for {symbol}: stop-loss cooldown active.")
                 signal['signal'] = 'HOLD'
 
+            # Signal cooldown check (suppress repeat signals for same symbol)
+            if await check_signal_cooldown(symbol, signal['signal'], signal_cooldown_hours):
+                log.debug(f"Skipping {signal['signal']} for {symbol}: signal cooldown active.")
+                signal['signal'] = 'HOLD'
+
             if signal['signal'] == "BUY":
                 allowed, size_mult, _ = check_buy_gates(
                     symbol, open_positions, active_max_positions,
@@ -326,6 +335,9 @@ async def run_bot_cycle():
                     await execute_buy(
                         symbol, signal, current_price, current_balance,
                         effective_risk_pct, size_mult, label=trading_mode)
+                    bot_state.set_signal_cooldown(
+                        symbol, "BUY",
+                        datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours))
                 else:
                     signal['signal'] = 'HOLD'
 
@@ -334,6 +346,9 @@ async def run_bot_cycle():
                     (p for p in open_positions if p['symbol'] == symbol and p['status'] == 'OPEN'), None)
                 if position_to_close:
                     await execute_sell(symbol, signal, position_to_close, current_price)
+                    bot_state.set_signal_cooldown(
+                        symbol, "SELL",
+                        datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours))
                 else:
                     log.info(f"Skipping SELL for {symbol}: No open position found.")
             else:
@@ -356,6 +371,8 @@ async def run_bot_cycle():
             auto_signal_type = signal.get('signal', 'HOLD')
             if await check_stoploss_cooldown(symbol, auto_signal_type, is_auto=True):
                 auto_signal_type = 'HOLD'
+            if await check_signal_cooldown(symbol, auto_signal_type, signal_cooldown_hours, is_auto=True):
+                auto_signal_type = 'HOLD'
 
             if auto_signal_type == "BUY":
                 allowed, size_mult, _ = check_buy_gates(
@@ -368,6 +385,9 @@ async def run_bot_cycle():
                         symbol, signal, current_price, auto_available,
                         effective_risk_pct, size_mult,
                         trading_strategy='auto', label='AUTO')
+                    bot_state.set_auto_signal_cooldown(
+                        symbol, "BUY",
+                        datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours))
 
             elif auto_signal_type == "SELL":
                 auto_pos = next((p for p in auto_open_crypto
@@ -376,6 +396,9 @@ async def run_bot_cycle():
                     await execute_sell(
                         symbol, signal, auto_pos, current_price,
                         trading_strategy='auto', label='AUTO')
+                    bot_state.set_auto_signal_cooldown(
+                        symbol, "SELL",
+                        datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours))
 
     # --- Event warnings for open positions ---
     try:
@@ -462,8 +485,10 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
     vol_multiplier = stock_settings.get('volume_spike_multiplier', 1.5)
     signal_threshold = settings.get('signal_threshold', 3)
     stoploss_cooldown_hours = settings.get('stoploss_cooldown_hours', 6)
+    signal_cooldown_hours = settings.get('signal_cooldown_hours', 4)
 
     paper_trading = settings.get('paper_trading', True)
+    is_live = _is_live_trading()
     stop_loss_percentage = settings.get('stop_loss_percentage', 0.02)
     take_profit_percentage = settings.get('take_profit_percentage', 0.05)
     trade_risk_percentage = settings.get('trade_risk_percentage', 0.01)
@@ -487,7 +512,7 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
     stock_batch_daily = get_batch_daily_prices(watch_list) if not use_alpaca_data else {}
 
     # Cache open stock positions once per cycle
-    _cached_stock_positions = get_open_positions(asset_type='stock', trading_strategy='manual') if paper_trading else []
+    _cached_stock_positions = get_open_positions(asset_type='stock', trading_strategy='manual') if (paper_trading or is_live) else []
     _cached_alpaca_positions = get_stock_positions() if broker == 'alpaca' else []
 
     auto_cfg = settings.get('auto_trading', {})
@@ -514,12 +539,13 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
         log.info(f"Current stock price for {symbol}: ${current_price:,.2f}")
 
         # --- Position Monitoring with Trailing Stop ---
-        if paper_trading:
+        if paper_trading or is_live:
+            trading_mode_label = 'PAPER TRADE' if paper_trading else _get_trading_mode().upper()
             for position in _cached_stock_positions:
                 if position['symbol'] == symbol and position['status'] == 'OPEN':
                     result = await monitor_position(
                         position, current_price, **risk_cfg,
-                        asset_type='stock', mode_label='PAPER TRADE')
+                        asset_type='stock', mode_label=trading_mode_label)
 
                     # Run position analyst only if position wasn't closed
                     if result == 'none':
@@ -536,11 +562,11 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
             continue
 
         # Skip signal generation for stocks with open positions
-        if paper_trading and any(
+        if (paper_trading or is_live) and any(
             p['symbol'] == symbol and p['status'] == 'OPEN'
             for p in _cached_stock_positions
         ):
-            log.debug(f"Skipping signal generation for stock {symbol}: paper position open.")
+            log.debug(f"Skipping signal generation for stock {symbol}: position open.")
             continue
         if broker == 'alpaca' and any(
             p['symbol'] == symbol for p in _cached_alpaca_positions
@@ -625,6 +651,11 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
             log.info(f"Skipping {signal['signal']} for stock {symbol}: stop-loss cooldown active.")
             signal['signal'] = 'HOLD'
 
+        # Signal cooldown check (suppress repeat signals for same symbol)
+        if await check_signal_cooldown(symbol, signal['signal'], signal_cooldown_hours):
+            log.debug(f"Skipping {signal['signal']} for stock {symbol}: signal cooldown active.")
+            signal['signal'] = 'HOLD'
+
         # --- Trade Execution (broker-aware) ---
         if broker == 'alpaca':
             alpaca_positions = _cached_alpaca_positions
@@ -647,6 +678,9 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                             symbol, signal, current_price, buying_power,
                             stock_risk_pct, size_mult,
                             asset_type='stock', broker='alpaca')
+                        bot_state.set_signal_cooldown(
+                            symbol, "BUY",
+                            datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours))
                     else:
                         signal['signal'] = 'HOLD'
 
@@ -656,6 +690,9 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                     await execute_sell(
                         symbol, signal, alpaca_pos, current_price,
                         asset_type='stock', broker='alpaca')
+                    bot_state.set_signal_cooldown(
+                        symbol, "SELL",
+                        datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours))
                 else:
                     log.info(f"Skipping SELL for stock {symbol}: No open position on Alpaca.")
             else:
@@ -678,6 +715,9 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                     await execute_buy(
                         symbol, signal, current_price, current_balance,
                         stock_risk_pct, size_mult, asset_type='stock')
+                    bot_state.set_signal_cooldown(
+                        symbol, "BUY",
+                        datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours))
                 else:
                     signal['signal'] = 'HOLD'
 
@@ -688,6 +728,9 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                     await execute_sell(
                         symbol, signal, position_to_close, current_price,
                         asset_type='stock')
+                    bot_state.set_signal_cooldown(
+                        symbol, "SELL",
+                        datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours))
                 else:
                     log.info(f"Skipping SELL for stock {symbol}: No open position found.")
             else:
@@ -709,6 +752,8 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
             auto_signal_type = signal.get('signal', 'HOLD')
             if await check_stoploss_cooldown(symbol, auto_signal_type, is_auto=True):
                 auto_signal_type = 'HOLD'
+            if await check_signal_cooldown(symbol, auto_signal_type, signal_cooldown_hours, is_auto=True):
+                auto_signal_type = 'HOLD'
 
             if auto_signal_type == "BUY":
                 allowed, size_mult, _ = check_buy_gates(
@@ -721,6 +766,9 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                         symbol, signal, current_price, auto_available,
                         trade_risk_percentage, size_mult,
                         asset_type='stock', trading_strategy='auto', label='AUTO')
+                    bot_state.set_auto_signal_cooldown(
+                        symbol, "BUY",
+                        datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours))
 
             elif auto_signal_type == "SELL":
                 auto_pos = next((p for p in auto_open_stocks
@@ -729,6 +777,9 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                     await execute_sell(
                         symbol, signal, auto_pos, current_price,
                         asset_type='stock', trading_strategy='auto', label='AUTO')
+                    bot_state.set_auto_signal_cooldown(
+                        symbol, "SELL",
+                        datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours))
 
     log.info("--- Stock trading cycle complete ---")
 
@@ -858,6 +909,14 @@ async def startup_event():
         log.info(f"Loaded {len(loaded_cooldowns)} stoploss cooldowns from database.")
     except Exception as e:
         log.warning(f"Could not load stoploss cooldowns: {e}")
+
+    # Restore signal cooldowns from database (survives restarts)
+    try:
+        manual_cd, auto_cd = await load_signal_cooldowns()
+        bot_state.load_signal_cooldown_state(manual_cd, auto_cd)
+        log.info(f"Loaded {len(manual_cd)} manual + {len(auto_cd)} auto signal cooldowns from database.")
+    except Exception as e:
+        log.warning(f"Could not load signal cooldowns: {e}")
 
     # Initialize the Telegram application
     application = await start_bot()

@@ -291,6 +291,24 @@ def initialize_database(db_url=None):
             )'''
         cursor.execute(stoploss_cooldowns_sql)
 
+        # Signal Cooldowns (persists across restarts)
+        signal_cooldowns_sql = '''
+            CREATE TABLE IF NOT EXISTS signal_cooldowns (
+                symbol_signal TEXT PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                signal_type TEXT NOT NULL,
+                cooldown_expires_at TIMESTAMPTZ NOT NULL,
+                is_auto BOOLEAN NOT NULL DEFAULT FALSE
+            )''' if is_postgres_conn else '''
+            CREATE TABLE IF NOT EXISTS signal_cooldowns (
+                symbol_signal TEXT PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                signal_type TEXT NOT NULL,
+                cooldown_expires_at TIMESTAMP NOT NULL,
+                is_auto INTEGER NOT NULL DEFAULT 0
+            )'''
+        cursor.execute(signal_cooldowns_sql)
+
         # Position Additions (tracks position size increases)
         position_additions_sql = '''
             CREATE TABLE IF NOT EXISTS position_additions (
@@ -1228,6 +1246,100 @@ def clear_stoploss_cooldown(symbol: str):
         conn.commit()
     except (sqlite3.Error, psycopg2.Error) as e:
         log.error(f"Database error in clear_stoploss_cooldown: {e}", exc_info=True)
+    finally:
+        release_db_connection(conn)
+
+
+@async_db
+def save_signal_cooldown(symbol: str, signal_type: str, expires_at, is_auto: bool = False):
+    """Persists a signal cooldown expiry for a symbol+signal_type (UPSERT)."""
+    conn = None
+    key = f"{symbol}:{signal_type}:{'auto' if is_auto else 'manual'}"
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            if is_pg:
+                query = """
+                    INSERT INTO signal_cooldowns (symbol_signal, symbol, signal_type, cooldown_expires_at, is_auto)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (symbol_signal) DO UPDATE SET cooldown_expires_at = EXCLUDED.cooldown_expires_at
+                """
+            else:
+                query = """
+                    INSERT OR REPLACE INTO signal_cooldowns (symbol_signal, symbol, signal_type, cooldown_expires_at, is_auto)
+                    VALUES (?, ?, ?, ?, ?)
+                """
+            cursor.execute(query, (key, symbol, signal_type, expires_at, is_auto))
+        conn.commit()
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in save_signal_cooldown: {e}", exc_info=True)
+    finally:
+        release_db_connection(conn)
+
+
+@async_db
+def load_signal_cooldowns() -> tuple[dict, dict]:
+    """Loads non-expired signal cooldowns from the database.
+
+    Returns (manual_dict, auto_dict) where each is {"symbol:signal_type": expires_at}.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            if is_pg:
+                query = "SELECT symbol, signal_type, cooldown_expires_at, is_auto FROM signal_cooldowns WHERE cooldown_expires_at > NOW()"
+            else:
+                query = "SELECT symbol, signal_type, cooldown_expires_at, is_auto FROM signal_cooldowns WHERE cooldown_expires_at > datetime('now')"
+            cursor.execute(query)
+            manual = {}
+            auto = {}
+            for row in cursor.fetchall():
+                row_dict = dict(row) if hasattr(row, 'keys') else {
+                    'symbol': row[0], 'signal_type': row[1],
+                    'cooldown_expires_at': row[2], 'is_auto': row[3],
+                }
+                sym = row_dict['symbol']
+                sig_type = row_dict['signal_type']
+                expires = row_dict['cooldown_expires_at']
+                is_auto = row_dict['is_auto']
+                # Convert string to datetime if needed (SQLite returns strings)
+                if isinstance(expires, str):
+                    from datetime import datetime, timezone
+                    try:
+                        expires = datetime.fromisoformat(expires.replace('Z', '+00:00'))
+                    except ValueError:
+                        expires = datetime.strptime(expires, '%Y-%m-%d %H:%M:%S.%f').replace(tzinfo=timezone.utc)
+                key = f"{sym}:{sig_type}"
+                if is_auto:
+                    auto[key] = expires
+                else:
+                    manual[key] = expires
+            return manual, auto
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in load_signal_cooldowns: {e}", exc_info=True)
+        return {}, {}
+    finally:
+        release_db_connection(conn)
+
+
+@async_db
+def clear_signal_cooldown(symbol: str, signal_type: str, is_auto: bool = False):
+    """Removes a signal cooldown entry."""
+    conn = None
+    key = f"{symbol}:{signal_type}:{'auto' if is_auto else 'manual'}"
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            query = "DELETE FROM signal_cooldowns WHERE symbol_signal = %s" if is_pg else \
+                    "DELETE FROM signal_cooldowns WHERE symbol_signal = ?"
+            cursor.execute(query, (key,))
+        conn.commit()
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in clear_signal_cooldown: {e}", exc_info=True)
     finally:
         release_db_connection(conn)
 

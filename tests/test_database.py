@@ -24,10 +24,10 @@ def test_initialize_database_creates_tables(mock_get_db_connection, mock_release
     initialize_database()
 
     # Assert: Check if CREATE TABLE + ALTER TABLE statements were executed
-    # 11 CREATE TABLEs + 4 CREATE INDEXes + 6 ALTER TABLE (trade columns) + 1 ALTER TABLE (trailing_stop_peak)
+    # 12 CREATE TABLEs + 4 CREATE INDEXes + 6 ALTER TABLE (trade columns) + 1 ALTER TABLE (trailing_stop_peak)
     # + 1 ALTER TABLE (scraped_articles category) + 1 ALTER TABLE (scraped_articles gemini_score)
-    # + 1 ALTER TABLE (trades trading_strategy) = 25
-    assert mock_cursor.execute.call_count == 25
+    # + 1 ALTER TABLE (trades trading_strategy) = 26
+    assert mock_cursor.execute.call_count == 26
 
     # Check the SQL statements (case-insensitive and ignoring whitespace)
     executed_queries = [' '.join(call[0][0].split()) for call in mock_cursor.execute.call_args_list]
