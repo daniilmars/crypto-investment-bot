@@ -70,7 +70,7 @@ class TestCircuitBreaker:
         tripped, reason = check_circuit_breaker(balance=65.0, daily_pnl=0, recent_trades=[])
         assert tripped is True
         assert "floor" in reason.lower()
-        mock_record.assert_called_once_with('balance_floor', reason)
+        mock_record.assert_called_once_with('balance_floor', reason, asset_type='crypto')
 
     @patch('src.execution.circuit_breaker.is_in_cooldown', return_value=False)
     @patch('src.execution.circuit_breaker._get_peak_balance', return_value=100.0)

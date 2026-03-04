@@ -189,21 +189,23 @@ async def run_bot_cycle():
     trading_mode = _get_trading_mode()
     news_config = settings.get('news_analysis', {})
 
-    # Circuit breaker check — once per cycle, not per symbol
+    # Circuit breaker check — once per cycle, crypto only
     live_config = settings.get('live_trading', {})
     cb_tripped = False
     if is_live:
         cb_balance = get_account_balance().get('USDT', 0)
-        cb_daily_pnl = get_daily_pnl()
+        cb_daily_pnl = get_daily_pnl(asset_type='crypto')
         cb_unrealized = get_unrealized_pnl(current_prices_dict)
         cb_effective_pnl = cb_daily_pnl + cb_unrealized
-        cb_recent_trades = get_recent_closed_trades(limit=live_config.get('max_consecutive_losses', 3))
-        cb_tripped, cb_reason = check_circuit_breaker(cb_balance, cb_effective_pnl, cb_recent_trades)
+        cb_recent_trades = get_recent_closed_trades(
+            limit=live_config.get('max_consecutive_losses', 3), asset_type='crypto')
+        cb_tripped, cb_reason = check_circuit_breaker(
+            cb_balance, cb_effective_pnl, cb_recent_trades, asset_type='crypto')
         if cb_tripped:
             log.warning(f"Circuit breaker active for this cycle: {cb_reason}")
             await send_telegram_alert({
                 "signal": "CIRCUIT_BREAKER", "symbol": "ALL",
-                "reason": f"Circuit breaker: {cb_reason}. Skipping all crypto trading this cycle."
+                "reason": f"Circuit breaker (crypto): {cb_reason}. Skipping all crypto trading this cycle."
             })
 
     # Process each symbol in the watch list

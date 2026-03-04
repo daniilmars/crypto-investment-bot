@@ -472,6 +472,36 @@ def initialize_database(db_url=None):
             if is_postgres_conn:
                 conn.rollback()
 
+        # --- Migrate circuit_breaker_events: add asset_type column ---
+        try:
+            cursor.execute("ALTER TABLE circuit_breaker_events ADD COLUMN asset_type TEXT DEFAULT 'crypto'")
+            log.info("Added column 'asset_type' to circuit_breaker_events table.")
+        except (sqlite3.OperationalError, psycopg2.errors.DuplicateColumn):
+            if is_postgres_conn:
+                conn.rollback()
+        except Exception as e:
+            log.warning(f"Could not add column 'asset_type' to circuit_breaker_events: {e}")
+            if is_postgres_conn:
+                conn.rollback()
+
+        # --- Resolve legacy circuit_breaker_events without resolved_at (one-time migration) ---
+        try:
+            if is_postgres_conn:
+                cursor.execute(
+                    "UPDATE circuit_breaker_events SET resolved_at = NOW() "
+                    "WHERE resolved_at IS NULL AND triggered_at < NOW() - INTERVAL '48 hours'")
+            else:
+                cursor.execute(
+                    "UPDATE circuit_breaker_events SET resolved_at = datetime('now') "
+                    "WHERE resolved_at IS NULL AND triggered_at < datetime('now', '-48 hours')")
+            updated = cursor.rowcount
+            if updated:
+                log.info(f"Resolved {updated} stale circuit_breaker_events (older than 48h).")
+        except Exception as e:
+            log.warning(f"Could not resolve stale circuit_breaker_events: {e}")
+            if is_postgres_conn:
+                conn.rollback()
+
         conn.commit()
     except (sqlite3.Error, psycopg2.Error) as e:
         log.error(f"Error during database initialization: {e}", exc_info=True)
