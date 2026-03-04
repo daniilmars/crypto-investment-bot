@@ -189,6 +189,23 @@ async def run_bot_cycle():
     trading_mode = _get_trading_mode()
     news_config = settings.get('news_analysis', {})
 
+    # Circuit breaker check — once per cycle, not per symbol
+    live_config = settings.get('live_trading', {})
+    cb_tripped = False
+    if is_live:
+        cb_balance = get_account_balance().get('USDT', 0)
+        cb_daily_pnl = get_daily_pnl()
+        cb_unrealized = get_unrealized_pnl(current_prices_dict)
+        cb_effective_pnl = cb_daily_pnl + cb_unrealized
+        cb_recent_trades = get_recent_closed_trades(limit=live_config.get('max_consecutive_losses', 3))
+        cb_tripped, cb_reason = check_circuit_breaker(cb_balance, cb_effective_pnl, cb_recent_trades)
+        if cb_tripped:
+            log.warning(f"Circuit breaker active for this cycle: {cb_reason}")
+            await send_telegram_alert({
+                "signal": "CIRCUIT_BREAKER", "symbol": "ALL",
+                "reason": f"Circuit breaker: {cb_reason}. Skipping all crypto trading this cycle."
+            })
+
     # Process each symbol in the watch list
     for symbol in watch_list:
         signal = None
@@ -285,26 +302,12 @@ async def run_bot_cycle():
         await save_signal(signal)
 
         # --- 4. Trade Execution (Paper & Live) with Dynamic Sizing ---
-        live_config = settings.get('live_trading', {})
         can_trade = paper_trading or is_live
 
         if can_trade:
-            # Circuit breaker check (live trading only)
-            if is_live:
-                cb_balance = get_account_balance().get('USDT', 0)
-                cb_daily_pnl = get_daily_pnl()
-                cb_unrealized = get_unrealized_pnl(current_prices_dict)
-                cb_effective_pnl = cb_daily_pnl + cb_unrealized
-                cb_recent_trades = get_recent_closed_trades(limit=live_config.get('max_consecutive_losses', 3))
-                cb_tripped, cb_reason = check_circuit_breaker(cb_balance, cb_effective_pnl, cb_recent_trades)
-                if cb_tripped:
-                    log.warning(f"Circuit breaker active: {cb_reason}")
-                    await send_telegram_alert({
-                        "signal": "CIRCUIT_BREAKER", "symbol": symbol,
-                        "current_price": current_price,
-                        "reason": f"Circuit breaker: {cb_reason}"
-                    })
-                    continue
+            # Circuit breaker — already checked once before the loop
+            if cb_tripped:
+                continue
 
             log.info(f"Processing signal for {trading_mode} trading...")
             open_positions = _cached_crypto_positions
@@ -363,7 +366,7 @@ async def run_bot_cycle():
                         trading_strategy='auto', mode_label='AUTO')
 
         # --- Auto-Trading Shadow Bot: Signal Execution ---
-        if auto_enabled and bot_is_running.is_set() and signal is not None:
+        if auto_enabled and not cb_tripped and bot_is_running.is_set() and signal is not None:
             auto_open_crypto = [p for p in _cached_auto_positions
                                 if p.get('asset_type', 'crypto') == 'crypto' and p['status'] == 'OPEN']
             auto_max = auto_cfg.get('max_concurrent_positions', max_concurrent_positions)
