@@ -99,6 +99,11 @@ settings:
   # Simulated trading fee (0.1% = Binance spot default) deducted from paper SELL PnL.
   simulated_fee_pct: 0.001
 
+  # -- Paper Trading Slippage Simulation --
+  # Simulated slippage (0.1% default) applied to paper fill prices.
+  # BUY fills higher, SELL fills lower — models real-world market impact.
+  simulated_slippage_pct: 0.001
+
   # -- Risk Management Settings --
   # Optimized via SL/TP sweep on 23-day dataset (Jan 12 – Feb 5, 2026).
   # SL=3.5%/TP=8%: +30.6% return, 55.7% win rate, Sharpe 2.15.
@@ -243,6 +248,15 @@ settings:
     vix_elevated_threshold: 18
     vix_high_threshold: 25
     vix_extreme_threshold: 35
+    # Weighted scoring: VIX level matters most, BTC/VIX trend least
+    weights:
+      vix_signal: 2.0
+      vix_trend: 1.0
+      sp500_trend: 1.5
+      yield_direction: 1.5
+      btc_trend: 1.0
+    risk_on_threshold: 3.0
+    risk_off_threshold: -3.0
 
   # -- Correlation-Aware Sector Limits --
   # Prevents over-concentration in correlated assets (e.g., 5 AI stocks = 1 bet).
@@ -296,6 +310,40 @@ settings:
       enabled: true
       urgency_hours_before: 24
       cooldown_hours: 12
+
+  # -- Autonomous Bot Infrastructure --
+  # Enables self-improving capabilities: source discovery, feedback loops, auto-tuning.
+  autonomous_bot:
+    source_discovery:
+      enabled: true
+      discovery_interval_days: 7
+      min_trial_days: 7
+      min_trial_articles: 10
+      promotion_threshold: 0.6
+      demotion_threshold: 0.2
+      max_experimental_sources: 10
+
+    feedback_loop:
+      enabled: true
+      daily_review_hour_utc: 3
+      min_trades_for_scoring: 5
+      reliability_decay_days: 90
+
+    auto_tuner:
+      enabled: true
+      tune_interval_days: 7
+      min_sample_trades: 20
+      min_sharpe_improvement: 0.1
+      max_param_changes_per_cycle: 2
+      auto_revert_days: 7
+      auto_revert_degradation_pct: 0.10
+      # Safety bounds
+      sl_min: 0.015
+      sl_max: 0.06
+      tp_min: 0.03
+      tp_max: 0.15
+      confidence_min: 0.35
+      confidence_max: 0.75
 
   # -- Position Monitor Settings (legacy, used when position_analyst is disabled) --
   # Sub-bot that monitors open positions and asks Gemini "hold or exit?"

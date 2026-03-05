@@ -1,10 +1,12 @@
 import sqlite3
-from datetime import datetime, timedelta, timezone
 
 import psycopg2
 from src.config import app_config
 from src.database import get_db_connection, release_db_connection, _cursor
 from src.logger import log
+
+
+_session_peaks: dict[str, float] = {}  # {asset_type: peak_balance}
 
 
 def _get_live_config():
@@ -100,7 +102,9 @@ def _get_peak_balance(initial_capital, asset_type='crypto'):
                 """
             cursor.execute(query, (asset_type,))
             max_cumulative_pnl = float(cursor.fetchone()[0])
-        return initial_capital + max(0, max_cumulative_pnl)
+        historical_peak = initial_capital + max(0, max_cumulative_pnl)
+        session_peak = _session_peaks.get(asset_type, 0)
+        return max(historical_peak, session_peak)
     except Exception as e:
         log.warning(f"Could not compute peak balance: {e}")
         return initial_capital
@@ -190,7 +194,6 @@ def get_circuit_breaker_status(asset_type=None):
     last_event = None
     try:
         conn = get_db_connection()
-        is_pg = isinstance(conn, psycopg2.extensions.connection)
         with _cursor(conn) as cursor:
             query = (
                 "SELECT event_type, details, triggered_at FROM circuit_breaker_events "
@@ -216,18 +219,79 @@ def get_circuit_breaker_status(asset_type=None):
     }
 
 
-def get_unrealized_pnl(current_prices: dict) -> float:
-    """Calculates total unrealized P&L across all open positions.
+def update_session_peak(balance: float, asset_type: str = 'crypto') -> float:
+    """Update session peak if balance exceeds current peak. Persists to DB.
+
+    Returns the current peak balance for this asset type.
+    """
+    current_peak = _session_peaks.get(asset_type, 0)
+    if balance > current_peak:
+        _session_peaks[asset_type] = balance
+        _persist_session_peak(asset_type, balance)
+        return balance
+    return current_peak
+
+
+def load_session_peaks() -> None:
+    """Load session peaks from DB into _session_peaks. Called at startup."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            cursor.execute("SELECT asset_type, peak_balance FROM session_peaks")
+            for row in cursor.fetchall():
+                if is_pg or hasattr(row, 'keys'):
+                    _session_peaks[row['asset_type']] = float(row['peak_balance'])
+                else:
+                    _session_peaks[row[0]] = float(row[1])
+        log.info(f"Loaded session peaks: {_session_peaks}")
+    except Exception as e:
+        log.warning(f"Could not load session peaks: {e}")
+    finally:
+        release_db_connection(conn)
+
+
+def _persist_session_peak(asset_type: str, peak: float) -> None:
+    """Upsert session peak to DB."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            if is_pg:
+                cursor.execute(
+                    "INSERT INTO session_peaks (asset_type, peak_balance, observed_at) "
+                    "VALUES (%s, %s, NOW()) "
+                    "ON CONFLICT (asset_type) DO UPDATE SET peak_balance = %s, observed_at = NOW()",
+                    (asset_type, peak, peak))
+            else:
+                cursor.execute(
+                    "INSERT OR REPLACE INTO session_peaks (asset_type, peak_balance, observed_at) "
+                    "VALUES (?, ?, datetime('now'))",
+                    (asset_type, peak))
+        conn.commit()
+    except Exception as e:
+        log.warning(f"Could not persist session peak: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        release_db_connection(conn)
+
+
+def get_unrealized_pnl(current_prices: dict, asset_type: str | None = None) -> float:
+    """Calculates total unrealized P&L across open positions.
 
     Args:
         current_prices: {symbol: float} — current market prices.
+        asset_type: Optional filter — 'crypto' or 'stock'. None = all.
 
     Returns:
         Total unrealized P&L in USD. Returns 0.0 on any error (fail-safe).
     """
     try:
         from src.execution.binance_trader import get_open_positions
-        positions = get_open_positions()
+        positions = get_open_positions(asset_type=asset_type)
         total = 0.0
         for pos in positions:
             if pos.get('status') != 'OPEN':
@@ -323,5 +387,47 @@ def get_recent_closed_trades(limit=5, asset_type=None):
     except Exception as e:
         log.warning(f"Could not fetch recent trades: {e}")
         return []
+    finally:
+        release_db_connection(conn)
+
+
+def resolve_stale_circuit_breaker_events():
+    """Resolves circuit breaker events older than the cooldown period that are still unresolved.
+
+    This prevents stale events from permanently blocking trading after a restart.
+    """
+    config = _get_live_config()
+    cooldown_hours = config.get('cooldown_hours', 24)
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            if is_pg:
+                query = """
+                    UPDATE circuit_breaker_events
+                    SET resolved_at = NOW()
+                    WHERE resolved_at IS NULL
+                    AND triggered_at < NOW() - INTERVAL '%s hours'
+                """
+            else:
+                query = """
+                    UPDATE circuit_breaker_events
+                    SET resolved_at = datetime('now')
+                    WHERE resolved_at IS NULL
+                    AND triggered_at < datetime('now', ? || ' hours')
+                """
+                cooldown_hours = f'-{cooldown_hours}'
+            cursor.execute(query, (cooldown_hours,))
+            resolved_count = cursor.rowcount
+        conn.commit()
+        if resolved_count > 0:
+            log.info(f"Resolved {resolved_count} stale circuit breaker event(s) at startup.")
+        return resolved_count
+    except Exception as e:
+        log.warning(f"Could not resolve stale circuit breaker events: {e}")
+        if conn:
+            conn.rollback()
+        return 0
     finally:
         release_db_connection(conn)

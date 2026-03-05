@@ -47,9 +47,10 @@ def test_paper_sell_deducts_fees(mock_release, mock_get_conn):
     result = _paper_place_order("BTC", "SELL", 1.0, 110.0,
                                 existing_order_id="PAPER_BTC_BUY_123")
 
-    # PnL = (110 - 100) * 1 - (110*1*0.001 + 100*1*0.001) = 10 - 0.21 = 9.79
+    # With 0.1% slippage: fill_price = 110 * 0.999 = 109.89
+    # PnL = (109.89 - 100) * 1 - (109.89*0.001 + 100*0.001) = 9.89 - 0.20989 = 9.68
     assert result['status'] == 'CLOSED'
-    assert result['pnl'] == 9.79
+    assert result['pnl'] == 9.68
 
 
 # --- Bug 6: Symbol format avoids "USDTUSDT" ---

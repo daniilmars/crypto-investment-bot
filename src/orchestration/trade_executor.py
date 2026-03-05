@@ -1,12 +1,15 @@
 """Trade executor — executes confirmed signals and BUY/SELL trade logic.
 
-Contains execute_confirmed_signal (callback for Telegram approval)
+Contains execute_confirmed_signal (callback for Telegram approval),
+process_trade_signal (unified signal processing pipeline),
 and helpers for the BUY/SELL execution patterns used in bot cycles.
 """
 
+from datetime import datetime, timedelta, timezone
+
 from src.execution.binance_trader import (
-    add_to_position, get_account_balance, get_open_positions, place_order,
-    _is_live_trading, _get_trading_mode,
+    add_to_position, get_open_positions, place_order,
+    _get_trading_mode,
 )
 from src.execution.stock_trader import place_stock_order
 from src.logger import log
@@ -14,7 +17,109 @@ from src.notify.telegram_bot import (
     is_confirmation_required, send_signal_for_confirmation, send_telegram_alert,
 )
 from src.orchestration import bot_state
+from src.orchestration.pre_trade_gates import (
+    check_buy_gates, check_stoploss_cooldown, check_signal_cooldown,
+)
 from src.config import app_config
+
+
+def _set_cooldown(symbol, signal_type, cooldown_hours, is_auto):
+    """Set signal cooldown via bot_state (auto vs manual)."""
+    expires = datetime.now(timezone.utc) + timedelta(hours=cooldown_hours)
+    if is_auto:
+        bot_state.set_auto_signal_cooldown(symbol, signal_type, expires)
+    else:
+        bot_state.set_signal_cooldown(symbol, signal_type, expires)
+
+
+async def process_trade_signal(
+    symbol: str,
+    signal: dict,
+    current_price: float,
+    positions: list,
+    balance: float,
+    risk_pct: float,
+    signal_cooldown_hours: float,
+    max_positions: int,
+    suppress_buys: bool,
+    macro_multiplier: float,
+    *,
+    asset_type: str = 'crypto',
+    trading_strategy: str = 'manual',
+    broker: str | None = None,
+    label: str = '',
+    is_auto: bool = False,
+    pdt_status: dict | None = None,
+) -> dict | None:
+    """Unified signal processing pipeline: cooldowns → gates → execute.
+
+    Replaces duplicated gate→cooldown→execute patterns across all 10 call sites.
+    Returns the order result dict, or None if no trade was executed.
+    """
+    signal_type = signal.get('signal', 'HOLD')
+
+    # 0. Skip BUY if already holding position (avoids noisy cooldown logs)
+    if signal_type == "BUY" and any(
+        p['symbol'] == symbol and p.get('status', 'OPEN') == 'OPEN'
+        for p in positions
+    ):
+        return None
+
+    # 1. Cooldown checks
+    if await check_stoploss_cooldown(symbol, signal_type, is_auto=is_auto):
+        log.info(f"Skipping {signal_type} for {symbol}: stop-loss cooldown active.")
+        signal['signal'] = 'HOLD'
+        signal_type = 'HOLD'
+
+    if await check_signal_cooldown(symbol, signal_type, signal_cooldown_hours, is_auto=is_auto):
+        log.debug(f"Skipping {signal_type} for {symbol}: signal cooldown active.")
+        signal['signal'] = 'HOLD'
+        signal_type = 'HOLD'
+
+    # 2. BUY path
+    if signal_type == "BUY":
+        if pdt_status and pdt_status.get('is_restricted'):
+            log.info(f"Skipping BUY for {symbol}: PDT rule — no day trades remaining.")
+            return None
+
+        allowed, size_mult, _ = check_buy_gates(
+            symbol, positions, max_positions,
+            suppress_buys, macro_multiplier,
+            asset_type=asset_type, label=label)
+
+        if allowed:
+            result = await execute_buy(
+                symbol, signal, current_price, balance,
+                risk_pct, size_mult,
+                asset_type=asset_type, trading_strategy=trading_strategy,
+                broker=broker, label=label)
+            _set_cooldown(symbol, "BUY", signal_cooldown_hours, is_auto)
+            return result
+        else:
+            signal['signal'] = 'HOLD'
+            return None
+
+    # 3. SELL path
+    elif signal_type == "SELL":
+        position_to_close = next(
+            (p for p in positions
+             if p['symbol'] == symbol and p.get('status', 'OPEN') == 'OPEN'), None)
+        if position_to_close:
+            result = await execute_sell(
+                symbol, signal, position_to_close, current_price,
+                asset_type=asset_type, trading_strategy=trading_strategy,
+                broker=broker, label=label)
+            _set_cooldown(symbol, "SELL", signal_cooldown_hours, is_auto)
+            return result
+        else:
+            log.info(f"Skipping SELL for {symbol}: No open position found.")
+            _set_cooldown(symbol, "SELL", signal_cooldown_hours, is_auto)
+            return None
+
+    # 4. HOLD
+    else:
+        log.info(f"Signal is HOLD for {symbol}. No trade action taken.")
+        return None
 
 
 async def execute_confirmed_signal(signal: dict) -> dict:

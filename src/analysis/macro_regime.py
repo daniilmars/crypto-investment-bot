@@ -195,9 +195,21 @@ def _compute_signals(indicators: dict) -> dict:
     return signals
 
 
-def _compute_score(signals: dict) -> int:
-    """Sums all signal values into a single regime score."""
-    return sum(signals.values())
+_DEFAULT_WEIGHTS = {
+    'vix_signal': 2.0,
+    'vix_trend': 1.0,
+    'sp500_trend': 1.5,
+    'yield_direction': 1.5,
+    'btc_trend': 1.0,
+}
+
+
+def _compute_score(signals: dict) -> float:
+    """Weighted sum of signal values into a single regime score."""
+    config = app_config.get('settings', {}).get('macro_regime', {})
+    weights = config.get('weights', {})
+    return sum(signals.get(k, 0) * weights.get(k, _DEFAULT_WEIGHTS[k])
+               for k in _DEFAULT_WEIGHTS)
 
 
 def _classify_regime(signals: dict, cfg: dict) -> tuple:
@@ -208,10 +220,12 @@ def _classify_regime(signals: dict, cfg: dict) -> tuple:
     caution_mult = cfg.get('caution_multiplier', 0.6)
     risk_off_mult = cfg.get('risk_off_multiplier', 0.3)
     suppress_in_risk_off = cfg.get('suppress_buys_in_risk_off', True)
+    risk_on_threshold = cfg.get('risk_on_threshold', 3.0)
+    risk_off_threshold = cfg.get('risk_off_threshold', -3.0)
 
-    if score >= 2:
+    if score >= risk_on_threshold:
         return MacroRegime.RISK_ON, risk_on_mult, False
-    elif score <= -2:
+    elif score <= risk_off_threshold:
         return MacroRegime.RISK_OFF, risk_off_mult, suppress_in_risk_off
     else:
         return MacroRegime.CAUTION, caution_mult, False

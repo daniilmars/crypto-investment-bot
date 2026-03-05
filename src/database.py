@@ -40,7 +40,7 @@ def _cursor(conn):
 # --- Connection Pool (for PostgreSQL) ---
 _pg_pool = None
 
-ALLOWED_TABLES = frozenset({"market_prices", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles", "stoploss_cooldowns", "position_additions", "ipo_events", "macro_regime_history"})
+ALLOWED_TABLES = frozenset({"market_prices", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles", "stoploss_cooldowns", "position_additions", "ipo_events", "macro_regime_history", "source_registry", "signal_attribution", "experiment_log", "tuning_history", "session_peaks"})
 
 # --- Database Connection Management ---
 
@@ -401,6 +401,185 @@ def initialize_database(db_url=None):
             "CREATE INDEX IF NOT EXISTS idx_macro_regime_recorded_at "
             "ON macro_regime_history (recorded_at)"
         )
+
+        # Source Registry (autonomous bot infrastructure)
+        source_registry_sql = '''
+            CREATE TABLE IF NOT EXISTS source_registry (
+                id SERIAL PRIMARY KEY,
+                source_type TEXT NOT NULL,
+                source_name TEXT NOT NULL UNIQUE,
+                source_url TEXT NOT NULL,
+                category TEXT,
+                tier INTEGER DEFAULT 2,
+                is_active BOOLEAN DEFAULT TRUE,
+                reliability_score REAL DEFAULT 0.5,
+                articles_total INTEGER DEFAULT 0,
+                articles_with_signals INTEGER DEFAULT 0,
+                profitable_signal_ratio REAL,
+                avg_signal_pnl REAL,
+                last_fetched_at TIMESTAMP,
+                last_article_at TIMESTAMP,
+                error_count INTEGER DEFAULT 0,
+                consecutive_errors INTEGER DEFAULT 0,
+                added_by TEXT DEFAULT 'manual',
+                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                deactivated_at TIMESTAMP,
+                deactivation_reason TEXT,
+                metadata_json TEXT
+            )''' if is_postgres_conn else '''
+            CREATE TABLE IF NOT EXISTS source_registry (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_type TEXT NOT NULL,
+                source_name TEXT NOT NULL UNIQUE,
+                source_url TEXT NOT NULL,
+                category TEXT,
+                tier INTEGER DEFAULT 2,
+                is_active INTEGER DEFAULT 1,
+                reliability_score REAL DEFAULT 0.5,
+                articles_total INTEGER DEFAULT 0,
+                articles_with_signals INTEGER DEFAULT 0,
+                profitable_signal_ratio REAL,
+                avg_signal_pnl REAL,
+                last_fetched_at TIMESTAMP,
+                last_article_at TIMESTAMP,
+                error_count INTEGER DEFAULT 0,
+                consecutive_errors INTEGER DEFAULT 0,
+                added_by TEXT DEFAULT 'manual',
+                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                deactivated_at TIMESTAMP,
+                deactivation_reason TEXT,
+                metadata_json TEXT
+            )'''
+        cursor.execute(source_registry_sql)
+
+        # Signal Attribution (links source → article → signal → trade → PnL)
+        signal_attribution_sql = '''
+            CREATE TABLE IF NOT EXISTS signal_attribution (
+                id SERIAL PRIMARY KEY,
+                signal_id INTEGER,
+                symbol TEXT NOT NULL,
+                signal_type TEXT NOT NULL,
+                signal_timestamp TIMESTAMP NOT NULL,
+                signal_confidence REAL,
+                article_hashes TEXT,
+                source_names TEXT,
+                gemini_direction TEXT,
+                gemini_confidence REAL,
+                catalyst_type TEXT,
+                trade_order_id TEXT,
+                trade_pnl REAL,
+                trade_pnl_pct REAL,
+                trade_duration_hours REAL,
+                exit_reason TEXT,
+                attribution_score REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                resolved_at TIMESTAMP
+            )''' if is_postgres_conn else '''
+            CREATE TABLE IF NOT EXISTS signal_attribution (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                signal_id INTEGER,
+                symbol TEXT NOT NULL,
+                signal_type TEXT NOT NULL,
+                signal_timestamp TIMESTAMP NOT NULL,
+                signal_confidence REAL,
+                article_hashes TEXT,
+                source_names TEXT,
+                gemini_direction TEXT,
+                gemini_confidence REAL,
+                catalyst_type TEXT,
+                trade_order_id TEXT,
+                trade_pnl REAL,
+                trade_pnl_pct REAL,
+                trade_duration_hours REAL,
+                exit_reason TEXT,
+                attribution_score REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                resolved_at TIMESTAMP
+            )'''
+        cursor.execute(signal_attribution_sql)
+
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_signal_attribution_symbol "
+            "ON signal_attribution (symbol)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_signal_attribution_order "
+            "ON signal_attribution (trade_order_id)"
+        )
+
+        # Experiment Log (audit trail of autonomous decisions)
+        experiment_log_sql = '''
+            CREATE TABLE IF NOT EXISTS experiment_log (
+                id SERIAL PRIMARY KEY,
+                experiment_type TEXT NOT NULL,
+                description TEXT NOT NULL,
+                old_value TEXT,
+                new_value TEXT,
+                reason TEXT,
+                impact_metric TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )''' if is_postgres_conn else '''
+            CREATE TABLE IF NOT EXISTS experiment_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                experiment_type TEXT NOT NULL,
+                description TEXT NOT NULL,
+                old_value TEXT,
+                new_value TEXT,
+                reason TEXT,
+                impact_metric TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )'''
+        cursor.execute(experiment_log_sql)
+
+        # Tuning History (parameter change tracking with revert)
+        tuning_history_sql = '''
+            CREATE TABLE IF NOT EXISTS tuning_history (
+                id SERIAL PRIMARY KEY,
+                tuning_run_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                parameter_name TEXT NOT NULL,
+                old_value REAL NOT NULL,
+                new_value REAL NOT NULL,
+                sample_trades INTEGER,
+                old_sharpe REAL,
+                new_sharpe REAL,
+                old_win_rate REAL,
+                new_win_rate REAL,
+                applied BOOLEAN DEFAULT FALSE,
+                reverted BOOLEAN DEFAULT FALSE,
+                reverted_at TIMESTAMP,
+                revert_reason TEXT
+            )''' if is_postgres_conn else '''
+            CREATE TABLE IF NOT EXISTS tuning_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tuning_run_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                parameter_name TEXT NOT NULL,
+                old_value REAL NOT NULL,
+                new_value REAL NOT NULL,
+                sample_trades INTEGER,
+                old_sharpe REAL,
+                new_sharpe REAL,
+                old_win_rate REAL,
+                new_win_rate REAL,
+                applied INTEGER DEFAULT 0,
+                reverted INTEGER DEFAULT 0,
+                reverted_at TIMESTAMP,
+                revert_reason TEXT
+            )'''
+        cursor.execute(tuning_history_sql)
+
+        # Session Peaks (session-level high-water mark for drawdown detection)
+        session_peaks_sql = '''
+            CREATE TABLE IF NOT EXISTS session_peaks (
+                asset_type TEXT PRIMARY KEY,
+                peak_balance REAL NOT NULL,
+                observed_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )''' if is_postgres_conn else '''
+            CREATE TABLE IF NOT EXISTS session_peaks (
+                asset_type TEXT PRIMARY KEY,
+                peak_balance REAL NOT NULL,
+                observed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )'''
+        cursor.execute(session_peaks_sql)
 
         # --- Migrate trades table: add live trading columns if missing ---
         new_trade_columns = [

@@ -49,3 +49,8 @@ yfinance>=0.2.40
 
 # For config validation at startup
 pydantic>=2.0.0
+
+# For linting and type checking in CI
+flake8==7.1.1
+mypy==1.13.0
+flake8-pyproject==1.2.3

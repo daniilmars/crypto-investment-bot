@@ -39,7 +39,10 @@ from src.execution.binance_trader import (get_account_balance,
                                           _is_live_trading, _get_trading_mode)
 from src.execution.circuit_breaker import (check_circuit_breaker, get_daily_pnl,
                                            get_recent_closed_trades,
-                                           get_unrealized_pnl)
+                                           get_unrealized_pnl,
+                                           resolve_stale_circuit_breaker_events,
+                                           update_session_peak,
+                                           load_session_peaks)
 from src.execution.stock_trader import (
     get_stock_positions, get_stock_balance,
     _is_market_open, _check_pdt_rule,
@@ -55,14 +58,14 @@ from src.state import bot_is_running
 from src.orchestration import bot_state
 from src.orchestration.position_monitor import monitor_position
 from src.orchestration.position_analyst import run_position_analyst
-from src.orchestration.pre_trade_gates import (
-    check_buy_gates, check_stoploss_cooldown, check_signal_cooldown,
-)
 from src.orchestration.trade_executor import (
-    execute_confirmed_signal, execute_buy, execute_sell,
+    execute_confirmed_signal, process_trade_signal,
 )
 from src.orchestration.news_pipeline import (
     collect_and_analyze_news, run_proactive_market_alerts,
+)
+from src.analysis.signal_attribution import (
+    record_signal_attribution, link_attribution_to_order,
 )
 
 # Initialize the database at the start of the application
@@ -193,9 +196,10 @@ async def run_bot_cycle():
     live_config = settings.get('live_trading', {})
     cb_tripped = False
     if is_live:
-        cb_balance = get_account_balance().get('USDT', 0)
+        cb_balance = get_account_balance(asset_type='crypto').get('USDT', 0)
+        update_session_peak(cb_balance, 'crypto')
         cb_daily_pnl = get_daily_pnl(asset_type='crypto')
-        cb_unrealized = get_unrealized_pnl(current_prices_dict)
+        cb_unrealized = get_unrealized_pnl(current_prices_dict, asset_type='crypto')
         cb_effective_pnl = cb_daily_pnl + cb_unrealized
         cb_recent_trades = get_recent_closed_trades(
             limit=live_config.get('max_consecutive_losses', 3), asset_type='crypto')
@@ -303,6 +307,16 @@ async def run_bot_cycle():
         log.info(f"Generated Signal for {symbol}: {signal}")
         await save_signal(signal)
 
+        # Record signal attribution for non-HOLD signals
+        _attribution_id = None
+        if signal.get('signal') not in ('HOLD', None):
+            try:
+                sym_articles = news_per_symbol.get(symbol, {}).get('articles', [])
+                _attribution_id = record_signal_attribution(
+                    signal, articles=sym_articles, gemini_assessment=ga)
+            except Exception as _attr_err:
+                log.debug(f"Attribution recording skipped: {_attr_err}")
+
         # --- 4. Trade Execution (Paper & Live) with Dynamic Sizing ---
         can_trade = paper_trading or is_live
 
@@ -312,52 +326,19 @@ async def run_bot_cycle():
                 continue
 
             log.info(f"Processing signal for {trading_mode} trading...")
-            open_positions = _cached_crypto_positions
 
             # Balance and position limits
             if is_live:
-                current_balance = get_account_balance().get('USDT', live_config.get('initial_capital', 100.0))
+                current_balance = get_account_balance(asset_type='crypto').get('USDT', live_config.get('initial_capital', 100.0))
                 active_max_positions = live_config.get('max_concurrent_positions', max_concurrent_positions)
             else:
-                current_balance = get_account_balance().get('total_usd', paper_trading_initial_capital)
+                current_balance = get_account_balance(asset_type='crypto').get('total_usd', paper_trading_initial_capital)
                 active_max_positions = max_concurrent_positions
 
-            # Stop-loss cooldown check
-            if await check_stoploss_cooldown(symbol, signal['signal']):
-                log.info(f"Skipping {signal['signal']} for {symbol}: stop-loss cooldown active.")
-                signal['signal'] = 'HOLD'
-
-            # Signal cooldown check (suppress repeat signals for same symbol)
-            if await check_signal_cooldown(symbol, signal['signal'], signal_cooldown_hours):
-                log.debug(f"Skipping {signal['signal']} for {symbol}: signal cooldown active.")
-                signal['signal'] = 'HOLD'
-
-            if signal['signal'] == "BUY":
-                allowed, size_mult, _ = check_buy_gates(
-                    symbol, open_positions, active_max_positions,
-                    suppress_buys, macro_multiplier)
-                if allowed:
-                    await execute_buy(
-                        symbol, signal, current_price, current_balance,
-                        effective_risk_pct, size_mult, label=trading_mode)
-                    bot_state.set_signal_cooldown(
-                        symbol, "BUY",
-                        datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours))
-                else:
-                    signal['signal'] = 'HOLD'
-
-            elif signal['signal'] == "SELL":
-                position_to_close = next(
-                    (p for p in open_positions if p['symbol'] == symbol and p['status'] == 'OPEN'), None)
-                if position_to_close:
-                    await execute_sell(symbol, signal, position_to_close, current_price)
-                    bot_state.set_signal_cooldown(
-                        symbol, "SELL",
-                        datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours))
-                else:
-                    log.info(f"Skipping SELL for {symbol}: No open position found.")
-            else:
-                log.info(f"Signal is HOLD for {symbol}. No trade action taken.")
+            await process_trade_signal(
+                symbol, signal, current_price, _cached_crypto_positions, current_balance,
+                effective_risk_pct, signal_cooldown_hours, active_max_positions,
+                suppress_buys, macro_multiplier, label=trading_mode)
 
         # --- Auto-Trading Shadow Bot: Position Monitoring ---
         if auto_enabled:
@@ -372,38 +353,16 @@ async def run_bot_cycle():
             auto_open_crypto = [p for p in _cached_auto_positions
                                 if p.get('asset_type', 'crypto') == 'crypto' and p['status'] == 'OPEN']
             auto_max = auto_cfg.get('max_concurrent_positions', max_concurrent_positions)
+            auto_balance = get_account_balance(asset_type='crypto', trading_strategy='auto')
+            auto_available = auto_balance.get('USDT', 0)
 
-            auto_signal_type = signal.get('signal', 'HOLD')
-            if await check_stoploss_cooldown(symbol, auto_signal_type, is_auto=True):
-                auto_signal_type = 'HOLD'
-            if await check_signal_cooldown(symbol, auto_signal_type, signal_cooldown_hours, is_auto=True):
-                auto_signal_type = 'HOLD'
-
-            if auto_signal_type == "BUY":
-                allowed, size_mult, _ = check_buy_gates(
-                    symbol, auto_open_crypto, auto_max,
-                    suppress_buys, macro_multiplier, label='AUTO')
-                if allowed:
-                    auto_balance = get_account_balance(asset_type='crypto', trading_strategy='auto')
-                    auto_available = auto_balance.get('USDT', 0)
-                    await execute_buy(
-                        symbol, signal, current_price, auto_available,
-                        effective_risk_pct, size_mult,
-                        trading_strategy='auto', label='AUTO')
-                    bot_state.set_auto_signal_cooldown(
-                        symbol, "BUY",
-                        datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours))
-
-            elif auto_signal_type == "SELL":
-                auto_pos = next((p for p in auto_open_crypto
-                                 if p['symbol'] == symbol and p['status'] == 'OPEN'), None)
-                if auto_pos:
-                    await execute_sell(
-                        symbol, signal, auto_pos, current_price,
-                        trading_strategy='auto', label='AUTO')
-                    bot_state.set_auto_signal_cooldown(
-                        symbol, "SELL",
-                        datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours))
+            # Create a copy of the signal for auto-trading (don't mutate the original)
+            auto_signal = dict(signal)
+            await process_trade_signal(
+                symbol, auto_signal, current_price, auto_open_crypto, auto_available,
+                effective_risk_pct, signal_cooldown_hours, auto_max,
+                suppress_buys, macro_multiplier,
+                trading_strategy='auto', label='AUTO', is_auto=True)
 
     # --- Event warnings for open positions ---
     try:
@@ -523,6 +482,30 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
     auto_cfg = settings.get('auto_trading', {})
     auto_enabled = auto_cfg.get('enabled', False)
     _cached_auto_stock_positions = get_open_positions(asset_type='stock', trading_strategy='auto') if auto_enabled else []
+
+    # Stock circuit breaker check — once per cycle
+    live_config = settings.get('live_trading', {})
+    stock_cb_tripped = False
+    if is_live or paper_trading:
+        stock_cb_balance = get_account_balance(asset_type='stock').get('total_usd', paper_trading_initial_capital)
+        update_session_peak(stock_cb_balance, 'stock')
+        stock_cb_daily_pnl = get_daily_pnl(asset_type='stock')
+        # Include stock unrealized PnL in circuit breaker check
+        stock_prices_dict = {sym: stock_batch_prices[sym]['price']
+                             for sym in stock_batch_prices
+                             if stock_batch_prices.get(sym, {}).get('price')}
+        stock_cb_unrealized = get_unrealized_pnl(stock_prices_dict, asset_type='stock')
+        stock_cb_effective_pnl = stock_cb_daily_pnl + stock_cb_unrealized
+        stock_cb_recent = get_recent_closed_trades(
+            limit=live_config.get('max_consecutive_losses', 3), asset_type='stock')
+        stock_cb_tripped, stock_cb_reason = check_circuit_breaker(
+            stock_cb_balance, stock_cb_effective_pnl, stock_cb_recent, asset_type='stock')
+        if stock_cb_tripped:
+            log.warning(f"Circuit breaker active for stocks: {stock_cb_reason}")
+            await send_telegram_alert({
+                "signal": "CIRCUIT_BREAKER", "symbol": "ALL_STOCKS",
+                "reason": f"Circuit breaker (stock): {stock_cb_reason}. Skipping all stock trading this cycle."
+            })
 
     for symbol in watch_list:
         signal = None
@@ -651,95 +634,30 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
         log.info(f"Generated Stock Signal for {symbol}: {signal}")
         await save_signal(signal)
 
-        # Stop-loss cooldown check
-        if await check_stoploss_cooldown(symbol, signal['signal']):
-            log.info(f"Skipping {signal['signal']} for stock {symbol}: stop-loss cooldown active.")
+        # --- Trade Execution (broker-aware, unified pipeline) ---
+        if stock_cb_tripped:
+            log.info(f"Skipping trade execution for stock {symbol}: circuit breaker active.")
             signal['signal'] = 'HOLD'
 
-        # Signal cooldown check (suppress repeat signals for same symbol)
-        if await check_signal_cooldown(symbol, signal['signal'], signal_cooldown_hours):
-            log.debug(f"Skipping {signal['signal']} for stock {symbol}: signal cooldown active.")
-            signal['signal'] = 'HOLD'
+        stock_trade_stats = await get_trade_history_stats()
+        stock_kelly = stock_trade_stats.get('kelly_fraction', 0.0)
+        stock_risk_pct = stock_kelly if (stock_kelly > 0 and stock_trade_stats.get('total_trades', 0) >= 10) else trade_risk_percentage
 
-        # --- Trade Execution (broker-aware) ---
         if broker == 'alpaca':
-            alpaca_positions = _cached_alpaca_positions
             pdt_status = _check_pdt_rule()
-
-            if signal['signal'] == "BUY":
-                if pdt_status['is_restricted']:
-                    log.info(f"Skipping BUY for stock {symbol}: PDT rule — no day trades remaining.")
-                else:
-                    allowed, size_mult, _ = check_buy_gates(
-                        symbol, alpaca_positions, max_concurrent_positions,
-                        suppress_buys, macro_multiplier, asset_type='stock')
-                    if allowed:
-                        balance = get_stock_balance()
-                        buying_power = balance.get('buying_power', 0)
-                        stock_trade_stats = await get_trade_history_stats()
-                        stock_kelly = stock_trade_stats.get('kelly_fraction', 0.0)
-                        stock_risk_pct = stock_kelly if (stock_kelly > 0 and stock_trade_stats.get('total_trades', 0) >= 10) else trade_risk_percentage
-                        await execute_buy(
-                            symbol, signal, current_price, buying_power,
-                            stock_risk_pct, size_mult,
-                            asset_type='stock', broker='alpaca')
-                        bot_state.set_signal_cooldown(
-                            symbol, "BUY",
-                            datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours))
-                    else:
-                        signal['signal'] = 'HOLD'
-
-            elif signal['signal'] == "SELL":
-                alpaca_pos = next((p for p in alpaca_positions if p['symbol'] == symbol), None)
-                if alpaca_pos:
-                    await execute_sell(
-                        symbol, signal, alpaca_pos, current_price,
-                        asset_type='stock', broker='alpaca')
-                    bot_state.set_signal_cooldown(
-                        symbol, "SELL",
-                        datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours))
-                else:
-                    log.info(f"Skipping SELL for stock {symbol}: No open position on Alpaca.")
-            else:
-                log.info(f"Signal is HOLD for stock {symbol}. No trade action taken.")
-
+            balance = get_stock_balance()
+            buying_power = balance.get('buying_power', 0)
+            await process_trade_signal(
+                symbol, signal, current_price, _cached_alpaca_positions, buying_power,
+                stock_risk_pct, signal_cooldown_hours, max_concurrent_positions,
+                suppress_buys, macro_multiplier,
+                asset_type='stock', broker='alpaca', pdt_status=pdt_status)
         else:
-            # Paper-only execution
-            open_positions = _cached_stock_positions
             current_balance = get_account_balance(asset_type='stock').get('total_usd', paper_trading_initial_capital)
-
-            stock_trade_stats = await get_trade_history_stats()
-            stock_kelly = stock_trade_stats.get('kelly_fraction', 0.0)
-            stock_risk_pct = stock_kelly if (stock_kelly > 0 and stock_trade_stats.get('total_trades', 0) >= 10) else trade_risk_percentage
-
-            if signal['signal'] == "BUY":
-                allowed, size_mult, _ = check_buy_gates(
-                    symbol, open_positions, max_concurrent_positions,
-                    suppress_buys, macro_multiplier, asset_type='stock')
-                if allowed:
-                    await execute_buy(
-                        symbol, signal, current_price, current_balance,
-                        stock_risk_pct, size_mult, asset_type='stock')
-                    bot_state.set_signal_cooldown(
-                        symbol, "BUY",
-                        datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours))
-                else:
-                    signal['signal'] = 'HOLD'
-
-            elif signal['signal'] == "SELL":
-                position_to_close = next(
-                    (p for p in open_positions if p['symbol'] == symbol and p['status'] == 'OPEN'), None)
-                if position_to_close:
-                    await execute_sell(
-                        symbol, signal, position_to_close, current_price,
-                        asset_type='stock')
-                    bot_state.set_signal_cooldown(
-                        symbol, "SELL",
-                        datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours))
-                else:
-                    log.info(f"Skipping SELL for stock {symbol}: No open position found.")
-            else:
-                log.info(f"Signal is HOLD for stock {symbol}. No trade action taken.")
+            await process_trade_signal(
+                symbol, signal, current_price, _cached_stock_positions, current_balance,
+                stock_risk_pct, signal_cooldown_hours, max_concurrent_positions,
+                suppress_buys, macro_multiplier, asset_type='stock')
 
         # --- Auto-Trading Shadow Bot: Stock Position Monitoring ---
         if auto_enabled:
@@ -750,41 +668,18 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                         asset_type='stock', trading_strategy='auto', mode_label='AUTO')
 
         # --- Auto-Trading Shadow Bot: Stock Signal Execution ---
-        if auto_enabled and bot_is_running.is_set() and signal is not None:
+        if auto_enabled and not stock_cb_tripped and bot_is_running.is_set() and signal is not None:
             auto_open_stocks = [p for p in _cached_auto_stock_positions if p['status'] == 'OPEN']
             auto_max = auto_cfg.get('max_concurrent_positions', max_concurrent_positions)
+            auto_balance = get_account_balance(asset_type='stock', trading_strategy='auto')
+            auto_available = auto_balance.get('USDT', 0)
 
-            auto_signal_type = signal.get('signal', 'HOLD')
-            if await check_stoploss_cooldown(symbol, auto_signal_type, is_auto=True):
-                auto_signal_type = 'HOLD'
-            if await check_signal_cooldown(symbol, auto_signal_type, signal_cooldown_hours, is_auto=True):
-                auto_signal_type = 'HOLD'
-
-            if auto_signal_type == "BUY":
-                allowed, size_mult, _ = check_buy_gates(
-                    symbol, auto_open_stocks, auto_max,
-                    suppress_buys, macro_multiplier, asset_type='stock', label='AUTO')
-                if allowed:
-                    auto_balance = get_account_balance(asset_type='stock', trading_strategy='auto')
-                    auto_available = auto_balance.get('USDT', 0)
-                    await execute_buy(
-                        symbol, signal, current_price, auto_available,
-                        trade_risk_percentage, size_mult,
-                        asset_type='stock', trading_strategy='auto', label='AUTO')
-                    bot_state.set_auto_signal_cooldown(
-                        symbol, "BUY",
-                        datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours))
-
-            elif auto_signal_type == "SELL":
-                auto_pos = next((p for p in auto_open_stocks
-                                 if p['symbol'] == symbol and p['status'] == 'OPEN'), None)
-                if auto_pos:
-                    await execute_sell(
-                        symbol, signal, auto_pos, current_price,
-                        asset_type='stock', trading_strategy='auto', label='AUTO')
-                    bot_state.set_auto_signal_cooldown(
-                        symbol, "SELL",
-                        datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours))
+            auto_signal = dict(signal)
+            await process_trade_signal(
+                symbol, auto_signal, current_price, auto_open_stocks, auto_available,
+                trade_risk_percentage, signal_cooldown_hours, auto_max,
+                suppress_buys, macro_multiplier,
+                asset_type='stock', trading_strategy='auto', label='AUTO', is_auto=True)
 
     log.info("--- Stock trading cycle complete ---")
 
@@ -922,6 +817,18 @@ async def startup_event():
         log.info(f"Loaded {len(manual_cd)} manual + {len(auto_cd)} auto signal cooldowns from database.")
     except Exception as e:
         log.warning(f"Could not load signal cooldowns: {e}")
+
+    # Resolve stale circuit breaker events from previous runs
+    try:
+        resolve_stale_circuit_breaker_events()
+    except Exception as e:
+        log.warning(f"Could not resolve stale circuit breaker events: {e}")
+
+    # Load session peak balances from DB (survives restarts)
+    try:
+        load_session_peaks()
+    except Exception as e:
+        log.warning(f"Could not load session peaks: {e}")
 
     # Initialize the Telegram application
     application = await start_bot()

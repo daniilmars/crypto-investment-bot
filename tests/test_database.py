@@ -24,11 +24,12 @@ def test_initialize_database_creates_tables(mock_get_db_connection, mock_release
     initialize_database()
 
     # Assert: Check if CREATE TABLE + ALTER TABLE statements were executed
-    # 12 CREATE TABLEs + 4 CREATE INDEXes + 6 ALTER TABLE (trade columns) + 1 ALTER TABLE (trailing_stop_peak)
+    # 17 CREATE TABLEs (incl. session_peaks) + 6 CREATE INDEXes
+    # + 6 ALTER TABLE (trade columns) + 1 ALTER TABLE (trailing_stop_peak)
     # + 1 ALTER TABLE (scraped_articles category) + 1 ALTER TABLE (scraped_articles gemini_score)
     # + 1 ALTER TABLE (trades trading_strategy) + 1 ALTER TABLE (cb_events asset_type)
-    # + 1 UPDATE (resolve stale cb_events) = 28
-    assert mock_cursor.execute.call_count == 28
+    # + 1 UPDATE (resolve stale cb_events) = 35
+    assert mock_cursor.execute.call_count == 35
 
     # Check the SQL statements (case-insensitive and ignoring whitespace)
     executed_queries = [' '.join(call[0][0].split()) for call in mock_cursor.execute.call_args_list]
@@ -43,6 +44,12 @@ def test_initialize_database_creates_tables(mock_get_db_connection, mock_release
     assert any("idx_pos_additions_order" in query for query in executed_queries)
     assert any("CREATE TABLE IF NOT EXISTS macro_regime_history" in query for query in executed_queries)
     assert any("idx_macro_regime_recorded_at" in query for query in executed_queries)
+    assert any("CREATE TABLE IF NOT EXISTS source_registry" in query for query in executed_queries)
+    assert any("CREATE TABLE IF NOT EXISTS signal_attribution" in query for query in executed_queries)
+    assert any("CREATE TABLE IF NOT EXISTS experiment_log" in query for query in executed_queries)
+    assert any("CREATE TABLE IF NOT EXISTS tuning_history" in query for query in executed_queries)
+    assert any("idx_signal_attribution_symbol" in query for query in executed_queries)
+    assert any("idx_signal_attribution_order" in query for query in executed_queries)
 
     mock_conn.commit.assert_called_once()
     mock_release.assert_called_once_with(mock_conn)

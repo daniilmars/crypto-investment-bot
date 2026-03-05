@@ -26,6 +26,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Lint
+        run: |
+          flake8 src/execution/circuit_breaker.py src/execution/binance_trader.py src/orchestration/trade_executor.py --count --statistics
+          mypy src/execution/circuit_breaker.py src/execution/binance_trader.py src/orchestration/trade_executor.py
+
       - name: Run tests
         run: pytest tests/ -v
 
@@ -328,10 +333,32 @@ jobs:
             sudo docker ps --filter name=crypto-bot
           '
 
+      - name: Ensure spot provisioning
+        run: |
+          SCHEDULING=$(gcloud compute instances describe ${{ env.INSTANCE_NAME }} \
+            --zone=${{ env.ZONE }} \
+            --format='get(scheduling.provisioningModel)')
+          echo "Current provisioning: $SCHEDULING"
+          if [ "$SCHEDULING" != "SPOT" ]; then
+            echo "Switching to SPOT provisioning..."
+            gcloud compute instances stop ${{ env.INSTANCE_NAME }} \
+              --zone=${{ env.ZONE }} --quiet
+            gcloud compute instances set-scheduling ${{ env.INSTANCE_NAME }} \
+              --zone=${{ env.ZONE }} \
+              --provisioning-model=SPOT \
+              --instance-termination-action=STOP \
+              --no-restart-on-failure
+            gcloud compute instances start ${{ env.INSTANCE_NAME }} \
+              --zone=${{ env.ZONE }}
+            echo "Switched to SPOT. Waiting 150s for full startup..."
+            sleep 150
+          else
+            echo "Already SPOT. Waiting 120s for container startup..."
+            sleep 120
+          fi
+
       - name: Verify deployment
         run: |
-          echo "Waiting 120s for container to start (TensorFlow import is slow on e2-micro)..."
-          sleep 120
           EXTERNAL_IP=$(gcloud compute instances describe ${{ env.INSTANCE_NAME }} \
             --zone=${{ env.ZONE }} \
             --format='get(networkInterfaces[0].accessConfigs[0].natIP)')

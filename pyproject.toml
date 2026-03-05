@@ -1,0 +1,12 @@
+[tool.flake8]
+max-line-length = 120
+extend-ignore = ["E402", "W503", "W504", "E741", "E501"]
+exclude = [".venv", "build", "dist", "__pycache__"]
+per-file-ignores = ["__init__.py:F401"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+check_untyped_defs = false
+warn_return_any = false
+follow_imports = "silent"

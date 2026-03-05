@@ -156,20 +156,28 @@ def _paper_place_order(symbol, side, quantity, price, order_type="MARKET", exist
         cursor = conn.cursor()
 
         if side == "BUY":
+            # Apply simulated slippage: BUY fills higher than requested
+            slippage_pct = app_config.get('settings', {}).get('simulated_slippage_pct', 0.001)
+            fill_price = price * (1 + slippage_pct)
             log.info(f"Simulating BUY order for {quantity} {symbol} at {price} (Type: {order_type})")
+            log.info(f"Paper fill with {slippage_pct*100:.2f}% slippage: requested ${price:.4f} → filled ${fill_price:.4f}")
             prefix = "AUTO" if trading_strategy == "auto" else "PAPER"
             order_id = f"{prefix}_{symbol}_BUY_{int(time.time() * 1000)}"
             query = ('INSERT INTO trades (symbol, order_id, side, entry_price, quantity, status, trading_mode, asset_type, trading_strategy) '
                      'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)') if is_postgres_conn else \
                     ('INSERT INTO trades (symbol, order_id, side, entry_price, quantity, status, trading_mode, asset_type, trading_strategy) '
                      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-            cursor.execute(query, (symbol, order_id, side, price, quantity, "OPEN", "paper", asset_type, trading_strategy))
+            cursor.execute(query, (symbol, order_id, side, fill_price, quantity, "OPEN", "paper", asset_type, trading_strategy))
             conn.commit()
             log.info(f"Paper trade recorded: Order ID {order_id}")
-            return {"order_id": order_id, "symbol": symbol, "side": side, "quantity": quantity, "price": price, "status": "FILLED"}
+            return {"order_id": order_id, "symbol": symbol, "side": side, "quantity": quantity, "price": fill_price, "status": "FILLED"}
 
         elif side == "SELL" and existing_order_id:
+            # Apply simulated slippage: SELL fills lower than requested
+            slippage_pct = app_config.get('settings', {}).get('simulated_slippage_pct', 0.001)
+            fill_price = price * (1 - slippage_pct)
             log.info(f"Simulating SELL order for {quantity} {symbol} at {price} (Type: {order_type}) for existing order {existing_order_id}")
+            log.info(f"Paper fill with {slippage_pct*100:.2f}% slippage: requested ${price:.4f} → filled ${fill_price:.4f}")
 
             query_entry = 'SELECT entry_price, side FROM trades WHERE order_id = %s' if is_postgres_conn else \
                           'SELECT entry_price, side FROM trades WHERE order_id = ?'
@@ -181,7 +189,7 @@ def _paper_place_order(symbol, side, quantity, price, order_type="MARKET", exist
 
             entry_price, trade_side = result[0], result[1]
 
-            d_price = Decimal(str(price))
+            d_price = Decimal(str(fill_price))
             d_entry = Decimal(str(entry_price))
             d_qty = Decimal(str(quantity))
 
@@ -203,7 +211,7 @@ def _paper_place_order(symbol, side, quantity, price, order_type="MARKET", exist
                             'WHERE order_id = %s') if is_postgres_conn else \
                            ('UPDATE trades SET status = ?, exit_price = ?, exit_timestamp = CURRENT_TIMESTAMP, pnl = ? '
                             'WHERE order_id = ?')
-            cursor.execute(query_update, ("CLOSED", price, pnl_float, existing_order_id))
+            cursor.execute(query_update, ("CLOSED", fill_price, pnl_float, existing_order_id))
             conn.commit()
 
             log.info(f"Paper trade {existing_order_id} updated to CLOSED at {price}. PnL: ${pnl_float:.2f}")
@@ -250,7 +258,13 @@ def _live_place_order(symbol, side, quantity, price, order_type="MARKET", existi
             fees = _extract_fees(order)
             exchange_order_id = str(order.get('orderId', ''))
 
-            # Record in DB
+            # Partial fill detection
+            fill_ratio = fill_qty / adjusted_qty if adjusted_qty > 0 else 1.0
+            if fill_ratio < 0.95:
+                log.warning(f"Partial fill for {symbol} BUY: requested {adjusted_qty}, "
+                            f"filled {fill_qty} ({fill_ratio:.1%})")
+
+            # Record in DB (use fill_qty, not adjusted_qty)
             order_id = f"{trading_mode.upper()}_{symbol}_BUY_{int(time.time() * 1000)}"
             _record_live_trade(symbol, order_id, "BUY", fill_price or price, fill_qty,
                                trading_mode, exchange_order_id, fees, fill_price, fill_qty,
@@ -285,6 +299,12 @@ def _live_place_order(symbol, side, quantity, price, order_type="MARKET", existi
             fill_qty = float(order.get('executedQty', adjusted_qty))
             fees = _extract_fees(order)
             exchange_order_id = str(order.get('orderId', ''))
+
+            # Partial fill detection
+            fill_ratio = fill_qty / adjusted_qty if adjusted_qty > 0 else 1.0
+            if fill_ratio < 0.95:
+                log.warning(f"Partial fill for {symbol} SELL: requested {adjusted_qty}, "
+                            f"filled {fill_qty} ({fill_ratio:.1%})")
 
             # Update existing trade in DB
             if existing_order_id:
@@ -370,10 +390,10 @@ def _close_live_trade(order_id, exit_price, fees, fill_price, fill_qty):
         conn = get_db_connection()
         is_pg = isinstance(conn, psycopg2.extensions.connection)
         with _cursor(conn) as cursor:
-            # Fetch entry price for PnL calculation
-            q_entry = ('SELECT entry_price, side, quantity FROM trades WHERE order_id = %s'
+            # Fetch entry price for PnL calculation (prefer fill_quantity over quantity)
+            q_entry = ('SELECT entry_price, side, quantity, fill_quantity FROM trades WHERE order_id = %s'
                        if is_pg else
-                       'SELECT entry_price, side, quantity FROM trades WHERE order_id = ?')
+                       'SELECT entry_price, side, quantity, fill_quantity FROM trades WHERE order_id = ?')
             cursor.execute(q_entry, (order_id,))
             row = cursor.fetchone()
             if not row:
@@ -382,7 +402,9 @@ def _close_live_trade(order_id, exit_price, fees, fill_price, fill_qty):
 
             entry_price = float(row[0])
             trade_side = row[1]
-            qty = float(row[2])
+            raw_qty = float(row[2])
+            raw_fill_qty = row[3]
+            qty = float(raw_fill_qty) if raw_fill_qty else raw_qty
 
             d_exit = Decimal(str(exit_price))
             d_entry = Decimal(str(entry_price))
@@ -503,13 +525,16 @@ def add_to_position(parent_order_id, symbol, add_quantity, add_price,
 
     Returns dict with status, new_avg_price, new_total_quantity.
     """
-    from src.database import (save_position_addition, update_trade_position)
-
     if _is_live_trading() and trading_strategy != 'auto':
         return _live_add_to_position(parent_order_id, symbol, add_quantity, add_price,
                                      reason, asset_type)
 
     # --- Paper trading path (atomic: single connection, single commit) ---
+    # Apply simulated slippage to addition price (BUY direction)
+    slippage_pct = app_config.get('settings', {}).get('simulated_slippage_pct', 0.001)
+    slipped_add_price = add_price * (1 + slippage_pct)
+    log.info(f"Paper add with {slippage_pct*100:.2f}% slippage: requested ${add_price:.4f} → filled ${slipped_add_price:.4f}")
+
     conn = None
     try:
         conn = get_db_connection()
@@ -527,7 +552,7 @@ def add_to_position(parent_order_id, symbol, add_quantity, add_price,
             old_qty = float(row[1])
 
             new_total = old_qty + add_quantity
-            new_avg = (old_price * old_qty + add_price * add_quantity) / new_total
+            new_avg = (old_price * old_qty + slipped_add_price * add_quantity) / new_total
 
             # Update trade position (inline, same cursor)
             q_update = f'UPDATE trades SET entry_price = {ph}, quantity = {ph} WHERE order_id = {ph}'
@@ -537,11 +562,11 @@ def add_to_position(parent_order_id, symbol, add_quantity, add_price,
             q_add = (f'INSERT INTO position_additions '
                      f'(parent_order_id, addition_price, addition_quantity, reason) '
                      f'VALUES ({ph}, {ph}, {ph}, {ph})')
-            cursor.execute(q_add, (parent_order_id, add_price, add_quantity, reason))
+            cursor.execute(q_add, (parent_order_id, slipped_add_price, add_quantity, reason))
 
         conn.commit()
 
-        log.info(f"Paper position increase for {symbol}: +{add_quantity} at ${add_price:,.2f} "
+        log.info(f"Paper position increase for {symbol}: +{add_quantity} at ${slipped_add_price:,.2f} "
                  f"→ avg ${new_avg:,.2f}, total {new_total}")
         return {
             "status": "FILLED",
@@ -549,7 +574,7 @@ def add_to_position(parent_order_id, symbol, add_quantity, add_price,
             "symbol": symbol,
             "new_avg_price": round(new_avg, 8),
             "new_total_quantity": round(new_total, 8),
-            "price": add_price,
+            "price": slipped_add_price,
         }
 
     except (sqlite3.Error, psycopg2.Error) as e:
@@ -572,8 +597,6 @@ def _live_add_to_position(parent_order_id, symbol, add_quantity, add_price,
         return {"status": "FAILED", "message": "Binance client not available"}
 
     try:
-        from binance.exceptions import BinanceAPIException
-
         # Cancel existing OCO before adding
         _cancel_open_oco_orders(api_symbol)
 

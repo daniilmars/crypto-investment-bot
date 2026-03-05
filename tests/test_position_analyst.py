@@ -317,8 +317,10 @@ class TestAddToPosition:
             result = add_to_position('ORDER_1', 'BTC', 0.05, 52000.0, reason='Catalyst')
 
         assert result['status'] == 'FILLED'
-        # Weighted avg: (50000*0.1 + 52000*0.05) / 0.15 = 50666.67
-        expected_avg = (50000 * 0.1 + 52000 * 0.05) / 0.15
+        # With 0.1% slippage: slipped_add_price = 52000 * 1.001 = 52052
+        # Weighted avg: (50000*0.1 + 52052*0.05) / 0.15 = 50684.00
+        slipped_price = 52000 * 1.001
+        expected_avg = (50000 * 0.1 + slipped_price * 0.05) / 0.15
         assert abs(result['new_avg_price'] - expected_avg) < 0.01
         assert abs(result['new_total_quantity'] - 0.15) < 0.001
 
