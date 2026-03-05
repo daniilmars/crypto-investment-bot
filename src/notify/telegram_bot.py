@@ -1085,6 +1085,265 @@ async def events_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Error fetching events.")
 
 
+# --- Autonomous Bot Commands ---
+
+@authorized
+async def sources_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /sources command — list active sources with reliability scores."""
+    try:
+        from src.collectors.source_registry import get_all_sources
+        sources = get_all_sources(include_inactive=False)
+        if not sources:
+            await update.message.reply_text("No sources in registry. Run seed_source_registry.py first.")
+            return
+
+        tier_names = {1: 'Premium', 2: 'Standard', 3: 'Trial'}
+        lines = [f"*Source Registry* ({len(sources)} active)\n"]
+        for src in sources[:30]:  # Cap display at 30
+            tier = tier_names.get(src.get('tier', 2), '?')
+            score = src.get('reliability_score', 0) or 0
+            articles = src.get('articles_total', 0) or 0
+            bar = '█' * int(score * 10) + '░' * (10 - int(score * 10))
+            name = src.get('source_name', '?')[:25]
+            lines.append(f"`{bar}` {score:.2f} [{tier}] {name} ({articles} art)")
+
+        if len(sources) > 30:
+            lines.append(f"\n...and {len(sources) - 30} more")
+        await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
+    except Exception as e:
+        log.error(f"Error in /sources: {e}")
+        await update.message.reply_text(f"Error: {e}")
+
+
+@authorized
+async def source_stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /source_stats command — detailed stats for one source."""
+    try:
+        from src.collectors.source_registry import get_source_by_name
+        args = context.args
+        if not args:
+            await update.message.reply_text("Usage: /source_stats <source_name>")
+            return
+        name = ' '.join(args)
+        src = get_source_by_name(name)
+        if not src:
+            await update.message.reply_text(f"Source '{name}' not found.")
+            return
+        tier_names = {1: 'Premium', 2: 'Standard', 3: 'Trial'}
+        lines = [
+            f"*{src['source_name']}*\n",
+            f"Type: {src.get('source_type', '?')}",
+            f"Category: {src.get('category', '?')}",
+            f"Tier: {tier_names.get(src.get('tier'), '?')}",
+            f"Reliability: {(src.get('reliability_score') or 0):.3f}",
+            f"Articles: {src.get('articles_total', 0)}",
+            f"Signals: {src.get('articles_with_signals', 0)}",
+            f"Profitable ratio: {(src.get('profitable_signal_ratio') or 0):.1%}",
+            f"Avg PnL: ${(src.get('avg_signal_pnl') or 0):.2f}",
+            f"Errors: {src.get('error_count', 0)} (consec: {src.get('consecutive_errors', 0)})",
+            f"Added by: {src.get('added_by', '?')}",
+        ]
+        await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
+    except Exception as e:
+        log.error(f"Error in /source_stats: {e}")
+        await update.message.reply_text(f"Error: {e}")
+
+
+@authorized
+async def attribution_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /attribution command — show signal attribution for recent trades."""
+    try:
+        from src.analysis.signal_attribution import get_recent_attributions, get_signal_accuracy
+        args = context.args
+        symbol = args[0].upper() if args else None
+
+        accuracy = get_signal_accuracy(symbol=symbol, days=30)
+        recent = get_recent_attributions(symbol=symbol, limit=10)
+
+        lines = [f"*Signal Attribution* {'(' + symbol + ')' if symbol else '(all)'}\n"]
+        lines.append(
+            f"30d: {accuracy['total']} signals, {accuracy['wins']}W/{accuracy['losses']}L "
+            f"({accuracy['win_rate']:.0%}), avg PnL: ${accuracy['avg_pnl']:.2f}\n")
+
+        if recent:
+            lines.append("*Recent:*")
+            for attr in recent:
+                sym = attr.get('symbol', '?')
+                sig = attr.get('signal_type', '?')
+                pnl = attr.get('trade_pnl')
+                exit_r = attr.get('exit_reason', 'pending')
+                sources = (attr.get('source_names') or '')[:40]
+                pnl_str = f"${pnl:.2f}" if pnl is not None else "open"
+                lines.append(f"  {sig} {sym}: {pnl_str} ({exit_r}) — {sources}")
+
+        await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
+    except Exception as e:
+        log.error(f"Error in /attribution: {e}")
+        await update.message.reply_text(f"Error: {e}")
+
+
+@authorized
+async def tune_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /tune_status command — current vs suggested parameters."""
+    try:
+        from src.analysis.auto_tuner import get_current_vs_suggested
+        info = get_current_vs_suggested()
+        params = info.get('current_params', {})
+        metrics = info.get('current_metrics', {})
+        trades = info.get('trade_count', 0)
+
+        lines = [
+            "*Auto-Tuner Status*\n",
+            f"Trades (30d): {trades}",
+            f"Sharpe: {metrics.get('sharpe', 0):.2f}",
+            f"Win rate: {metrics.get('win_rate', 0):.1%}\n",
+            "*Current Parameters:*",
+        ]
+        for k, v in params.items():
+            if isinstance(v, float):
+                lines.append(f"  {k}: {v:.4f}")
+            else:
+                lines.append(f"  {k}: {v}")
+
+        await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
+    except Exception as e:
+        log.error(f"Error in /tune_status: {e}")
+        await update.message.reply_text(f"Error: {e}")
+
+
+@authorized
+async def tune_run_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /tune_run command — trigger manual tuning cycle."""
+    try:
+        from src.analysis.auto_tuner import run_auto_tune
+        await update.message.reply_text("Running auto-tuner...")
+        summary = run_auto_tune()
+
+        if summary.get('skipped'):
+            await update.message.reply_text(f"Skipped: {summary.get('reason')}")
+            return
+
+        lines = [
+            "*Auto-Tune Results*\n",
+            f"Trades analyzed: {summary.get('trades_analyzed', 0)}",
+            f"Current Sharpe: {summary.get('current_sharpe', 0):.2f}",
+            f"Improvements found: {summary.get('improvements_found', 0)}",
+        ]
+        changes = summary.get('changes_applied', [])
+        if changes:
+            lines.append("\n*Changes Applied:*")
+            for c in changes:
+                lines.append(f"  {c['param']}: {c['old_value']} -> {c['new_value']} "
+                             f"(Sharpe +{c['sharpe_improvement']:.2f})")
+        else:
+            lines.append("\nNo changes applied.")
+
+        await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
+    except Exception as e:
+        log.error(f"Error in /tune_run: {e}")
+        await update.message.reply_text(f"Error: {e}")
+
+
+@authorized
+async def tune_revert_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /tune_revert command — revert last parameter change."""
+    try:
+        from src.analysis.auto_tuner import check_and_revert
+        reverted = check_and_revert()
+        if reverted:
+            lines = ["*Reverted changes:*"]
+            for c in reverted:
+                lines.append(f"  {c.get('parameter_name')}: reverted to {c.get('old_value')}")
+            await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
+        else:
+            await update.message.reply_text("No recent changes to revert.")
+    except Exception as e:
+        log.error(f"Error in /tune_revert: {e}")
+        await update.message.reply_text(f"Error: {e}")
+
+
+@authorized
+async def experiments_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /experiments command — recent experiment log entries."""
+    try:
+        from src.analysis.feedback_loop import get_recent_experiments
+        entries = get_recent_experiments(limit=15)
+        if not entries:
+            await update.message.reply_text("No experiment log entries yet.")
+            return
+
+        lines = ["*Recent Experiments*\n"]
+        for e in entries:
+            etype = e.get('experiment_type', '?')
+            desc = (e.get('description') or '')[:60]
+            lines.append(f"  [{etype}] {desc}")
+
+        await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
+    except Exception as e:
+        log.error(f"Error in /experiments: {e}")
+        await update.message.reply_text(f"Error: {e}")
+
+
+@authorized
+async def discover_sources_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /discover_sources command — trigger manual source discovery."""
+    try:
+        from src.collectors.source_discovery import run_discovery_cycle
+        await update.message.reply_text("Running source discovery...")
+        summary = run_discovery_cycle()
+
+        if summary.get('skipped'):
+            await update.message.reply_text(f"Skipped: {summary.get('reason')}")
+            return
+
+        lines = [
+            "*Discovery Results*\n",
+            f"Discovered: {summary.get('discovered', 0)}",
+            f"Evaluated: {summary.get('evaluated', 0)}",
+            f"Added: {summary.get('added', 0)}",
+        ]
+        await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
+    except Exception as e:
+        log.error(f"Error in /discover_sources: {e}")
+        await update.message.reply_text(f"Error: {e}")
+
+
+@authorized
+async def learning_report_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /learning_report command — weekly summary."""
+    try:
+        from src.analysis.feedback_loop import get_recent_experiments
+        from src.analysis.signal_attribution import get_signal_accuracy
+        from src.analysis.auto_tuner import get_current_vs_suggested
+        from src.collectors.source_registry import get_source_count
+
+        accuracy = get_signal_accuracy(days=7)
+        experiments = get_recent_experiments(limit=50)
+        tuner_info = get_current_vs_suggested()
+        source_count = get_source_count()
+
+        # Count experiment types in last week
+        promotions = sum(1 for e in experiments if e.get('experiment_type') == 'source_promotion')
+        demotions = sum(1 for e in experiments if e.get('experiment_type') == 'source_demotion')
+        discoveries = sum(1 for e in experiments if e.get('experiment_type') == 'discovery')
+        param_changes = sum(1 for e in experiments if e.get('experiment_type') == 'param_change')
+
+        lines = [
+            "*Weekly Learning Report*\n",
+            f"*Sources:* {source_count} active",
+            f"  Discovered: {discoveries}, Promoted: {promotions}, Demoted: {demotions}\n",
+            f"*Signals (7d):* {accuracy['total']} total",
+            f"  Win rate: {accuracy['win_rate']:.0%}, Avg PnL: ${accuracy['avg_pnl']:.2f}\n",
+            f"*Tuner:* {param_changes} param changes",
+            f"  Sharpe: {tuner_info.get('current_metrics', {}).get('sharpe', 0):.2f}",
+            f"  Trades: {tuner_info.get('trade_count', 0)} (30d)",
+        ]
+        await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
+    except Exception as e:
+        log.error(f"Error in /learning_report: {e}")
+        await update.message.reply_text(f"Error: {e}")
+
+
 # --- Bot Lifecycle Management ---
 async def start_bot() -> Application:
     """
@@ -1114,6 +1373,15 @@ async def start_bot() -> Application:
             CommandHandler("regime", regime_cmd),
             CommandHandler("sectors", sectors_cmd),
             CommandHandler("events", events_cmd),
+            CommandHandler("sources", sources_cmd),
+            CommandHandler("source_stats", source_stats_cmd),
+            CommandHandler("attribution", attribution_cmd),
+            CommandHandler("discover_sources", discover_sources_cmd),
+            CommandHandler("tune_status", tune_status_cmd),
+            CommandHandler("tune_run", tune_run_cmd),
+            CommandHandler("tune_revert", tune_revert_cmd),
+            CommandHandler("experiments", experiments_cmd),
+            CommandHandler("learning_report", learning_report_cmd),
             CallbackQueryHandler(_handle_signal_callback),
         ]
         application.add_handlers(handlers)

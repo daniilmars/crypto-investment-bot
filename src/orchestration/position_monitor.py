@@ -11,6 +11,7 @@ from src.execution.binance_trader import place_order
 from src.logger import log
 from src.notify.telegram_bot import send_telegram_alert
 from src.orchestration import bot_state
+from src.analysis.feedback_loop import process_closed_trade
 
 
 async def monitor_position(
@@ -61,6 +62,8 @@ async def monitor_position(
             place_order(symbol, "SELL", qty, current_price,
                         existing_order_id=order_id, **order_kw)
             _cleanup_position_state(order_id, is_auto)
+            _resolve_trade_attribution(order_id, pnl_pct, entry_price,
+                                       current_price, 'trailing_stop')
             if not is_auto:
                 await _send_exit_alert(symbol, current_price, asset_type,
                                        f"Trailing stop hit (peak ${peak_price:,.2f}, "
@@ -73,6 +76,8 @@ async def monitor_position(
         place_order(symbol, "SELL", qty, current_price,
                     existing_order_id=order_id, **order_kw)
         _cleanup_position_state(order_id, is_auto)
+        _resolve_trade_attribution(order_id, pnl_pct, entry_price,
+                                   current_price, 'stop_loss')
         if stoploss_cooldown_hours > 0:
             expires_at = datetime.now(timezone.utc) + timedelta(hours=stoploss_cooldown_hours)
             if is_auto:
@@ -92,6 +97,8 @@ async def monitor_position(
         place_order(symbol, "SELL", qty, current_price,
                     existing_order_id=order_id, **order_kw)
         _cleanup_position_state(order_id, is_auto)
+        _resolve_trade_attribution(order_id, pnl_pct, entry_price,
+                                   current_price, 'take_profit')
         if not is_auto:
             await _send_exit_alert(symbol, current_price, asset_type,
                                    f"Take-profit hit ({take_profit_pct * 100:.2f}% gain).")
@@ -108,6 +115,18 @@ def _cleanup_position_state(order_id: str, is_auto: bool):
     else:
         bot_state.clear_trailing_stop(order_id)
         bot_state.remove_analyst_last_run(order_id)
+
+
+def _resolve_trade_attribution(order_id, pnl_pct, entry_price, exit_price,
+                                exit_reason):
+    """Resolve signal attribution for a closed trade (best-effort)."""
+    try:
+        pnl_usd = (exit_price - entry_price)  # per-unit, simplified
+        process_closed_trade(
+            order_id, pnl=pnl_usd, pnl_pct=pnl_pct,
+            exit_reason=exit_reason)
+    except Exception as e:
+        log.debug(f"Attribution resolution skipped for {order_id}: {e}")
 
 
 async def _send_exit_alert(symbol: str, current_price: float,

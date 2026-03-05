@@ -3,7 +3,7 @@ name: Health Check
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 * * * *'
+    - cron: '*/15 * * * *'
 
 env:
   ZONE: europe-west3-a
@@ -21,6 +21,23 @@ jobs:
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
+
+      - name: Check VM status and restart if preempted
+        id: vm_status
+        run: |
+          STATUS=$(gcloud compute instances describe ${{ env.INSTANCE_NAME }} \
+            --zone=${{ env.ZONE }} \
+            --format='get(status)')
+          echo "VM status: $STATUS"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+
+          if [ "$STATUS" = "TERMINATED" ] || [ "$STATUS" = "STOPPED" ]; then
+            echo "::warning::VM was preempted/stopped — restarting..."
+            gcloud compute instances start ${{ env.INSTANCE_NAME }} \
+              --zone=${{ env.ZONE }}
+            echo "Waiting 150s for VM + Docker + TensorFlow startup..."
+            sleep 150
+          fi
 
       - name: Health check
         run: |

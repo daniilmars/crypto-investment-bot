@@ -248,23 +248,55 @@ def _fetch_single_rss_feed(feed_info):
 
 
 def _fetch_rss_feeds():
-    """Fetches all RSS feeds in parallel using a thread pool."""
+    """Fetches all RSS feeds in parallel using a thread pool.
+
+    Tries to load feeds from source_registry DB; falls back to hardcoded RSS_FEEDS.
+    """
+    try:
+        from src.collectors.source_registry import (
+            load_rss_feeds_from_registry, update_source_stats,
+        )
+        registry_feeds = load_rss_feeds_from_registry()
+    except Exception:
+        registry_feeds = None
+
+    feeds = registry_feeds if registry_feeds else RSS_FEEDS
+    use_registry = registry_feeds is not None
+
     all_articles = []
     with ThreadPoolExecutor(max_workers=14) as executor:
-        futures = {executor.submit(_fetch_single_rss_feed, feed): feed for feed in RSS_FEEDS}
+        futures = {executor.submit(_fetch_single_rss_feed, feed): feed for feed in feeds}
         try:
             done_iter = as_completed(futures, timeout=RSS_FETCH_TIMEOUT + 5)
             for future in done_iter:
                 try:
                     articles = future.result(timeout=RSS_FETCH_TIMEOUT)
                     all_articles.extend(articles)
+                    # Update source stats if using registry
+                    if use_registry:
+                        feed = futures[future]
+                        source_id = feed.get('source_id')
+                        if source_id:
+                            try:
+                                update_source_stats(source_id, articles_fetched=len(articles))
+                            except Exception:
+                                pass
                 except Exception as e:
                     feed = futures[future]
                     log.warning(f"RSS feed timed out or failed: {feed['url']}: {e}")
+                    # Record error for registry sources
+                    if use_registry:
+                        source_id = feed.get('source_id')
+                        if source_id:
+                            try:
+                                update_source_stats(source_id, errors=1)
+                            except Exception:
+                                pass
         except TimeoutError:
             n_unfinished = sum(1 for fut in futures if not fut.done())
             log.warning(f"RSS fetch global timeout — {n_unfinished} feeds did not finish in time.")
-    log.info(f"Fetched {len(all_articles)} articles from {len(RSS_FEEDS)} RSS feeds.")
+    log.info(f"Fetched {len(all_articles)} articles from {len(feeds)} RSS feeds"
+             f"{' (registry)' if use_registry else ' (hardcoded)'}.")
     return all_articles
 
 
