@@ -511,7 +511,7 @@ class TestPositionAnalystConfig:
         analyst_cfg = settings.get('position_analyst', {})
         assert analyst_cfg.get('enabled') is True
         assert analyst_cfg.get('min_position_age_hours') == 2
-        assert analyst_cfg.get('check_interval_minutes') == 30
+        assert analyst_cfg.get('check_interval_minutes') == 1440
         assert analyst_cfg.get('max_position_multiplier') == 3.0
 
     def test_increase_in_confirmation_signals(self):
