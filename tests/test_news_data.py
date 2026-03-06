@@ -16,7 +16,7 @@ class TestRSSFeedConfig:
     """Validates the RSS_FEEDS list structure and category distribution."""
 
     def test_total_feed_count(self):
-        assert len(RSS_FEEDS) == 69
+        assert len(RSS_FEEDS) == 113
 
     def test_all_feeds_have_required_keys(self):
         for feed in RSS_FEEDS:
@@ -30,7 +30,7 @@ class TestRSSFeedConfig:
 
     def test_google_news_feed_count(self):
         gn_feeds = [f for f in RSS_FEEDS if f['category'] == 'google_news']
-        assert len(gn_feeds) == 10
+        assert len(gn_feeds) == 26
 
     def test_google_news_feeds_have_time_filter(self):
         gn_feeds = [f for f in RSS_FEEDS if f['category'] == 'google_news']
@@ -48,7 +48,7 @@ class TestRSSFeedConfig:
 
     def test_regulatory_feed_count(self):
         reg_feeds = [f for f in RSS_FEEDS if f['category'] == 'regulatory']
-        assert len(reg_feeds) == 8
+        assert len(reg_feeds) == 17
 
     def test_sector_feed_count(self):
         sector_feeds = [f for f in RSS_FEEDS if f['category'] == 'sector']
@@ -64,11 +64,11 @@ class TestRSSFeedConfig:
 
     def test_asia_feed_count(self):
         asia_feeds = [f for f in RSS_FEEDS if f['category'] == 'asia']
-        assert len(asia_feeds) == 6
+        assert len(asia_feeds) == 18
 
     def test_european_feed_count(self):
         eu_feeds = [f for f in RSS_FEEDS if f['category'] == 'european']
-        assert len(eu_feeds) == 4
+        assert len(eu_feeds) == 8
 
     def test_all_categories_present(self):
         categories = {f['category'] for f in RSS_FEEDS}

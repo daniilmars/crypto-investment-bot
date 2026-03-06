@@ -126,6 +126,84 @@ SYMBOL_KEYWORDS = {
     'NET': ['Cloudflare stock', 'Cloudflare Inc'],  # "NET" too common
     'CRWD': ['CRWD', 'CrowdStrike stock', 'CrowdStrike Holdings'],
     'DDOG': ['DDOG', 'Datadog stock', 'Datadog Inc'],
+    # --- European Stocks ---
+    # UK FTSE
+    'HSBA.L': ['HSBC Holdings', 'HSBC stock'],
+    'BP.L': ['BP stock', 'BP plc'],
+    'SHEL.L': ['Shell stock', 'Shell plc', 'Royal Dutch Shell'],
+    'AZN.L': ['AstraZeneca stock', 'AstraZeneca plc'],
+    'GSK.L': ['GSK stock', 'GlaxoSmithKline'],
+    'ULVR.L': ['Unilever stock', 'Unilever plc'],
+    'RIO.L': ['Rio Tinto stock', 'Rio Tinto plc'],
+    'BARC.L': ['Barclays stock', 'Barclays plc'],
+    'LLOY.L': ['Lloyds Banking', 'Lloyds stock'],
+    'LSEG.L': ['LSEG', 'London Stock Exchange Group'],
+    # Germany DAX
+    'SAP.DE': ['SAP stock', 'SAP SE'],
+    'SIE.DE': ['Siemens stock', 'Siemens AG'],
+    'ALV.DE': ['Allianz stock', 'Allianz SE'],
+    'MBG.DE': ['Mercedes-Benz stock', 'Mercedes Benz'],
+    'BMW.DE': ['BMW stock', 'BMW AG'],
+    'VOW3.DE': ['Volkswagen stock', 'Volkswagen AG'],
+    'IFX.DE': ['Infineon stock', 'Infineon Technologies'],
+    'BAS.DE': ['BASF stock', 'BASF SE'],
+    # France CAC
+    'MC.PA': ['LVMH stock', 'LVMH Moet Hennessy'],
+    'TTE.PA': ['TotalEnergies stock', 'TotalEnergies SE'],
+    'SAN.PA': ['Sanofi stock', 'Sanofi SA'],
+    'OR.PA': ["L'Oreal stock", "L'Oreal SA"],
+    'BNP.PA': ['BNP Paribas stock', 'BNP Paribas'],
+    'AIR.PA': ['Airbus stock', 'Airbus SE'],
+    # Netherlands
+    'ASML.AS': ['ASML stock', 'ASML Holding'],
+    # Switzerland
+    'NESN.SW': ['Nestle stock', 'Nestle SA'],
+    'ROG.SW': ['Roche stock', 'Roche Holding'],
+    'NOVN.SW': ['Novartis stock', 'Novartis AG'],
+    # Nordics
+    'NOVO-B.CO': ['Novo Nordisk stock', 'Novo Nordisk'],
+    'ERIC-B.ST': ['Ericsson stock', 'Ericsson AB'],
+    'NOKIA.HE': ['Nokia stock', 'Nokia Corp'],
+    # --- Asian Stocks ---
+    # Japan
+    '7203.T': ['Toyota stock', 'Toyota Motor'],
+    '6758.T': ['Sony stock', 'Sony Group'],
+    '9984.T': ['SoftBank stock', 'SoftBank Group'],
+    '6861.T': ['Keyence stock', 'Keyence Corp'],
+    '8306.T': ['Mitsubishi UFJ', 'MUFG stock'],
+    '8035.T': ['Tokyo Electron stock', 'Tokyo Electron'],
+    '7267.T': ['Honda stock', 'Honda Motor'],
+    '6501.T': ['Hitachi stock', 'Hitachi Ltd'],
+    # Hong Kong
+    '0700.HK': ['Tencent stock', 'Tencent Holdings'],
+    '9988.HK': ['Alibaba stock', 'Alibaba Group'],
+    '3690.HK': ['Meituan stock', 'Meituan Dianping'],
+    '1211.HK': ['BYD stock', 'BYD Company'],
+    '9618.HK': ['JD.com stock', 'JD stock'],
+    '1810.HK': ['Xiaomi stock', 'Xiaomi Corp'],
+    '0005.HK': ['HSBC Hong Kong'],
+    # South Korea
+    '005930.KS': ['Samsung Electronics', 'Samsung stock'],
+    '000660.KS': ['SK Hynix stock', 'SK Hynix'],
+    '373220.KS': ['LG Energy stock', 'LG Energy Solution'],
+    '005380.KS': ['Hyundai Motor stock', 'Hyundai Motor'],
+    # Taiwan
+    '2330.TW': ['TSMC stock', 'Taiwan Semiconductor'],
+    '2317.TW': ['Foxconn stock', 'Hon Hai Precision'],
+    '2454.TW': ['MediaTek stock', 'MediaTek Inc'],
+    # India
+    'RELIANCE.NS': ['Reliance Industries stock', 'Reliance Industries'],
+    'TCS.NS': ['TCS stock', 'Tata Consultancy'],
+    'INFY.NS': ['INFY', 'Infosys stock', 'Infosys Ltd'],
+    'HDFCBANK.NS': ['HDFC Bank stock', 'HDFC Bank'],
+    'WIPRO.NS': ['Wipro stock', 'Wipro Ltd'],
+    # Australia
+    'BHP.AX': ['BHP stock', 'BHP Group'],
+    'CBA.AX': ['Commonwealth Bank stock', 'CommBank'],
+    'CSL.AX': ['CSL stock', 'CSL Limited'],
+    'FMG.AX': ['Fortescue stock', 'Fortescue Metals'],
+    # Singapore
+    'D05.SI': ['DBS Group stock', 'DBS Bank'],
 }
 
 # Pre-compile regex patterns for each keyword (word-boundary matching)
@@ -216,6 +294,64 @@ RSS_FEEDS = [
     {'url': 'https://openai.com/blog/rss.xml', 'category': 'ai_research'},
     {'url': 'https://ai.meta.com/blog/rss/', 'category': 'ai_research'},
     {'url': 'https://blogs.nvidia.com/feed/', 'category': 'ai_research'},
+    # ── EU Market Feeds ──
+    # UK / LSE
+    {'url': 'https://www.investegate.co.uk/Rss.aspx?type=0', 'category': 'european'},
+    # Germany
+    {'url': 'https://www.dw.com/en/business/s-1431/rss.xml', 'category': 'european'},
+    # EU general
+    {'url': 'https://euobserver.com/rss', 'category': 'european'},
+    {'url': 'https://www.swissinfo.ch/eng/business/rss', 'category': 'european'},
+    # EU regulatory
+    {'url': 'https://www.ecb.europa.eu/rss/pressconf.html', 'category': 'regulatory'},
+    {'url': 'https://www.bankofengland.co.uk/rss/news', 'category': 'regulatory'},
+    {'url': 'https://ec.europa.eu/eurostat/web/main/news/euro-indicators/rss', 'category': 'regulatory'},
+    {'url': 'https://www.bankofengland.co.uk/rss/speeches', 'category': 'regulatory'},
+    # Google News — EU sectors
+    {'url': 'https://news.google.com/rss/search?q=HSBC+%22BP+stock%22+Shell+AstraZeneca+Unilever+%22Rio+Tinto%22+Barclays+FTSE+when:1d&hl=en-GB&gl=GB&ceid=GB:en', 'category': 'google_news'},
+    {'url': 'https://news.google.com/rss/search?q=SAP+Siemens+Allianz+Mercedes+BMW+Volkswagen+%22Deutsche+Telekom%22+DAX+when:1d&hl=en&gl=DE&ceid=DE:en', 'category': 'google_news'},
+    {'url': 'https://news.google.com/rss/search?q=LVMH+TotalEnergies+Sanofi+%22L%27Oreal%22+%22BNP+Paribas%22+Airbus+CAC+when:1d&hl=en&gl=FR&ceid=FR:en', 'category': 'google_news'},
+    {'url': 'https://news.google.com/rss/search?q=ASML+Novo+Nordisk+Ericsson+Nokia+Spotify+%22Nordic+stock%22+when:1d&hl=en&gl=NL&ceid=NL:en', 'category': 'google_news'},
+    {'url': 'https://news.google.com/rss/search?q=BMW+Mercedes+Volkswagen+Stellantis+Renault+%22auto+stock%22+%22European+auto%22+when:1d&hl=en&gl=DE&ceid=DE:en', 'category': 'google_news'},
+    {'url': 'https://news.google.com/rss/search?q=AstraZeneca+Novartis+Roche+%22Novo+Nordisk%22+Sanofi+GSK+%22European+pharma%22+when:1d&hl=en-GB&gl=GB&ceid=GB:en', 'category': 'google_news'},
+    # ── Asia-Pacific Market Feeds ──
+    # Korea
+    {'url': 'http://www.koreaherald.com/rss/020200030000.xml', 'category': 'asia'},
+    {'url': 'https://en.yna.co.kr/RSS/economy.xml', 'category': 'asia'},
+    {'url': 'https://www.kedglobal.com/rss/', 'category': 'asia'},
+    # Taiwan
+    {'url': 'https://focustaiwan.tw/RSS/aECO', 'category': 'asia'},
+    {'url': 'https://www.taipeitimes.com/xml/biz.rss', 'category': 'asia'},
+    # India
+    {'url': 'https://www.livemint.com/rss/markets', 'category': 'asia'},
+    {'url': 'https://www.business-standard.com/rss/markets-106.rss', 'category': 'asia'},
+    {'url': 'https://www.moneycontrol.com/rss/marketreports.xml', 'category': 'asia'},
+    # Broader APAC
+    {'url': 'https://www.cnbc.com/id/104568957/device/rss/rss.html', 'category': 'asia'},
+    {'url': 'http://www.chinadaily.com.cn/rss/business_rss.xml', 'category': 'asia'},
+    {'url': 'https://www3.nhk.or.jp/nhkworld/en/news/tags/200/list/rss.xml', 'category': 'asia'},
+    {'url': 'https://stockhead.com.au/feed/', 'category': 'asia'},
+    # Asia regulatory
+    {'url': 'https://www.hkma.gov.hk/eng/news-and-media/press-releases/rss/', 'category': 'regulatory'},
+    {'url': 'https://rbi.org.in/scripts/RSS_Feeds.aspx', 'category': 'regulatory'},
+    {'url': 'https://www.rba.gov.au/rss/rss-cb-media-releases.xml', 'category': 'regulatory'},
+    {'url': 'https://www.jpx.co.jp/english/news/rss/index.xml', 'category': 'regulatory'},
+    # Google News — Asia sectors
+    {'url': 'https://news.google.com/rss/search?q=Toyota+Sony+SoftBank+Keyence+Hitachi+%22Tokyo+Electron%22+Honda+Nikkei+when:1d&hl=en&gl=JP&ceid=JP:en', 'category': 'google_news'},
+    {'url': 'https://news.google.com/rss/search?q=Samsung+%22SK+Hynix%22+%22LG+Energy%22+Hyundai+KOSPI+when:1d&hl=en&gl=KR&ceid=KR:en', 'category': 'google_news'},
+    {'url': 'https://news.google.com/rss/search?q=Tencent+Alibaba+Meituan+BYD+%22JD.com%22+Xiaomi+%22Hang+Seng%22+when:1d&hl=en&gl=HK&ceid=HK:en', 'category': 'google_news'},
+    {'url': 'https://news.google.com/rss/search?q=TSMC+Foxconn+MediaTek+%22Taiwan+stock%22+TAIEX+when:1d&hl=en&gl=TW&ceid=TW:en', 'category': 'google_news'},
+    {'url': 'https://news.google.com/rss/search?q=Reliance+TCS+Infosys+%22HDFC+Bank%22+Wipro+Sensex+Nifty+when:1d&hl=en&gl=IN&ceid=IN:en', 'category': 'google_news'},
+    {'url': 'https://news.google.com/rss/search?q=BHP+Commonwealth+Bank+CSL+Fortescue+ASX+when:1d&hl=en&gl=AU&ceid=AU:en', 'category': 'google_news'},
+    {'url': 'https://news.google.com/rss/search?q=%22China+stock%22+%22Shanghai+index%22+%22Hang+Seng%22+%22Chinese+market%22+when:1d&hl=en&gl=HK&ceid=HK:en', 'category': 'google_news'},
+    {'url': 'https://news.google.com/rss/search?q=DBS+%22Singapore+Exchange%22+%22Straits+Times+Index%22+when:1d&hl=en&gl=SG&ceid=SG:en', 'category': 'google_news'},
+    {'url': 'https://news.google.com/rss/search?q=TSMC+Samsung+%22SK+Hynix%22+%22Tokyo+Electron%22+%22semiconductor+stock%22+Asia+when:1d&hl=en&gl=US&ceid=US:en', 'category': 'google_news'},
+    {'url': 'https://news.google.com/rss/search?q=Toyota+Hyundai+BYD+%22Asian+auto%22+%22EV+stock%22+Asia+when:1d&hl=en&gl=US&ceid=US:en', 'category': 'google_news'},
+    # ── Global / Cross-Region Feeds ──
+    {'url': 'https://www.investing.com/rss/news_301.rss', 'category': 'financial'},
+    {'url': 'https://www.investing.com/rss/news_285.rss', 'category': 'financial'},
+    {'url': 'https://www.bls.gov/feed/bls_latest.rss', 'category': 'regulatory'},
+    {'url': 'https://seekingalpha.com/market_currents.xml', 'category': 'financial'},
 ]
 
 _vader_analyzer = SentimentIntensityAnalyzer()
