@@ -54,6 +54,10 @@ from src.notify.telegram_bot import (send_telegram_alert, start_bot,
                                      cleanup_expired_signals,
                                      send_auto_bot_summary,
                                      send_market_event_alert)
+from src.notify.telegram_alerts_enhanced import (
+    send_morning_briefing, send_portfolio_digest,
+    check_realtime_alerts, send_realtime_alerts,
+)
 from src.state import bot_is_running
 from src.orchestration import bot_state
 from src.orchestration.position_monitor import monitor_position
@@ -143,6 +147,14 @@ async def run_bot_cycle():
         await save_macro_regime(macro_regime_result)
     except Exception as e:
         log.warning(f"Failed to save macro regime: {e}")
+
+    # --- Real-time Market Alerts (regime change, VIX spike) ---
+    try:
+        rt_alerts = check_realtime_alerts(macro_regime_result)
+        if rt_alerts and application:
+            await send_realtime_alerts(application, rt_alerts)
+    except Exception as e:
+        log.warning(f"Realtime alerts check failed: {e}")
 
     # 1. Collect news data
     log.info("Fetching data from all sources...")
@@ -785,6 +797,44 @@ async def daily_digest_loop():
             log.error(f"Daily digest error: {e}", exc_info=True)
 
 
+async def morning_briefing_loop():
+    """Sends a morning briefing at the configured hour (UTC)."""
+    cfg = app_config.get('settings', {}).get('telegram_enhancements', {}).get(
+        'morning_briefing', {})
+    if not cfg.get('enabled', False):
+        return
+    target_hour = cfg.get('hour_utc', 13)
+    while True:
+        now = datetime.now(timezone.utc)
+        next_run = now.replace(hour=target_hour, minute=0, second=0, microsecond=0)
+        if next_run <= now:
+            next_run += timedelta(days=1)
+        wait_seconds = (next_run - now).total_seconds()
+        await asyncio.sleep(wait_seconds)
+        try:
+            if application:
+                await send_morning_briefing(application)
+        except Exception as e:
+            log.error(f"Morning briefing error: {e}", exc_info=True)
+
+
+async def portfolio_digest_loop():
+    """Periodic portfolio digest sent every N hours."""
+    cfg = app_config.get('settings', {}).get('telegram_enhancements', {}).get(
+        'portfolio_digest', {})
+    if not cfg.get('enabled', False):
+        return
+    interval = cfg.get('interval_hours', 4)
+    await asyncio.sleep(interval * 3600)  # skip first interval
+    while True:
+        try:
+            if application:
+                await send_portfolio_digest(application)
+        except Exception as e:
+            log.error(f"Portfolio digest error: {e}", exc_info=True)
+        await asyncio.sleep(interval * 3600)
+
+
 @app.on_event("startup")
 async def startup_event():
     """
@@ -863,6 +913,14 @@ async def startup_event():
     if alerts_cfg.get('enabled', True):
         _background_tasks.append(asyncio.create_task(daily_digest_loop()))
         log.info("Daily market digest loop started.")
+
+    enhancements_cfg = app_config.get('settings', {}).get('telegram_enhancements', {})
+    if enhancements_cfg.get('morning_briefing', {}).get('enabled', False):
+        _background_tasks.append(asyncio.create_task(morning_briefing_loop()))
+        log.info("Morning briefing loop started.")
+    if enhancements_cfg.get('portfolio_digest', {}).get('enabled', False):
+        _background_tasks.append(asyncio.create_task(portfolio_digest_loop()))
+        log.info("Portfolio digest loop started.")
 
     log.info("Startup complete. Background tasks running.")
 

@@ -345,6 +345,25 @@ settings:
       confidence_min: 0.35
       confidence_max: 0.75
 
+  # -- Telegram Enhancements --
+  telegram_enhancements:
+    morning_briefing:
+      enabled: true
+      hour_utc: 13              # 1PM UTC = 8AM EST
+      include_ai_summary: false  # add Gemini section (~$0.001/day)
+    portfolio_digest:
+      enabled: true
+      interval_hours: 4
+    realtime_alerts:
+      enabled: true
+      vix_spike_threshold: 3.0
+      regime_change_alert: true
+    ai_analysis:
+      enabled: true
+      cooldown_minutes: 15
+    quick_actions:
+      enabled: true
+
   # -- Position Monitor Settings (legacy, used when position_analyst is disabled) --
   # Sub-bot that monitors open positions and asks Gemini "hold or exit?"
   position_monitor:

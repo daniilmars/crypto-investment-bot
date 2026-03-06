@@ -148,7 +148,8 @@ async def send_signal_for_confirmation(signal: dict) -> int:
 
 def _escape_md(text: str) -> str:
     """Escape Telegram Markdown v1 special characters in user-facing text."""
-    return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', str(text))
+    from src.notify.formatting import escape_md
+    return escape_md(text)
 
 
 async def _safe_edit(query, text: str):
@@ -602,27 +603,38 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /help command."""
     help_text = (
         "🤖 *Crypto Investment Bot Help*\n\n"
-        "*General:*\n"
-        "`/start` - Check if the bot is running.\n"
-        "`/status` - Get a detailed market and bot health summary.\n"
-        "`/positions` - View open crypto trades.\n"
-        "`/performance` - Get a performance report.\n"
-        "`/trading_mode` - Show current trading mode.\n"
-        "`/livebalance` - Show real Binance balance.\n"
-        "`/circuitbreaker` - Show circuit breaker status.\n"
-        "`/pause` - Pause new trades.\n"
-        "`/resume` - Resume trading.\n\n"
-        "*Stocks:*\n"
-        "`/stocks` - View open stock positions.\n"
-        "`/stock_balance` - Show stock account balance.\n"
-        "`/pdt` - PDT rule status (day trades remaining).\n"
-        "`/market_hours` - NYSE open/closed status.\n\n"
-        "*Auto-Bot:*\n"
-        "`/auto_status` - Auto-trading shadow bot status.\n\n"
+        "*Overview:*\n"
+        "`/dashboard` - Portfolio overview with drill-downs\n"
+        "`/status` - AI market summary\n"
+        "`/market_analysis` - On-demand Gemini analysis\n\n"
+        "*Trading:*\n"
+        "`/positions` - Open crypto trades\n"
+        "`/stocks` - Open stock positions\n"
+        "`/buy SYMBOL [AMT]` - Buy (confirmation required)\n"
+        "`/sell SYMBOL` - Sell (confirmation required)\n"
+        "`/close_all [crypto|stocks|all]` - Close positions\n\n"
+        "*Market:*\n"
+        "`/regime` - Macro regime + signals\n"
+        "`/sectors` - Sector exposure\n"
+        "`/events` - Upcoming FOMC/CPI\n"
+        "`/market_hours` - NYSE open/closed\n\n"
+        "*Portfolio:*\n"
+        "`/performance` - Win rate + PnL report\n"
+        "`/stock_balance` - Stock account balance\n"
+        "`/livebalance` - Binance balance\n"
+        "`/auto_status` - Auto-bot status\n"
+        "`/circuitbreaker` - Circuit breaker\n"
+        "`/pdt` - PDT rule status\n\n"
+        "*Bot Control:*\n"
+        "`/trading_mode` - Current mode\n"
+        "`/pause` / `/resume` - Trading control\n\n"
+        "*Sources:*\n"
+        "`/sources` - News source registry\n"
+        "`/source_stats` - Source performance\n"
+        "`/attribution` - Signal attribution\n\n"
         "*System:*\n"
-        "`/db_stats` - View database statistics.\n"
-        "`/db_schema` - View the database schema.\n"
-        "`/gcosts` - Get GCP billing summary."
+        "`/db_stats` - Database statistics\n"
+        "`/gcosts` - GCP billing"
     )
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
@@ -662,12 +674,14 @@ def _get_position_price(symbol):
 
 async def positions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /positions command."""
+    from src.notify.formatting import pnl_emoji, text_sparkline
     try:
         open_positions = get_open_positions()
         if not open_positions:
             await update.message.reply_text("No open positions.")
             return
-        message = "📊 *Open Positions (Paper Trading)* 📊\n\n"
+        mode = _get_trading_mode()
+        message = f"📊 *Open Positions [{mode.upper()}]* 📊\n\n"
         total_pnl = 0
         for pos in open_positions:
             symbol = pos.get('symbol')
@@ -675,16 +689,25 @@ async def positions(update: Update, context: ContextTypes.DEFAULT_TYPE):
             entry_price = pos.get('entry_price', 0)
             current_price = _get_position_price(symbol) or entry_price
             pnl = (current_price - entry_price) * quantity
-            pnl_percentage = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+            pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
             total_pnl += pnl
+            emoji = pnl_emoji(pnl_pct)
+            # Try to get sparkline
+            sparkline = ''
+            try:
+                history = get_price_history_since(hours_ago=24)
+                prices = [h.get('price', 0) for h in history
+                          if h.get('symbol', '').replace('USDT', '') == symbol]
+                if len(prices) >= 2:
+                    sparkline = text_sparkline(prices, width=8)
+            except Exception:
+                pass
+            spark_str = f"  {sparkline}" if sparkline else ""
             message += (
-                f"*Symbol: {symbol}*\n"
-                f"- Quantity: {quantity}\n"
-                f"- Entry Price: ${entry_price:,.2f}\n"
-                f"- Current Price: ${current_price:,.2f}\n"
-                f"- PnL: ${pnl:,.2f} ({pnl_percentage:+.2f}%)\n\n"
+                f"{emoji} *{symbol}*  {pnl_pct:+.1f}%  ${pnl:+,.2f}{spark_str}\n"
+                f"  Entry ${entry_price:,.2f} -> ${current_price:,.2f}  Qty: {quantity}\n\n"
             )
-        message += f"*Total PnL on Open Positions: ${total_pnl:,.2f}*"
+        message += f"*Total PnL: ${total_pnl:+,.2f}*"
         await update.message.reply_text(message, parse_mode='Markdown')
     except Exception as e:
         log.error(f"Error fetching open positions: {e}")
@@ -692,18 +715,21 @@ async def positions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def performance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /performance command."""
+    from src.notify.formatting import progress_bar
     try:
         report_hours = app_config.get('settings', {}).get('status_report_hours', 24)
         summary = await get_trade_summary(hours_ago=report_hours)
+        mode = _get_trading_mode()
+        win_rate = summary.get('win_rate', 0)
+        wins = summary.get('wins', 0)
+        losses = summary.get('losses', 0)
+        total = summary.get('total_closed', 0)
+        wr_bar = progress_bar(int(win_rate), 100, width=10)
         message = (
-            f"📈 *Performance Report ({report_hours}h)* 📈\n\n"
-            f"*Trades (Paper Trading):*\n"
-            f"- Total Closed: {summary.get('total_closed', 0)}\n"
-            f"- Wins: {summary.get('wins', 0)}\n"
-            f"- Losses: {summary.get('losses', 0)}\n\n"
-            f"*Performance:*\n"
-            f"- Total PnL: ${summary.get('total_pnl', 0):,.2f}\n"
-            f"- Win Rate: {summary.get('win_rate', 0):.2f}%"
+            f"📈 *Performance ({report_hours}h) [{mode.upper()}]* 📈\n\n"
+            f"*Trades:* {total} ({wins}W / {losses}L)\n"
+            f"*Win Rate:* {win_rate:.1f}% {wr_bar}\n"
+            f"*Total PnL:* ${summary.get('total_pnl', 0):+,.2f}"
         )
         await update.message.reply_text(message, parse_mode='Markdown')
     except Exception as e:
@@ -863,12 +889,15 @@ async def stocks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             message += f"*Total Unrealized PnL: ${total_pnl:,.2f}*"
         else:
+            from src.notify.formatting import pnl_emoji, format_region_label
             positions = get_open_positions(asset_type='stock')
             if not positions:
                 await update.message.reply_text("No open stock positions (paper).")
                 return
             message = "📊 *Stock Positions [PAPER]* 📊\n\n"
             total_pnl = 0
+            # Group by region
+            regions = {'US': [], 'EU': [], 'Asia': []}
             for pos in positions:
                 symbol = pos.get('symbol')
                 quantity = pos.get('quantity', 0)
@@ -877,14 +906,19 @@ async def stocks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pnl = (current_price - entry_price) * quantity
                 pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
                 total_pnl += pnl
-                message += (
-                    f"*{symbol}*\n"
-                    f"- Qty: {quantity:.4f}\n"
-                    f"- Entry: ${entry_price:,.2f}\n"
-                    f"- Current: ${current_price:,.2f}\n"
-                    f"- PnL: ${pnl:,.2f} ({pnl_pct:+.2f}%)\n\n"
-                )
-            message += f"*Total Unrealized PnL: ${total_pnl:,.2f}*"
+                region = format_region_label(symbol)
+                regions.setdefault(region, []).append(
+                    (symbol, quantity, entry_price, current_price, pnl, pnl_pct))
+            for region in ('US', 'EU', 'Asia'):
+                items = regions.get(region, [])
+                if not items:
+                    continue
+                message += f"_{region}:_\n"
+                for symbol, qty, entry, current, pnl, pnl_pct in sorted(items, key=lambda x: x[5], reverse=True):
+                    emoji = pnl_emoji(pnl_pct)
+                    message += f"  {emoji} *{_escape_md(symbol)}* {pnl_pct:+.1f}% ${current:,.2f}\n"
+                message += "\n"
+            message += f"*Total Unrealized PnL: ${total_pnl:+,.2f}*"
 
         await update.message.reply_text(message, parse_mode='Markdown')
     except Exception as e:
@@ -1015,18 +1049,38 @@ async def regime_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         regime_emoji = {'RISK_ON': '🟢', 'CAUTION': '🟡', 'RISK_OFF': '🔴'}
         emoji = regime_emoji.get(regime['regime'], '⚪')
         signals = regime.get('signals', {})
+        indicators = regime.get('indicators', {})
+
+        def _signal_dot(val):
+            """Return colored dot for signal value."""
+            if not val or val == '?':
+                return '⚪'
+            v = str(val).lower()
+            if v in ('bullish', 'low', 'falling', 'stable'):
+                return '🟢'
+            elif v in ('bearish', 'high', 'rising'):
+                return '🔴'
+            return '🟡'
+
         message = (
             f"{emoji} *Macro Regime: {regime['regime']}*\n\n"
             f"*Score:* {regime.get('score', 0)}\n"
-            f"*Position multiplier:* {regime['position_size_multiplier']:.1f}x\n"
+            f"*Multiplier:* {regime['position_size_multiplier']:.1f}x\n"
             f"*Suppress BUYs:* {'Yes' if regime['suppress_buys'] else 'No'}\n\n"
             f"*Signals:*\n"
-            f"  VIX level: {signals.get('vix_signal', '?')}\n"
-            f"  VIX trend: {signals.get('vix_trend', '?')}\n"
-            f"  S&P 500: {signals.get('sp500_trend', '?')}\n"
-            f"  10Y yield: {signals.get('yield_direction', '?')}\n"
-            f"  BTC trend: {signals.get('btc_trend', '?')}"
+            f"  {_signal_dot(signals.get('vix_signal'))} VIX level: {signals.get('vix_signal', '?')}\n"
+            f"  {_signal_dot(signals.get('vix_trend'))} VIX trend: {signals.get('vix_trend', '?')}\n"
+            f"  {_signal_dot(signals.get('sp500_trend'))} S&P 500: {signals.get('sp500_trend', '?')}\n"
+            f"  {_signal_dot(signals.get('yield_direction'))} 10Y yield: {signals.get('yield_direction', '?')}\n"
+            f"  {_signal_dot(signals.get('btc_trend'))} BTC trend: {signals.get('btc_trend', '?')}"
         )
+
+        # Show key indicator values if available
+        if indicators:
+            vix = indicators.get('vix')
+            if vix is not None:
+                message += f"\n\n*Indicators:*\n  VIX: {vix:.1f}"
+
         await update.message.reply_text(message, parse_mode='Markdown')
     except Exception as e:
         log.error(f"Error in /regime: {e}")
@@ -1344,6 +1398,298 @@ async def learning_report_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(f"Error: {e}")
 
 
+# --- Market Analysis Command ---
+_last_analysis_time: float = 0  # epoch timestamp of last /market_analysis call
+
+
+@authorized
+async def market_analysis_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /market_analysis command — Gemini AI market analysis."""
+    import time
+    global _last_analysis_time
+
+    settings = app_config.get('settings', {})
+    ai_cfg = settings.get('telegram_enhancements', {}).get('ai_analysis', {})
+    if not ai_cfg.get('enabled', True):
+        await update.message.reply_text("AI analysis is disabled.")
+        return
+
+    cooldown = ai_cfg.get('cooldown_minutes', 15) * 60
+    now = time.time()
+    if now - _last_analysis_time < cooldown:
+        remaining = int((cooldown - (now - _last_analysis_time)) / 60)
+        await update.message.reply_text(
+            f"Rate limited. Try again in {remaining} minutes.")
+        return
+
+    placeholder = await update.message.reply_text("Analyzing markets...")
+
+    try:
+        # Gather context
+        price_history = get_price_history_since(hours_ago=24)
+        last_signal = get_last_signal()
+
+        positions_for_summary = []
+        try:
+            all_pos = get_open_positions() + get_open_positions(asset_type='stock')
+            for pos in all_pos:
+                symbol = pos.get('symbol')
+                entry = pos.get('entry_price', 0)
+                current = _get_position_price(symbol) or entry
+                pnl_pct = ((current - entry) / entry * 100) if entry > 0 else 0
+                positions_for_summary.append({
+                    'symbol': symbol,
+                    'entry_price': entry,
+                    'current_price': current,
+                    'pnl_percentage': pnl_pct,
+                    'quantity': pos.get('quantity', 0),
+                })
+        except Exception as e:
+            log.warning(f"Could not fetch positions for analysis: {e}")
+
+        summary = generate_market_summary(
+            price_history, last_signal,
+            open_positions=positions_for_summary or None,
+        )
+
+        _last_analysis_time = now
+        await placeholder.edit_text(summary or "No analysis available.")
+    except Exception as e:
+        log.error(f"Error in /market_analysis: {e}", exc_info=True)
+        await placeholder.edit_text(f"Analysis failed: {e}")
+
+
+# --- Quick Action Commands ---
+
+@authorized
+async def sell_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /sell SYMBOL command — routes through confirmation flow."""
+    if not context.args:
+        await update.message.reply_text("Usage: `/sell SYMBOL`", parse_mode='Markdown')
+        return
+    symbol = context.args[0].upper()
+    try:
+        crypto_positions = get_open_positions(asset_type='crypto')
+        stock_positions = get_open_positions(asset_type='stock')
+        all_positions = crypto_positions + stock_positions
+        pos = next((p for p in all_positions if p.get('symbol', '').upper() == symbol), None)
+        if not pos:
+            await update.message.reply_text(f"No open position found for `{symbol}`.",
+                                            parse_mode='Markdown')
+            return
+
+        asset_type = pos.get('asset_type', 'crypto')
+        current_price = _get_position_price(symbol)
+        if not current_price:
+            await update.message.reply_text(f"Could not fetch price for `{symbol}`.",
+                                            parse_mode='Markdown')
+            return
+
+        signal = {
+            'signal': 'SELL',
+            'symbol': symbol,
+            'current_price': current_price,
+            'quantity': pos.get('quantity', 0),
+            'position': pos,
+            'reason': 'Manual /sell command',
+            'asset_type': asset_type,
+        }
+        signal_id = await send_signal_for_confirmation(signal)
+        if signal_id < 0:
+            await update.message.reply_text("Failed to create sell confirmation.")
+    except Exception as e:
+        log.error(f"Error in /sell: {e}", exc_info=True)
+        await update.message.reply_text(f"Error: {e}")
+
+
+@authorized
+async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /buy SYMBOL [AMOUNT] command — routes through confirmation flow."""
+    if not context.args:
+        await update.message.reply_text("Usage: `/buy SYMBOL [AMOUNT]`", parse_mode='Markdown')
+        return
+
+    symbol = context.args[0].upper()
+    amount = None
+    if len(context.args) > 1:
+        try:
+            amount = float(context.args[1])
+        except ValueError:
+            await update.message.reply_text("Invalid amount. Usage: `/buy SYMBOL [AMOUNT]`",
+                                            parse_mode='Markdown')
+            return
+
+    try:
+        # Determine asset type
+        asset_type = 'stock' if _is_stock_symbol(symbol) else 'crypto'
+
+        current_price = _get_position_price(symbol)
+        if not current_price:
+            await update.message.reply_text(f"Could not fetch price for `{symbol}`.",
+                                            parse_mode='Markdown')
+            return
+
+        if amount is None:
+            # Use default risk percentage
+            risk_pct = app_config.get('settings', {}).get('trade_risk_percentage', 0.02)
+            balance = get_account_balance(asset_type=asset_type)
+            amount = balance.get('total_usd', 0) * risk_pct
+
+        quantity = amount / current_price if current_price > 0 else 0
+
+        signal = {
+            'signal': 'BUY',
+            'symbol': symbol,
+            'current_price': current_price,
+            'quantity': quantity,
+            'reason': f'Manual /buy command (${amount:,.2f})',
+            'asset_type': asset_type,
+        }
+        signal_id = await send_signal_for_confirmation(signal)
+        if signal_id < 0:
+            await update.message.reply_text("Failed to create buy confirmation.")
+    except Exception as e:
+        log.error(f"Error in /buy: {e}", exc_info=True)
+        await update.message.reply_text(f"Error: {e}")
+
+
+@authorized
+async def close_all_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /close_all [crypto|stocks|all] command."""
+    filter_type = (context.args[0].lower() if context.args else 'all')
+    if filter_type not in ('crypto', 'stocks', 'all'):
+        await update.message.reply_text("Usage: `/close_all [crypto|stocks|all]`",
+                                        parse_mode='Markdown')
+        return
+
+    try:
+        positions = []
+        if filter_type in ('crypto', 'all'):
+            positions.extend(get_open_positions(asset_type='crypto'))
+        if filter_type in ('stocks', 'all'):
+            positions.extend(get_open_positions(asset_type='stock'))
+
+        if not positions:
+            await update.message.reply_text("No open positions to close.")
+            return
+
+        # Calculate unrealized PnL summary
+        total_pnl = 0
+        for pos in positions:
+            symbol = pos.get('symbol', '')
+            entry = pos.get('entry_price', 0)
+            current = _get_position_price(symbol) or entry
+            qty = pos.get('quantity', 0)
+            total_pnl += (current - entry) * qty
+
+        pnl_sign = '+' if total_pnl >= 0 else ''
+        message = (
+            f"*Close All Positions ({filter_type})*\n\n"
+            f"Positions: {len(positions)}\n"
+            f"Unrealized PnL: {pnl_sign}${total_pnl:,.2f}\n\n"
+            f"Are you sure?"
+        )
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("Confirm Close All",
+                                     callback_data=f"qa:close_all:{filter_type}"),
+                InlineKeyboardButton("Cancel", callback_data="qa:cancel"),
+            ]
+        ])
+        await update.message.reply_text(message, parse_mode='Markdown',
+                                        reply_markup=keyboard)
+    except Exception as e:
+        log.error(f"Error in /close_all: {e}", exc_info=True)
+        await update.message.reply_text(f"Error: {e}")
+
+
+async def _handle_quick_action_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles qa:* callback queries for quick actions."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    if user_id not in AUTHORIZED_USER_IDS:
+        await query.answer("Not authorized.", show_alert=True)
+        return
+
+    data = query.data or ""
+    parts = data.split(":")
+    await query.answer()
+
+    if len(parts) < 2:
+        return
+
+    action = parts[1]
+
+    if action == 'cancel':
+        await query.edit_message_text("Cancelled.")
+        return
+
+    if action == 'close_all' and len(parts) >= 3:
+        filter_type = parts[2]
+        positions = []
+        if filter_type in ('crypto', 'all'):
+            positions.extend(get_open_positions(asset_type='crypto'))
+        if filter_type in ('stocks', 'all'):
+            positions.extend(get_open_positions(asset_type='stock'))
+
+        if not positions:
+            await query.edit_message_text("No positions to close.")
+            return
+
+        results = []
+        for pos in positions:
+            symbol = pos.get('symbol', '?')
+            asset_type = pos.get('asset_type', 'crypto')
+            current_price = _get_position_price(symbol)
+            signal = {
+                'signal': 'SELL',
+                'symbol': symbol,
+                'current_price': current_price or pos.get('entry_price', 0),
+                'quantity': pos.get('quantity', 0),
+                'position': pos,
+                'reason': 'Close all via /close_all',
+                'asset_type': asset_type,
+            }
+            try:
+                if _execute_callback:
+                    result = await _execute_callback(signal)
+                    status = result.get('status', 'UNKNOWN') if isinstance(result, dict) else 'DONE'
+                else:
+                    status = 'NO_CALLBACK'
+                results.append(f"{symbol}: {status}")
+            except Exception as e:
+                results.append(f"{symbol}: ERROR ({e})")
+
+        summary = '\n'.join(results)
+        await query.edit_message_text(
+            f"*Close All Results:*\n\n{summary}", parse_mode='Markdown'
+        )
+
+
+# --- Dashboard Command ---
+@authorized
+async def _dashboard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /dashboard command — delegates to telegram_dashboard module."""
+    from src.notify.telegram_dashboard import dashboard_command
+    await dashboard_command(update, context)
+
+
+# --- Callback Dispatcher ---
+async def _dispatch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Routes callback queries to the appropriate handler based on prefix."""
+    data = update.callback_query.data or ""
+    prefix = data.split(":")[0]
+    if prefix in ('a', 'r'):
+        await _handle_signal_callback(update, context)
+    elif prefix == 'dash':
+        from src.notify.telegram_dashboard import handle_dashboard_callback
+        await handle_dashboard_callback(update, context)
+    elif prefix == 'qa':
+        await _handle_quick_action_callback(update, context)
+    else:
+        await update.callback_query.answer("Unknown action")
+
+
 # --- Bot Lifecycle Management ---
 async def start_bot() -> Application:
     """
@@ -1382,7 +1728,12 @@ async def start_bot() -> Application:
             CommandHandler("tune_revert", tune_revert_cmd),
             CommandHandler("experiments", experiments_cmd),
             CommandHandler("learning_report", learning_report_cmd),
-            CallbackQueryHandler(_handle_signal_callback),
+            CommandHandler("dashboard", _dashboard_cmd),
+            CommandHandler("market_analysis", market_analysis_cmd),
+            CommandHandler("sell", sell_cmd),
+            CommandHandler("buy", buy_cmd),
+            CommandHandler("close_all", close_all_cmd),
+            CallbackQueryHandler(_dispatch_callback),
         ]
         application.add_handlers(handlers)
         await application.initialize()
