@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 from src.collectors.news_data import (
-    _fetch_rss_feeds, _match_article_to_symbols, SYMBOL_KEYWORDS,
+    _fetch_rss_feeds, _match_article_to_symbols,
 )
 from src.collectors.web_news_scraper import scrape_all_sources
 from src.collectors.article_enricher import enrich_articles_batch

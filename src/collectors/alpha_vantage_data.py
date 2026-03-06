@@ -240,7 +240,6 @@ def get_batch_stock_prices(symbols):
         return {}
 
     try:
-        import pandas as pd
         data = yf.download(symbols, period="2d", group_by="ticker", threads=True, progress=False)
         if data.empty:
             log.warning("[yfinance batch] No data returned for any symbols.")

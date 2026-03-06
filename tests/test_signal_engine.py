@@ -63,11 +63,13 @@ class TestSentimentMode:
     """Tests for signal_mode='sentiment' in the crypto signal engine."""
 
     BULLISH_GEMINI = {
-        'gemini_assessment': {'direction': 'bullish', 'confidence': 0.85, 'reasoning': 'ETF inflows strong'},
+        'gemini_assessment': {'direction': 'bullish', 'confidence': 0.85, 'reasoning': 'ETF inflows strong',
+                              'catalyst_freshness': 'breaking'},
         'avg_sentiment_score': 0,
     }
     BEARISH_GEMINI = {
-        'gemini_assessment': {'direction': 'bearish', 'confidence': 0.80, 'reasoning': 'Regulatory crackdown'},
+        'gemini_assessment': {'direction': 'bearish', 'confidence': 0.80, 'reasoning': 'Regulatory crackdown',
+                              'catalyst_freshness': 'breaking'},
         'avg_sentiment_score': 0,
     }
     SENTIMENT_CONFIG = {

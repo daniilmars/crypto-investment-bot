@@ -1,11 +1,11 @@
 import itertools
-import re
 from datetime import datetime, timezone
 from functools import wraps
 from typing import Callable, Optional
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
+from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
+                          ContextTypes, MessageHandler, filters)
 from src.logger import log
 from src.config import app_config
 from src.database import (
@@ -15,8 +15,7 @@ from src.database import (
 from src.analysis.gemini_summary import generate_market_summary
 from src.gcp.costs import get_gcp_billing_summary
 from src.execution.binance_trader import (get_open_positions, get_account_balance,
-                                          _is_live_trading, _get_trading_mode,
-                                          _get_live_balance)
+                                          _is_live_trading, _get_trading_mode)
 from src.execution.circuit_breaker import get_circuit_breaker_status
 from src.execution.stock_trader import (
     get_stock_positions, get_stock_balance, _check_pdt_rule, get_market_hours,
@@ -700,8 +699,8 @@ async def positions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                           if h.get('symbol', '').replace('USDT', '') == symbol]
                 if len(prices) >= 2:
                     sparkline = text_sparkline(prices, width=8)
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug(f"Sparkline generation failed for {symbol}: {e}")
             spark_str = f"  {sparkline}" if sparkline else ""
             message += (
                 f"{emoji} *{symbol}*  {pnl_pct:+.1f}%  ${pnl:+,.2f}{spark_str}\n"
@@ -811,7 +810,6 @@ async def db_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def trading_mode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /trading_mode command."""
     mode = _get_trading_mode()
-    is_live = _is_live_trading()
     settings = app_config.get('settings', {})
     paper = settings.get('paper_trading', True)
     live_config = settings.get('live_trading', {})
@@ -1686,8 +1684,29 @@ async def _dispatch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await handle_dashboard_callback(update, context)
     elif prefix == 'qa':
         await _handle_quick_action_callback(update, context)
+    elif prefix == 'ct':
+        from src.notify.telegram_chat import handle_chat_trade_callback
+        await handle_chat_trade_callback(update, context)
     else:
         await update.callback_query.answer("Unknown action")
+
+
+# --- AI Chat Handlers ---
+@authorized
+async def _clearchat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /clearchat — resets the AI chat session."""
+    from src.notify.telegram_chat import clear_session
+    clear_session(update.message.from_user.id)
+    await update.message.reply_text("Chat session cleared.")
+
+
+async def _handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Routes free-text messages to AI chat handler."""
+    from src.notify.telegram_chat import handle_chat_message, set_execute_callback
+    # Wire execute callback if not yet set
+    if _execute_callback:
+        set_execute_callback(_execute_callback)
+    await handle_chat_message(update, context)
 
 
 # --- Bot Lifecycle Management ---
@@ -1733,7 +1752,9 @@ async def start_bot() -> Application:
             CommandHandler("sell", sell_cmd),
             CommandHandler("buy", buy_cmd),
             CommandHandler("close_all", close_all_cmd),
+            CommandHandler("clearchat", _clearchat_cmd),
             CallbackQueryHandler(_dispatch_callback),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_chat_message),
         ]
         application.add_handlers(handlers)
         await application.initialize()

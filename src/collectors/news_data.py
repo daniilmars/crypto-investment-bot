@@ -1,6 +1,8 @@
+import math
 import re
 import statistics
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 
 import feedparser
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
@@ -393,7 +395,8 @@ def _fetch_rss_feeds():
             load_rss_feeds_from_registry, update_source_stats,
         )
         registry_feeds = load_rss_feeds_from_registry()
-    except Exception:
+    except Exception as e:
+        log.debug(f"Source registry not available, using hardcoded feeds: {e}")
         registry_feeds = None
 
     feeds = registry_feeds if registry_feeds else RSS_FEEDS
@@ -415,8 +418,8 @@ def _fetch_rss_feeds():
                         if source_id:
                             try:
                                 update_source_stats(source_id, articles_fetched=len(articles))
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                log.debug(f"Source stats update failed for {source_id}: {e}")
                 except Exception as e:
                     feed = futures[future]
                     log.warning(f"RSS feed timed out or failed: {feed['url']}: {e}")
@@ -426,8 +429,8 @@ def _fetch_rss_feeds():
                         if source_id:
                             try:
                                 update_source_stats(source_id, errors=1)
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                log.debug(f"Source error recording failed for {source_id}: {e}")
         except TimeoutError:
             n_unfinished = sum(1 for fut in futures if not fut.done())
             log.warning(f"RSS fetch global timeout — {n_unfinished} feeds did not finish in time.")
@@ -526,6 +529,28 @@ def _score_with_gemini(articles_with_hashes: list) -> dict:
     # Merge cached + new
     merged = {**cached_scores, **new_scores}
     return merged
+
+
+def _compute_freshness_weight(published_at_str, half_life_hours=6):
+    """Compute exponential decay weight based on article age.
+
+    weight = exp(-age_hours * ln(2) / half_life)
+    0h → 1.0, 6h → 0.5, 12h → 0.25, 24h → 0.06 (with default half_life=6).
+    Articles with unparseable timestamps get weight 1.0 (fail-safe).
+    """
+    if not published_at_str or half_life_hours <= 0:
+        return 1.0
+    try:
+        from email.utils import parsedate_to_datetime
+        pub_dt = parsedate_to_datetime(published_at_str)
+        if pub_dt.tzinfo is None:
+            pub_dt = pub_dt.replace(tzinfo=timezone.utc)
+        age_hours = (datetime.now(timezone.utc) - pub_dt).total_seconds() / 3600.0
+        if age_hours < 0:
+            return 1.0
+        return math.exp(-age_hours * math.log(2) / half_life_hours)
+    except Exception:
+        return 1.0
 
 
 def collect_news_sentiment(symbols):
@@ -639,6 +664,7 @@ def collect_news_sentiment(symbols):
             symbol_articles[symbol].append({
                 'title': title,
                 'score': effective_score,
+                'published_at': article.get('published_at', ''),
             })
 
             # Accumulate archive rows for DB storage
@@ -662,7 +688,8 @@ def collect_news_sentiment(symbols):
         except Exception as e:
             log.warning(f"Failed to archive articles: {e}")
 
-    # 4. Compute aggregates per symbol
+    # 4. Compute aggregates per symbol (freshness-weighted)
+    half_life = news_config.get('freshness_half_life_hours', 6)
     per_symbol = {}
     db_rows = []
 
@@ -672,7 +699,13 @@ def collect_news_sentiment(symbols):
             continue
 
         scores = [a['score'] for a in articles]
-        avg_score = statistics.mean(scores)
+        weights = [_compute_freshness_weight(a.get('published_at', ''), half_life)
+                   for a in articles]
+        total_weight = sum(weights)
+        if total_weight > 0:
+            avg_score = sum(s * w for s, w in zip(scores, weights)) / total_weight
+        else:
+            avg_score = statistics.mean(scores)
         volatility = statistics.stdev(scores) if len(scores) > 1 else 0.0
         positive_count = sum(1 for s in scores if s > 0.05)
         negative_count = sum(1 for s in scores if s < -0.05)

@@ -1,7 +1,7 @@
 [tool.flake8]
-max-line-length = 120
-extend-ignore = ["E402", "W503", "W504", "E741", "E501"]
-exclude = [".venv", "build", "dist", "__pycache__"]
+max-line-length = 140
+extend-ignore = ["E402", "W503", "W504", "E741", "E501", "E127", "E128", "W293", "W291", "E302", "E303", "E305", "E261"]
+exclude = [".venv", "build", "dist", "__pycache__", "scripts"]
 per-file-ignores = ["__init__.py:F401"]
 
 [tool.mypy]

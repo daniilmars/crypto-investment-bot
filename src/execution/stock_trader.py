@@ -1,9 +1,7 @@
-import os
 import time
 import sqlite3
 from collections import deque
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, ROUND_HALF_UP
 
 import psycopg2
 from src.config import app_config
@@ -298,3 +296,76 @@ def get_stock_balance():
     except Exception as e:
         log.error(f"Failed to fetch Alpaca balance: {e}")
         return {"cash": 0.0, "portfolio_value": 0.0, "buying_power": 0.0}
+
+
+def reconcile_stock_positions():
+    """Reconcile DB stock positions against Alpaca exchange state at startup.
+
+    - paper_only broker → skip (DB is source of truth).
+    - alpaca broker → fetch exchange positions, compare with DB.
+    - DB position not on exchange → mark CLOSED with exit_reason='reconciled_stale'.
+    - Exchange position not in DB → log WARNING only.
+    - Any error → log and continue (never crash startup).
+    """
+    stock_settings = app_config.get('settings', {}).get('stock_trading', {})
+    broker = stock_settings.get('broker', 'paper_only')
+
+    if broker != 'alpaca':
+        log.info("[Reconcile] Stock broker is paper_only — skipping stock reconciliation.")
+        return 0
+
+    try:
+        client = _get_alpaca_client()
+        if not client:
+            log.warning("[Reconcile] Alpaca client unavailable — skipping.")
+            return 0
+
+        exchange_positions = client.get_all_positions()
+        exchange_symbols = {pos.symbol for pos in exchange_positions}
+
+        # Fetch DB open stock positions
+        from src.execution.binance_trader import get_open_positions
+        db_positions = get_open_positions(asset_type='stock')
+        stale_count = 0
+
+        for pos in db_positions:
+            symbol = pos['symbol']
+            if symbol not in exchange_symbols:
+                order_id = pos.get('order_id')
+                log.warning(f"[Reconcile] DB stock position {order_id} ({symbol}) "
+                            f"not found on exchange — marking CLOSED.")
+                conn = None
+                try:
+                    conn = get_db_connection()
+                    with _cursor(conn) as cur:
+                        is_pg = isinstance(conn, psycopg2.extensions.connection)
+                        ph = '%s' if is_pg else '?'
+                        cur.execute(
+                            f"UPDATE trades SET status = {ph}, "
+                            f"exit_reason = {ph}, "
+                            f"exit_timestamp = CURRENT_TIMESTAMP "
+                            f"WHERE order_id = {ph} AND status = {ph}",
+                            ('CLOSED', 'reconciled_stale', order_id, 'OPEN'))
+                    conn.commit()
+                    stale_count += 1
+                except Exception as e:
+                    log.error(f"[Reconcile] Failed to close stale stock position {order_id}: {e}")
+                    if conn:
+                        conn.rollback()
+                finally:
+                    release_db_connection(conn)
+
+        # Warn about exchange positions not in DB
+        db_symbols = {p['symbol'] for p in db_positions}
+        for ex_sym in exchange_symbols:
+            if ex_sym not in db_symbols:
+                log.warning(f"[Reconcile] Alpaca position {ex_sym} not tracked in DB — "
+                            f"manual review recommended.")
+
+        log.info(f"[Reconcile] Stock reconciliation complete: "
+                 f"{stale_count} stale positions closed.")
+        return stale_count
+
+    except Exception as e:
+        log.error(f"[Reconcile] Stock reconciliation failed: {e}", exc_info=True)
+        return 0

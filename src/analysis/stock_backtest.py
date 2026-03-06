@@ -10,17 +10,15 @@ Usage:
 """
 
 import argparse
-import math
 import sys
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 
-import numpy as np
 import pandas as pd
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from src.analysis.backtest import Portfolio, calculate_risk_metrics, _empty_metrics, DEFAULT_SLIPPAGE_BPS
+from src.analysis.backtest import Portfolio, calculate_risk_metrics, DEFAULT_SLIPPAGE_BPS
 from src.analysis.stock_signal_engine import generate_stock_signal
 from src.analysis.technical_indicators import calculate_rsi, calculate_sma
 from src.config import app_config

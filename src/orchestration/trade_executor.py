@@ -218,6 +218,16 @@ async def execute_buy(
         log.warning(f"{prefix}Skipping BUY for {symbol}: Insufficient balance.")
         return None
 
+    # Min trade size guard
+    if asset_type == 'stock':
+        if quantity < 0.5:
+            log.warning(f"{prefix}Skipping BUY for {symbol}: quantity {quantity:.4f} below min 0.5 shares.")
+            return None
+    else:
+        if quantity * current_price < 1.00:
+            log.warning(f"{prefix}Skipping BUY for {symbol}: notional ${quantity * current_price:.2f} below $1.00 minimum.")
+            return None
+
     if is_auto:
         log.info(f"{prefix}Executing BUY {quantity:.6f} {symbol} "
                  f"(size_mult={size_mult:.2f})")

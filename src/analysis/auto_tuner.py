@@ -8,7 +8,6 @@ import math
 from datetime import datetime, timezone
 
 import psycopg2
-import sqlite3
 
 from src.config import app_config
 from src.database import get_db_connection, release_db_connection, _cursor
@@ -161,7 +160,6 @@ def _get_recent_trades(days=30):
     try:
         conn = get_db_connection()
         is_pg = isinstance(conn, psycopg2.extensions.connection)
-        ph = _ph(is_pg)
 
         if is_pg:
             date_filter = f"exit_timestamp >= NOW() - INTERVAL '{days} days'"
@@ -326,7 +324,6 @@ def check_and_revert():
     try:
         conn = get_db_connection()
         is_pg = isinstance(conn, psycopg2.extensions.connection)
-        ph = _ph(is_pg)
 
         if is_pg:
             date_filter = f"tuning_run_at >= NOW() - INTERVAL '{revert_days} days'"

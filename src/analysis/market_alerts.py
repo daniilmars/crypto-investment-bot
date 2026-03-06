@@ -9,7 +9,7 @@ Cost: $0 additional — reuses existing Gemini assessments and DB queries.
 """
 
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 from src.config import app_config
 from src.logger import log

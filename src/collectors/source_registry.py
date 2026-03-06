@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 import psycopg2
 import sqlite3
 
-from src.config import app_config
 from src.database import get_db_connection, release_db_connection, _cursor
 from src.logger import log
 

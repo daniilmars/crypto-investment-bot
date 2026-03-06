@@ -174,11 +174,13 @@ class TestStockSentimentMode:
     """Tests for signal_mode='sentiment' in the stock signal engine."""
 
     BULLISH_GEMINI = {
-        'gemini_assessment': {'direction': 'bullish', 'confidence': 0.85, 'reasoning': 'Strong earnings'},
+        'gemini_assessment': {'direction': 'bullish', 'confidence': 0.85, 'reasoning': 'Strong earnings',
+                              'catalyst_freshness': 'breaking'},
         'avg_sentiment_score': 0,
     }
     BEARISH_GEMINI = {
-        'gemini_assessment': {'direction': 'bearish', 'confidence': 0.80, 'reasoning': 'Revenue miss'},
+        'gemini_assessment': {'direction': 'bearish', 'confidence': 0.80, 'reasoning': 'Revenue miss',
+                              'catalyst_freshness': 'breaking'},
         'avg_sentiment_score': 0,
     }
     SENTIMENT_CONFIG = {

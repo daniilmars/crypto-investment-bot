@@ -670,7 +670,6 @@ def run_walk_forward(prices_df, params, n_splits=3):
     train_size = int(fold_size * 1.5)
 
     fold_results = []
-    all_equity = []
 
     for fold in range(n_splits):
         train_start_idx = fold * fold_size
@@ -681,7 +680,6 @@ def run_walk_forward(prices_df, params, n_splits=3):
         if test_end_idx <= test_start_idx:
             break
 
-        train_end_ts = timestamps[train_end_idx]
         test_start_ts = timestamps[test_start_idx]
         test_end_ts = timestamps[test_end_idx - 1]
 

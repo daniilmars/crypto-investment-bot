@@ -273,6 +273,24 @@ def _live_place_order(symbol, side, quantity, price, order_type="MARKET", existi
             # Place OCO bracket for stop-loss and take-profit
             oco_result = _place_oco_bracket(api_symbol, fill_price or price, fill_qty)
 
+            if not oco_result:
+                log.warning(f"OCO bracket failed for {symbol} after BUY — "
+                            f"position has NO server-side SL/TP protection!")
+                try:
+                    from src.notify.telegram_bot import send_telegram_alert
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        asyncio.ensure_future(send_telegram_alert({
+                            'signal': 'WARNING', 'symbol': symbol,
+                            'current_price': fill_price or price,
+                            'reason': ('OCO bracket order failed after BUY fill. '
+                                       'Position lacks server-side SL/TP — '
+                                       'relying on bot-side trailing stop only.'),
+                        }))
+                except Exception as e:
+                    log.debug(f"OCO failure alert send failed: {e}")
+
             result = {
                 "order_id": order_id, "exchange_order_id": exchange_order_id,
                 "symbol": symbol, "side": "BUY", "quantity": fill_qty,
@@ -779,6 +797,86 @@ def _get_live_balance():
 
 if __name__ == '__main__':
     log.info("--- Testing Binance Trader Module ---")
+def reconcile_crypto_positions():
+    """Reconcile DB positions against Binance exchange state at startup.
+
+    - Paper mode → skip (DB is source of truth).
+    - Live/testnet → fetch exchange positions, compare with DB.
+    - DB position not on exchange → mark CLOSED with exit_reason='reconciled_stale'.
+    - Exchange position not in DB → log WARNING only (don't touch exchange).
+    - Any error → log and continue (never crash startup).
+    """
+    paper_trading = app_config.get('settings', {}).get('paper_trading', True)
+    if paper_trading:
+        log.info("[Reconcile] Paper mode — skipping crypto position reconciliation.")
+        return 0
+
+    if not _is_live_trading():
+        log.info("[Reconcile] Live trading not enabled — skipping crypto reconciliation.")
+        return 0
+
+    try:
+        client = _get_binance_client()
+        if not client:
+            log.warning("[Reconcile] Binance client unavailable — skipping.")
+            return 0
+
+        # Fetch exchange balances (non-zero free+locked)
+        account_info = client.get_account()
+        exchange_symbols = set()
+        for bal in account_info.get('balances', []):
+            free = float(bal.get('free', 0))
+            locked = float(bal.get('locked', 0))
+            if free + locked > 0 and bal['asset'] not in ('USDT', 'USD', 'BUSD'):
+                exchange_symbols.add(bal['asset'])
+
+        # Fetch DB open crypto positions
+        db_positions = get_open_positions(asset_type='crypto')
+        stale_count = 0
+
+        for pos in db_positions:
+            symbol = pos['symbol'].replace('USDT', '')
+            if symbol not in exchange_symbols:
+                order_id = pos.get('order_id')
+                log.warning(f"[Reconcile] DB position {order_id} ({pos['symbol']}) "
+                            f"not found on exchange — marking CLOSED.")
+                conn = None
+                try:
+                    conn = get_db_connection()
+                    with _cursor(conn) as cur:
+                        is_pg = isinstance(conn, psycopg2.extensions.connection)
+                        ph = '%s' if is_pg else '?'
+                        cur.execute(
+                            f"UPDATE trades SET status = {ph}, "
+                            f"exit_reason = {ph}, "
+                            f"exit_timestamp = CURRENT_TIMESTAMP "
+                            f"WHERE order_id = {ph} AND status = {ph}",
+                            ('CLOSED', 'reconciled_stale', order_id, 'OPEN'))
+                    conn.commit()
+                    stale_count += 1
+                except Exception as e:
+                    log.error(f"[Reconcile] Failed to close stale position {order_id}: {e}")
+                    if conn:
+                        conn.rollback()
+                finally:
+                    release_db_connection(conn)
+
+        # Warn about exchange positions not in DB
+        db_symbols = {p['symbol'].replace('USDT', '') for p in db_positions}
+        for ex_sym in exchange_symbols:
+            if ex_sym not in db_symbols:
+                log.warning(f"[Reconcile] Exchange position {ex_sym} not tracked in DB — "
+                            f"manual review recommended.")
+
+        log.info(f"[Reconcile] Crypto reconciliation complete: "
+                 f"{stale_count} stale positions closed.")
+        return stale_count
+
+    except Exception as e:
+        log.error(f"[Reconcile] Crypto reconciliation failed: {e}", exc_info=True)
+        return 0
+
+
     mode = _get_trading_mode()
     log.info(f"Current trading mode: {mode}")
     balance = get_account_balance()

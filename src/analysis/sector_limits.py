@@ -20,7 +20,7 @@ _symbol_to_group = {}
 
 def _load_sector_groups():
     """Loads sector group config from YAML and builds reverse lookup."""
-    global _sector_config, _symbol_to_group
+    global _sector_config
 
     cfg = app_config.get('settings', {}).get('sector_limits', {})
     config_file = cfg.get('config_file', 'config/sector_groups.yaml')

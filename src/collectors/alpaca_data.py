@@ -1,5 +1,3 @@
-import os
-
 from src.config import app_config
 from src.logger import log
 

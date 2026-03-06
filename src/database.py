@@ -71,11 +71,11 @@ def _get_pg_pool():
 
     dsn, kwargs = _get_pg_dsn()
     if dsn:
-        _pg_pool = psycopg2.pool.SimpleConnectionPool(1, 10, dsn)
-        log.info("Created PostgreSQL connection pool using DSN.")
+        _pg_pool = psycopg2.pool.ThreadedConnectionPool(1, 10, dsn)
+        log.info("Created PostgreSQL threaded connection pool using DSN.")
     elif kwargs:
-        _pg_pool = psycopg2.pool.SimpleConnectionPool(1, 10, **kwargs)
-        log.info("Created PostgreSQL connection pool using Cloud SQL socket.")
+        _pg_pool = psycopg2.pool.ThreadedConnectionPool(1, 10, **kwargs)
+        log.info("Created PostgreSQL threaded connection pool using Cloud SQL socket.")
     return _pg_pool
 
 
@@ -651,6 +651,18 @@ def initialize_database(db_url=None):
             if is_postgres_conn:
                 conn.rollback()
 
+        # --- Migrate trades table: add exit_reason column (position reconciliation) ---
+        try:
+            cursor.execute("ALTER TABLE trades ADD COLUMN exit_reason TEXT")
+            log.info("Added column 'exit_reason' to trades table.")
+        except (sqlite3.OperationalError, psycopg2.errors.DuplicateColumn):
+            if is_postgres_conn:
+                conn.rollback()
+        except Exception as e:
+            log.warning(f"Could not add column 'exit_reason' to trades: {e}")
+            if is_postgres_conn:
+                conn.rollback()
+
         # --- Migrate circuit_breaker_events: add asset_type column ---
         try:
             cursor.execute("ALTER TABLE circuit_breaker_events ADD COLUMN asset_type TEXT DEFAULT 'crypto'")
@@ -680,6 +692,29 @@ def initialize_database(db_url=None):
             log.warning(f"Could not resolve stale circuit_breaker_events: {e}")
             if is_postgres_conn:
                 conn.rollback()
+
+        # --- Performance indexes ---
+        perf_indexes = [
+            "CREATE INDEX IF NOT EXISTS idx_market_prices_symbol_ts "
+            "ON market_prices (symbol, timestamp)",
+            "CREATE INDEX IF NOT EXISTS idx_trades_status_asset "
+            "ON trades (status, asset_type)",
+            "CREATE INDEX IF NOT EXISTS idx_signals_timestamp "
+            "ON signals (timestamp)",
+            "CREATE INDEX IF NOT EXISTS idx_trades_symbol_status "
+            "ON trades (symbol, status)",
+            "CREATE INDEX IF NOT EXISTS idx_scraped_articles_published "
+            "ON scraped_articles (published_at)",
+            "CREATE INDEX IF NOT EXISTS idx_news_sentiment_symbol_ts "
+            "ON news_sentiment (symbol, analysis_timestamp)",
+        ]
+        for idx_sql in perf_indexes:
+            try:
+                cursor.execute(idx_sql)
+            except Exception as e:
+                log.warning(f"Could not create index: {e}")
+                if is_postgres_conn:
+                    conn.rollback()
 
         conn.commit()
     except (sqlite3.Error, psycopg2.Error) as e:
@@ -789,7 +824,6 @@ def get_last_signal():
     conn = None
     try:
         conn = get_db_connection()
-        is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
         with _cursor(conn) as cursor:
             query = 'SELECT symbol, signal_type AS signal, reason, price AS current_price, timestamp FROM signals ORDER BY timestamp DESC LIMIT 1'
             cursor.execute(query)
@@ -953,7 +987,6 @@ def get_stop_loss_signals(db_url=None) -> list:
     conn = None
     try:
         conn = get_db_connection(db_url)
-        is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
         with _cursor(conn) as cursor:
             query = "SELECT * FROM signals WHERE reason LIKE 'Stop-loss hit%%' ORDER BY timestamp DESC"
             cursor.execute(query)
@@ -1673,7 +1706,7 @@ def get_ipo_events(status=None, since_hours=None):
                     conditions.append("detected_at >= datetime('now', ?)")
                     params.append(f'-{since_hours} hours')
             where_clause = " AND ".join(conditions)
-            query = f"SELECT * FROM ipo_events"
+            query = "SELECT * FROM ipo_events"
             if where_clause:
                 query += f" WHERE {where_clause}"
             query += " ORDER BY detected_at DESC"
@@ -1766,11 +1799,11 @@ def get_macro_regime_history(limit=10):
         is_pg = isinstance(conn, psycopg2.extensions.connection)
         with _cursor(conn) as cursor:
             query = (
-                f"SELECT * FROM macro_regime_history "
-                f"ORDER BY recorded_at DESC LIMIT %s"
+                "SELECT * FROM macro_regime_history "
+                "ORDER BY recorded_at DESC LIMIT %s"
             ) if is_pg else (
-                f"SELECT * FROM macro_regime_history "
-                f"ORDER BY recorded_at DESC LIMIT ?"
+                "SELECT * FROM macro_regime_history "
+                "ORDER BY recorded_at DESC LIMIT ?"
             )
             cursor.execute(query, (limit,))
             rows = cursor.fetchall()
@@ -1783,3 +1816,34 @@ def get_macro_regime_history(limit=10):
         return []
     finally:
         release_db_connection(conn)
+
+
+def cleanup_old_rows(days: int = 30) -> dict:
+    """Delete market_prices, signals, and news_sentiment rows older than `days`."""
+    conn = None
+    deleted = {}
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            tables = [
+                ("market_prices", "timestamp"),
+                ("signals", "timestamp"),
+                ("news_sentiment", "analysis_timestamp"),
+            ]
+            for table, col in tables:
+                if is_pg:
+                    cursor.execute(
+                        f"DELETE FROM {table} WHERE {col} < NOW() - INTERVAL '{days} days'")
+                else:
+                    cursor.execute(
+                        f"DELETE FROM {table} WHERE {col} < datetime('now', '-{days} days')")
+                deleted[table] = cursor.rowcount
+            conn.commit()
+    except Exception as e:
+        log.error(f"cleanup_old_rows failed: {e}", exc_info=True)
+        if conn:
+            conn.rollback()
+    finally:
+        release_db_connection(conn)
+    return deleted

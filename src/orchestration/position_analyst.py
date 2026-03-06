@@ -186,8 +186,8 @@ async def _run_legacy_health_monitor(
         try:
             archived = await get_recent_articles(symbol, hours=24)
             pos_headlines.extend([a.get('title', '') for a in archived[:5]])
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f"Failed to fetch recent articles for {symbol}: {e}")
 
         tech_data = {
             'rsi': market_price_data.get('rsi'),

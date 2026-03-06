@@ -24,11 +24,11 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-dev.txt
 
       - name: Lint
         run: |
-          flake8 src/execution/circuit_breaker.py src/execution/binance_trader.py src/orchestration/trade_executor.py --count --statistics
+          flake8 src/ --count --statistics
           mypy src/execution/circuit_breaker.py src/execution/binance_trader.py src/orchestration/trade_executor.py
 
       - name: Run tests

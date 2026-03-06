@@ -1,4 +1,5 @@
 import logging
+from logging.handlers import RotatingFileHandler
 import sys
 import os
 
@@ -32,11 +33,20 @@ def setup_logger():
         os.makedirs(log_dir, exist_ok=True)
         log_file_path = os.path.join(log_dir, 'bot.log')
 
-        # Add a file handler to write logs to a file
-        file_handler = logging.FileHandler(log_file_path)
+        # Rotating file handler: 10MB per file, keep 3 backups (~40MB max)
+        file_handler = RotatingFileHandler(
+            log_file_path, maxBytes=10 * 1024 * 1024, backupCount=3)
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
         logger.info("File logging is enabled.")
+
+    # --- Telegram Error Handler (Optional) ---
+    # Sends ERROR/CRITICAL messages to Telegram chat
+    try:
+        from src.notify.telegram_error_handler import attach_telegram_error_handler
+        attach_telegram_error_handler(logger)
+    except Exception as e:
+        print(f"Telegram error handler not attached: {e}", file=sys.stderr)
 
     return logger
 

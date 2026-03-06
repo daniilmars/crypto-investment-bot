@@ -101,10 +101,14 @@ class TestClearTrailingStop:
 class TestStartupLoadsPeaks:
     """Tests for trailing stop peak loading during startup."""
 
-    @pytest.mark.asyncio
     @patch('main.start_bot', new_callable=AsyncMock)
-    @patch('main.load_trailing_stop_peaks')
-    def test_startup_loads_peaks(self, mock_load, mock_start_bot):
+    @patch('main.load_session_peaks', new_callable=MagicMock)
+    @patch('main.resolve_stale_circuit_breaker_events', new_callable=MagicMock)
+    @patch('main.load_signal_cooldowns', new_callable=MagicMock, return_value=({}, {}))
+    @patch('main.load_stoploss_cooldowns', new_callable=MagicMock, return_value={})
+    @patch('main.load_trailing_stop_peaks', new_callable=MagicMock)
+    def test_startup_loads_peaks(self, mock_load, mock_cooldowns, mock_sig_cd,
+                                  mock_resolve_cb, mock_session_peaks, mock_start_bot):
         """startup_event() populates _trailing_stop_peaks from DB."""
         import asyncio
         import main
@@ -122,10 +126,14 @@ class TestStartupLoadsPeaks:
         assert bot_state._trailing_stop_peaks == {'order_a': 60000.0, 'order_b': 3500.0}
         mock_load.assert_called_once()
 
-    @pytest.mark.asyncio
     @patch('main.start_bot', new_callable=AsyncMock)
-    @patch('main.load_trailing_stop_peaks')
-    def test_startup_handles_load_failure(self, mock_load, mock_start_bot):
+    @patch('main.load_session_peaks', new_callable=MagicMock)
+    @patch('main.resolve_stale_circuit_breaker_events', new_callable=MagicMock)
+    @patch('main.load_signal_cooldowns', new_callable=MagicMock, return_value=({}, {}))
+    @patch('main.load_stoploss_cooldowns', new_callable=MagicMock, return_value={})
+    @patch('main.load_trailing_stop_peaks', new_callable=MagicMock)
+    def test_startup_handles_load_failure(self, mock_load, mock_cooldowns, mock_sig_cd,
+                                           mock_resolve_cb, mock_session_peaks, mock_start_bot):
         """If load_trailing_stop_peaks raises, startup continues."""
         import asyncio
         import main

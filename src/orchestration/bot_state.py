@@ -7,6 +7,8 @@ and interleave at await points.
 """
 
 import asyncio
+from datetime import datetime
+
 from src.logger import log
 from src.database import save_trailing_stop_peak as _async_save_peak
 from src.database import save_signal_cooldown as _async_save_signal_cd

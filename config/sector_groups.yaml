@@ -9,7 +9,7 @@ default_max_positions_per_group: 2
 groups:
   # --- Crypto ---
   l1_major:
-    max_positions: 3
+    max_positions: 2
     symbols: [BTC, ETH, SOL, BNB]
 
   l1_legacy:
@@ -46,7 +46,7 @@ groups:
 
   # --- US Stocks ---
   tech_mega:
-    max_positions: 3
+    max_positions: 2
     symbols: [AAPL, MSFT, GOOGL, AMZN, META, NVDA, TSLA]
 
   semiconductors:

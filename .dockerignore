@@ -18,8 +18,13 @@ tests/
 
 # Ignore documentation and local data
 README.md
+SCREENING_REPORT.md
 docs/
 data/
 *.db
+
+# Ignore dev-only files
+scripts/
+requirements-dev.txt
 
 # Note: config/settings.yaml is generated during CI deploy and must NOT be ignored

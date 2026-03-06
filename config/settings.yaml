@@ -75,8 +75,8 @@ settings:
   sentiment_signal:
     min_gemini_confidence: 0.5
     min_vader_score: 0.3
-    rsi_buy_veto_threshold: 75
-    rsi_sell_veto_threshold: 25
+    rsi_buy_veto_threshold: 70
+    rsi_sell_veto_threshold: 30
     adx_min_threshold: 20
 
   # Per-symbol cooldown (hours) after a stop-loss exit before re-entering.
@@ -137,6 +137,8 @@ settings:
     use_gemini_scoring: true
     # Cache Gemini responses to halve API calls (~96/day -> ~48/day)
     cache_ttl_minutes: 30
+    # Freshness decay half-life: articles older than this (hours) get half weight
+    freshness_half_life_hours: 6
     # Volume spike: trigger Gemini if current_volume > previous_volume * multiplier
     volume_spike_multiplier: 3.0
     # Sentiment shift: trigger Gemini if abs(current - previous) >= threshold
@@ -157,8 +159,8 @@ settings:
     stop_loss_percentage: 0.03
     take_profit_percentage: 0.06
     # Circuit breaker thresholds
-    daily_loss_limit_pct: 0.10
-    max_drawdown_pct: 0.25
+    daily_loss_limit_pct: 0.05
+    max_drawdown_pct: 0.15
     balance_floor_usd: 70.0
     max_consecutive_losses: 3
     cooldown_hours: 24
@@ -211,7 +213,7 @@ settings:
   position_analyst:
     enabled: true
     min_position_age_hours: 2
-    check_interval_minutes: 30
+    check_interval_minutes: 1440  # once per day (was 30min, saves ~$2.35/day)
     exit_confidence_threshold: 0.8
     increase_confidence_threshold: 0.75
     max_position_multiplier: 3.0
@@ -363,6 +365,12 @@ settings:
       cooldown_minutes: 15
     quick_actions:
       enabled: true
+    ai_chat:
+      enabled: true
+      session_ttl_minutes: 30
+      rate_limit_messages: 20
+      rate_limit_window_seconds: 600
+      max_history_turns: 20
 
   # -- Position Monitor Settings (legacy, used when position_analyst is disabled) --
   # Sub-bot that monitors open positions and asks Gemini "hold or exit?"

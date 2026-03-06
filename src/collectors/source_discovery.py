@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 
 from src.config import app_config
 from src.collectors.source_registry import (
-    add_source, get_source_by_name, get_source_count,
+    add_source, get_source_by_name,
 )
 from src.logger import log
 
@@ -141,7 +141,6 @@ def discover_via_gemini(category='crypto'):
         list of dicts: [{'name': str, 'url': str, 'feed_url': str}]
     """
     try:
-        import vertexai
         from vertexai.generative_models import GenerativeModel
     except ImportError:
         log.warning("vertexai not available for Gemini discovery")

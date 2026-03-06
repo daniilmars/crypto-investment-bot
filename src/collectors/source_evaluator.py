@@ -9,7 +9,6 @@ Evaluation pipeline:
 
 import feedparser
 import requests
-from datetime import datetime, timezone
 
 from src.config import app_config
 from src.database import compute_title_hash

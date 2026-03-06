@@ -1,0 +1,14 @@
+# Dev/CI-only dependencies (not shipped in production image)
+-r requirements.txt
+
+# Testing
+pytest==8.4.1
+pytest-mock==3.15.1
+
+# Linting and type checking
+flake8==7.1.1
+mypy==1.13.0
+flake8-pyproject==1.2.3
+
+# LSTM model training (offline only)
+tensorflow==2.16.2

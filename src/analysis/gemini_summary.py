@@ -1,7 +1,6 @@
 import os
 import vertexai
 from vertexai.generative_models import GenerativeModel
-from src.config import app_config
 from src.logger import log
 import pandas as pd
 

@@ -8,14 +8,14 @@ from telegram.ext import ContextTypes
 from src.logger import log
 from src.config import app_config
 from src.notify.formatting import (
-    text_sparkline, pnl_emoji, format_position_line, progress_bar,
+    text_sparkline, pnl_emoji, format_position_line,
     truncate_for_telegram, escape_md, format_region_label,
 )
 from src.execution.binance_trader import (
-    get_open_positions, get_account_balance, _get_trading_mode,
+    get_open_positions, get_account_balance,
 )
 from src.execution.circuit_breaker import (
-    get_circuit_breaker_status, get_daily_pnl, get_unrealized_pnl,
+    get_circuit_breaker_status, get_daily_pnl,
 )
 from src.analysis.macro_regime import get_macro_regime
 from src.database import get_last_signal, get_price_history_since
@@ -65,7 +65,8 @@ def _get_price_sparkline(symbol: str, hours: int = 24, points: int = 10) -> str:
         if len(prices) < 2:
             return ''
         return text_sparkline(prices, width=points)
-    except Exception:
+    except Exception as e:
+        log.debug(f"Sparkline generation failed for {symbol}: {e}")
         return ''
 
 
@@ -161,8 +162,8 @@ def build_dashboard_message() -> str:
                         age_str = f" ({age_min:.0f}m ago)"
                     else:
                         age_str = f" ({age_min / 60:.0f}h ago)"
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.debug(f"Signal age calculation failed: {e}")
             lines.append(f"*Last Signal:* {sig_type} {sig_symbol}{age_str}")
 
         return truncate_for_telegram('\n'.join(lines))
@@ -340,5 +341,5 @@ async def handle_dashboard_callback(update: Update, context: ContextTypes.DEFAUL
         log.error(f"Error in dashboard callback '{action}': {e}", exc_info=True)
         try:
             await query.edit_message_text(f"Error loading {action} view.")
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f"Dashboard callback error edit failed: {e}")

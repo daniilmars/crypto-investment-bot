@@ -7,10 +7,6 @@ pandas==2.3.3
 # For connecting to PostgreSQL
 psycopg2-binary==2.9.11
 
-# For testing
-pytest==8.4.1
-pytest-mock==3.15.1
-
 # For reading YAML configuration
 PyYAML==6.0.3
 
@@ -26,9 +22,6 @@ google-genai>=1.0.0
 # For FastAPI webhooks
 fastapi==0.116.1
 uvicorn==0.35.0
-
-# For LSTM Model
-tensorflow==2.16.2
 
 # For GCP billing budget queries
 google-cloud-billing-budgets>=1.14.0
@@ -50,7 +43,3 @@ yfinance>=0.2.40
 # For config validation at startup
 pydantic>=2.0.0
 
-# For linting and type checking in CI
-flake8==7.1.1
-mypy==1.13.0
-flake8-pyproject==1.2.3

@@ -303,7 +303,8 @@ class TestSentimentModeIntegration:
         """Full sentiment pipeline: Gemini bullish + uptrend + good RSI = BUY."""
         market_data = {'current_price': 98000, 'sma': 95000, 'rsi': 55}
         news_data = {
-            'gemini_assessment': {'direction': 'bullish', 'confidence': 0.82, 'reasoning': 'ETF inflows'},
+            'gemini_assessment': {'direction': 'bullish', 'confidence': 0.82, 'reasoning': 'ETF inflows',
+                                  'catalyst_freshness': 'breaking'},
             'avg_sentiment_score': 0.2,
         }
         signal = generate_signal(

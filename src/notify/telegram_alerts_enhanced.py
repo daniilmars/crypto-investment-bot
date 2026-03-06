@@ -8,10 +8,10 @@ from telegram.ext import Application
 from src.logger import log
 from src.config import app_config
 from src.notify.formatting import (
-    pnl_emoji, format_position_line, progress_bar, truncate_for_telegram,
+    pnl_emoji, progress_bar, truncate_for_telegram,
 )
 from src.execution.binance_trader import get_open_positions, get_account_balance
-from src.execution.circuit_breaker import get_daily_pnl, get_unrealized_pnl
+from src.execution.circuit_breaker import get_daily_pnl
 from src.analysis.macro_regime import get_macro_regime
 from src.analysis.event_calendar import get_upcoming_macro_events
 
@@ -253,7 +253,6 @@ def check_realtime_alerts(macro_regime_result: dict) -> list[str]:
     # Regime change detection
     if cfg.get('regime_change_alert', True) and _last_regime is not None:
         if current_regime != _last_regime:
-            old_mult = 1.0  # We don't have old multiplier, so just show new
             new_mult = macro_regime_result.get('position_size_multiplier', 1.0)
             new_score = macro_regime_result.get('score', 0)
             suppress = macro_regime_result.get('suppress_buys', False)

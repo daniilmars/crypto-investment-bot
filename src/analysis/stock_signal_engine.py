@@ -273,13 +273,21 @@ def _generate_stock_sentiment_signal(symbol, market_data, fundamental_data=None,
     if news_sentiment_data:
         gemini = news_sentiment_data.get('gemini_assessment')
 
-        if gemini and gemini.get('confidence', 0) >= min_gemini_conf:
+        if gemini:
             g_direction = gemini.get('direction', 'neutral')
             g_confidence = gemini.get('confidence', 0)
             g_reasoning = gemini.get('reasoning', '')
-            if g_direction in ('bullish', 'bearish'):
+
+            # Freshness modulation: stale catalysts get reduced confidence
+            freshness = gemini.get('catalyst_freshness', 'none')
+            freshness_mult = {'breaking': 1.0, 'recent': 0.8,
+                              'stale': 0.3, 'none': 0.5}.get(freshness, 0.5)
+            g_confidence *= freshness_mult
+
+            if g_confidence >= min_gemini_conf and g_direction in ('bullish', 'bearish'):
                 direction = g_direction
-                sentiment_reason = f"Gemini {g_direction} ({g_confidence:.2f}): {g_reasoning}"
+                sentiment_reason = (f"Gemini {g_direction} ({g_confidence:.2f}, "
+                                    f"freshness={freshness}): {g_reasoning}")
 
         # VADER fallback
         if direction is None:
