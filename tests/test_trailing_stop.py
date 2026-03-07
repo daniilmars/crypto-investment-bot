@@ -104,9 +104,9 @@ class TestStartupLoadsPeaks:
     @patch('main.start_bot', new_callable=AsyncMock)
     @patch('main.load_session_peaks', new_callable=MagicMock)
     @patch('main.resolve_stale_circuit_breaker_events', new_callable=MagicMock)
-    @patch('main.load_signal_cooldowns', new_callable=MagicMock, return_value=({}, {}))
-    @patch('main.load_stoploss_cooldowns', new_callable=MagicMock, return_value={})
-    @patch('main.load_trailing_stop_peaks', new_callable=MagicMock)
+    @patch('main.load_signal_cooldowns', new_callable=AsyncMock, return_value=({}, {}))
+    @patch('main.load_stoploss_cooldowns', new_callable=AsyncMock, return_value={})
+    @patch('main.load_trailing_stop_peaks', new_callable=AsyncMock)
     def test_startup_loads_peaks(self, mock_load, mock_cooldowns, mock_sig_cd,
                                   mock_resolve_cb, mock_session_peaks, mock_start_bot):
         """startup_event() populates _trailing_stop_peaks from DB."""
@@ -129,9 +129,9 @@ class TestStartupLoadsPeaks:
     @patch('main.start_bot', new_callable=AsyncMock)
     @patch('main.load_session_peaks', new_callable=MagicMock)
     @patch('main.resolve_stale_circuit_breaker_events', new_callable=MagicMock)
-    @patch('main.load_signal_cooldowns', new_callable=MagicMock, return_value=({}, {}))
-    @patch('main.load_stoploss_cooldowns', new_callable=MagicMock, return_value={})
-    @patch('main.load_trailing_stop_peaks', new_callable=MagicMock)
+    @patch('main.load_signal_cooldowns', new_callable=AsyncMock, return_value=({}, {}))
+    @patch('main.load_stoploss_cooldowns', new_callable=AsyncMock, return_value={})
+    @patch('main.load_trailing_stop_peaks', new_callable=AsyncMock)
     def test_startup_handles_load_failure(self, mock_load, mock_cooldowns, mock_sig_cd,
                                            mock_resolve_cb, mock_session_peaks, mock_start_bot):
         """If load_trailing_stop_peaks raises, startup continues."""

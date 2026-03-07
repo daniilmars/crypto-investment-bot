@@ -80,7 +80,7 @@ async def run_single_status_update():
 
     try:
         log.info("Fetching trade summary for status update...")
-        summary = await asyncio.to_thread(get_trade_summary, interval_hours)
+        summary = await get_trade_summary(interval_hours)
         if application:
             await send_performance_report(application, summary, interval_hours)
     except Exception as e:
@@ -126,7 +126,7 @@ async def auto_bot_summary_loop():
     while True:
         await asyncio.sleep(interval * 3600)
         try:
-            summary = await asyncio.to_thread(get_trade_summary, interval, 'auto')
+            summary = await get_trade_summary(interval, 'auto')
             auto_positions = await asyncio.to_thread(get_open_positions, trading_strategy='auto')
             auto_balance = await asyncio.to_thread(get_account_balance, trading_strategy='auto')
             if application:
@@ -248,7 +248,7 @@ async def startup_event():
 
     # Restore trailing stop peaks from database (survives restarts)
     try:
-        loaded = await asyncio.to_thread(load_trailing_stop_peaks)
+        loaded = await load_trailing_stop_peaks()
         bot_state.load_peaks(loaded)
         log.info(f"Loaded {len(loaded)} trailing stop peaks from database.")
     except Exception as e:
@@ -256,7 +256,7 @@ async def startup_event():
 
     # Restore stoploss cooldowns from database (survives restarts)
     try:
-        loaded_cooldowns = await asyncio.to_thread(load_stoploss_cooldowns)
+        loaded_cooldowns = await load_stoploss_cooldowns()
         bot_state.load_cooldowns(loaded_cooldowns)
         log.info(f"Loaded {len(loaded_cooldowns)} stoploss cooldowns from database.")
     except Exception as e:
@@ -264,7 +264,7 @@ async def startup_event():
 
     # Restore signal cooldowns from database (survives restarts)
     try:
-        manual_cd, auto_cd = await asyncio.to_thread(load_signal_cooldowns)
+        manual_cd, auto_cd = await load_signal_cooldowns()
         bot_state.load_signal_cooldown_state(manual_cd, auto_cd)
         log.info(f"Loaded {len(manual_cd)} manual + {len(auto_cd)} auto signal cooldowns from database.")
     except Exception as e:

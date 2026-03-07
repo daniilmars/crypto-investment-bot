@@ -93,7 +93,7 @@ async def run_bot_cycle():
     trailing_stop_distance = settings.get('trailing_stop_distance', 0.015)
 
     # --- Dynamic Position Sizing (Kelly Criterion) ---
-    trade_stats = await asyncio.to_thread(get_trade_history_stats)
+    trade_stats = await get_trade_history_stats()
     kelly_fraction = trade_stats.get('kelly_fraction', 0.0)
     if kelly_fraction > 0 and trade_stats.get('total_trades', 0) >= 10:
         effective_risk_pct = kelly_fraction
@@ -113,7 +113,7 @@ async def run_bot_cycle():
              f"(mult={macro_multiplier}, suppress_buys={suppress_buys})")
 
     try:
-        await asyncio.to_thread(save_macro_regime, macro_regime_result)
+        await save_macro_regime(macro_regime_result)
     except Exception as e:
         log.warning(f"Failed to save macro regime: {e}")
 
@@ -235,7 +235,7 @@ async def run_bot_cycle():
         log.info(f"Analyzing data for {symbol}...")
 
         price_limit = max(sma_period, rsi_period, 26) + 1
-        historical_prices = await asyncio.to_thread(get_historical_prices, symbol, price_limit)
+        historical_prices = await get_historical_prices(symbol, price_limit)
 
         market_price_data = {'current_price': current_price, 'sma': None, 'rsi': None}
         if len(historical_prices) >= sma_period:
@@ -288,7 +288,7 @@ async def run_bot_cycle():
             rsi_oversold_threshold=rsi_oversold_threshold,
         )
         log.info(f"Generated Signal for {symbol}: {signal}")
-        await asyncio.to_thread(save_signal, signal)
+        await save_signal(signal)
 
         # Record signal attribution for non-HOLD signals
         if signal.get('signal') not in ('HOLD', None):
@@ -616,14 +616,14 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
         )
         signal['asset_type'] = 'stock'
         log.info(f"Generated Stock Signal for {symbol}: {signal}")
-        await asyncio.to_thread(save_signal, signal)
+        await save_signal(signal)
 
         # --- Trade Execution (broker-aware, unified pipeline) ---
         if stock_cb_tripped:
             log.info(f"Skipping trade execution for stock {symbol}: circuit breaker active.")
             signal['signal'] = 'HOLD'
 
-        stock_trade_stats = await asyncio.to_thread(get_trade_history_stats)
+        stock_trade_stats = await get_trade_history_stats()
         stock_kelly = stock_trade_stats.get('kelly_fraction', 0.0)
         stock_risk_pct = stock_kelly if (stock_kelly > 0 and stock_trade_stats.get('total_trades', 0) >= 10) else trade_risk_percentage
 
