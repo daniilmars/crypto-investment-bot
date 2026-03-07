@@ -107,7 +107,7 @@ def get_db_connection(db_url=None):
             raise
 
     # Fallback to SQLite for local development without PostgreSQL
-    log.info("No PostgreSQL config found, falling back to SQLite.")
+    log.debug("No PostgreSQL config found, falling back to SQLite.")
     db_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
     db_path = os.path.join(db_dir, 'crypto_data.db')
     os.makedirs(db_dir, exist_ok=True)
@@ -703,10 +703,10 @@ def initialize_database(db_url=None):
             "ON signals (timestamp)",
             "CREATE INDEX IF NOT EXISTS idx_trades_symbol_status "
             "ON trades (symbol, status)",
-            "CREATE INDEX IF NOT EXISTS idx_scraped_articles_published "
-            "ON scraped_articles (published_at)",
+            "CREATE INDEX IF NOT EXISTS idx_scraped_articles_collected "
+            "ON scraped_articles (collected_at)",
             "CREATE INDEX IF NOT EXISTS idx_news_sentiment_symbol_ts "
-            "ON news_sentiment (symbol, analysis_timestamp)",
+            "ON news_sentiment (symbol, timestamp)",
         ]
         for idx_sql in perf_indexes:
             try:

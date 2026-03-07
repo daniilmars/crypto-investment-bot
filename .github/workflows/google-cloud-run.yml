@@ -84,8 +84,13 @@ jobs:
           gcp_billing:
             enabled: true
 
+          notification_services:
+            telegram:
+              enabled: true
+            pushover:
+              enabled: false
+
           settings:
-            # Crypto and stock watch lists are loaded from config/watch_list.yaml.
             run_interval_minutes: 15
 
             sma_period: 20
@@ -97,8 +102,8 @@ jobs:
             sentiment_signal:
               min_gemini_confidence: 0.5
               min_vader_score: 0.3
-              rsi_buy_veto_threshold: 75
-              rsi_sell_veto_threshold: 25
+              rsi_buy_veto_threshold: 70
+              rsi_sell_veto_threshold: 30
               adx_min_threshold: 20
 
             stoploss_cooldown_hours: 6
@@ -108,6 +113,9 @@ jobs:
 
             paper_trading: false
             paper_trading_initial_capital: 10000.0
+
+            simulated_fee_pct: 0.001
+            simulated_slippage_pct: 0.001
 
             trade_risk_percentage: 0.03
             stop_loss_percentage: 0.035
@@ -122,8 +130,6 @@ jobs:
               enabled: true
               interval_hours: 1
 
-            simulated_fee_pct: 0.001
-
             news_analysis:
               enabled: true
               use_grounded_search: false
@@ -133,6 +139,7 @@ jobs:
                 enabled: true
               use_gemini_scoring: true
               cache_ttl_minutes: 30
+              freshness_half_life_hours: 6
               volume_spike_multiplier: 3.0
               sentiment_shift_threshold: 0.3
               sentiment_buy_threshold: 0.15
@@ -143,12 +150,12 @@ jobs:
               enabled: true
               mode: "testnet"
               initial_capital: 100.0
-              max_concurrent_positions: 3
-              trade_risk_percentage: 0.03
-              stop_loss_percentage: 0.035
-              take_profit_percentage: 0.08
-              daily_loss_limit_pct: 0.10
-              max_drawdown_pct: 0.25
+              max_concurrent_positions: 2
+              trade_risk_percentage: 0.05
+              stop_loss_percentage: 0.03
+              take_profit_percentage: 0.06
+              daily_loss_limit_pct: 0.05
+              max_drawdown_pct: 0.15
               balance_floor_usd: 70.0
               max_consecutive_losses: 3
               cooldown_hours: 24
@@ -190,7 +197,7 @@ jobs:
             position_analyst:
               enabled: true
               min_position_age_hours: 2
-              check_interval_minutes: 30
+              check_interval_minutes: 1440
               exit_confidence_threshold: 0.8
               increase_confidence_threshold: 0.75
               max_position_multiplier: 3.0
@@ -219,6 +226,14 @@ jobs:
               vix_elevated_threshold: 18
               vix_high_threshold: 25
               vix_extreme_threshold: 35
+              weights:
+                vix_signal: 2.0
+                vix_trend: 1.0
+                sp500_trend: 1.5
+                yield_direction: 1.5
+                btc_trend: 1.0
+              risk_on_threshold: 3.0
+              risk_off_threshold: -3.0
 
             sector_limits:
               enabled: true
@@ -264,6 +279,59 @@ jobs:
                 enabled: true
                 urgency_hours_before: 24
                 cooldown_hours: 12
+
+            autonomous_bot:
+              source_discovery:
+                enabled: true
+                discovery_interval_days: 7
+                min_trial_days: 7
+                min_trial_articles: 10
+                promotion_threshold: 0.6
+                demotion_threshold: 0.2
+                max_experimental_sources: 10
+              feedback_loop:
+                enabled: true
+                daily_review_hour_utc: 3
+                min_trades_for_scoring: 5
+                reliability_decay_days: 90
+              auto_tuner:
+                enabled: true
+                tune_interval_days: 7
+                min_sample_trades: 20
+                min_sharpe_improvement: 0.1
+                max_param_changes_per_cycle: 2
+                auto_revert_days: 7
+                auto_revert_degradation_pct: 0.10
+                sl_min: 0.015
+                sl_max: 0.06
+                tp_min: 0.03
+                tp_max: 0.15
+                confidence_min: 0.35
+                confidence_max: 0.75
+
+            telegram_enhancements:
+              morning_briefing:
+                enabled: true
+                hour_utc: 13
+                include_ai_summary: false
+              portfolio_digest:
+                enabled: true
+                interval_hours: 4
+              realtime_alerts:
+                enabled: true
+                vix_spike_threshold: 3.0
+                regime_change_alert: true
+              ai_analysis:
+                enabled: true
+                cooldown_minutes: 15
+              quick_actions:
+                enabled: true
+              ai_chat:
+                enabled: true
+                session_ttl_minutes: 30
+                rate_limit_messages: 20
+                rate_limit_window_seconds: 600
+                max_history_turns: 20
 
             position_monitor:
               enabled: true

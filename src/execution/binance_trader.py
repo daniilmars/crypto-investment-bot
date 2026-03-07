@@ -865,8 +865,8 @@ def reconcile_crypto_positions():
         db_symbols = {p['symbol'].replace('USDT', '') for p in db_positions}
         for ex_sym in exchange_symbols:
             if ex_sym not in db_symbols:
-                log.warning(f"[Reconcile] Exchange position {ex_sym} not tracked in DB — "
-                            f"manual review recommended.")
+                log.debug(f"[Reconcile] Exchange position {ex_sym} not tracked in DB — "
+                          f"manual review recommended.")
 
         log.info(f"[Reconcile] Crypto reconciliation complete: "
                  f"{stale_count} stale positions closed.")
