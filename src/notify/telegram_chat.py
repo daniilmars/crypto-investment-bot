@@ -357,7 +357,8 @@ async def _call_gemini(
 ) -> str:
     """Calls Gemini 2.0 Flash with optional grounded search."""
     project_id = os.environ.get('GCP_PROJECT_ID')
-    location = os.environ.get('GCP_LOCATION', 'europe-west4')
+    location = os.environ.get('VERTEX_AI_LOCATION',
+                               os.environ.get('GCP_LOCATION', 'europe-west4'))
 
     if not project_id:
         return "AI chat unavailable — GCP_PROJECT_ID not set."
