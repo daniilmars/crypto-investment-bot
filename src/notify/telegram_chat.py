@@ -466,7 +466,6 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     user_id = update.message.from_user.id
-    log.info(f"[AI Chat] Received message from user {user_id}: {update.message.text[:50]!r}")
     if user_id not in AUTHORIZED_USER_IDS:
         await update.message.reply_text("Not authorized.")
         return
