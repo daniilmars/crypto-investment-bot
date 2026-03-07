@@ -332,6 +332,10 @@ jobs:
                 rate_limit_messages: 20
                 rate_limit_window_seconds: 600
                 max_history_turns: 20
+                watchlist:
+                  enabled: true
+                  default_ttl_days: 30
+                  max_items: 10
 
             position_monitor:
               enabled: true

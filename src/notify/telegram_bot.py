@@ -1,3 +1,4 @@
+import asyncio
 import itertools
 from datetime import datetime, timezone
 from functools import wraps
@@ -1687,8 +1688,30 @@ async def _dispatch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     elif prefix == 'ct':
         from src.notify.telegram_chat import handle_chat_trade_callback
         await handle_chat_trade_callback(update, context)
+    elif prefix == 'wl':
+        from src.notify.telegram_chat import handle_watchlist_callback
+        await handle_watchlist_callback(update, context)
     else:
         await update.callback_query.answer("Unknown action")
+
+
+# --- Watchlist Command ---
+@authorized
+async def _watchlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /watchlist command — shows active chat watchlist items."""
+    from src.database import get_active_watchlist
+    items = await asyncio.to_thread(get_active_watchlist)
+    if not items:
+        await update.message.reply_text("Watchlist is empty. Chat with me to add symbols!")
+        return
+    lines = ["*Active Watchlist:*"]
+    for item in items:
+        sym = item['symbol']
+        atype = item.get('asset_type', '?')
+        reason = item.get('reason', '')
+        expires = str(item.get('expires_at', '?'))[:10]
+        lines.append(f"- {sym} ({atype}) — {reason} [expires {expires}]")
+    await update.message.reply_text("\n".join(lines), parse_mode='Markdown')
 
 
 # --- AI Chat Handlers ---
@@ -1753,6 +1776,7 @@ async def start_bot() -> Application:
             CommandHandler("buy", buy_cmd),
             CommandHandler("close_all", close_all_cmd),
             CommandHandler("clearchat", _clearchat_cmd),
+            CommandHandler("watchlist", _watchlist_cmd),
             CallbackQueryHandler(_dispatch_callback),
             MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_chat_message),
         ]

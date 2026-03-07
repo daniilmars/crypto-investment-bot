@@ -40,7 +40,7 @@ def _cursor(conn):
 # --- Connection Pool (for PostgreSQL) ---
 _pg_pool = None
 
-ALLOWED_TABLES = frozenset({"market_prices", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles", "stoploss_cooldowns", "position_additions", "ipo_events", "macro_regime_history", "source_registry", "signal_attribution", "experiment_log", "tuning_history", "session_peaks"})
+ALLOWED_TABLES = frozenset({"market_prices", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles", "stoploss_cooldowns", "position_additions", "ipo_events", "macro_regime_history", "source_registry", "signal_attribution", "experiment_log", "tuning_history", "session_peaks", "watchlist_items"})
 
 # --- Database Connection Management ---
 
@@ -580,6 +580,33 @@ def initialize_database(db_url=None):
                 observed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )'''
         cursor.execute(session_peaks_sql)
+
+        # Watchlist Items (chat-driven symbol tracking)
+        watchlist_items_sql = '''
+            CREATE TABLE IF NOT EXISTS watchlist_items (
+                id SERIAL PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                asset_type TEXT NOT NULL DEFAULT 'crypto',
+                reason TEXT,
+                added_by_user_id BIGINT NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                is_active BOOLEAN DEFAULT TRUE,
+                UNIQUE(symbol, is_active)
+            )''' if is_postgres_conn else '''
+            CREATE TABLE IF NOT EXISTS watchlist_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                asset_type TEXT NOT NULL DEFAULT 'crypto',
+                reason TEXT,
+                added_by_user_id INTEGER NOT NULL,
+                expires_at TIMESTAMP NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_active INTEGER DEFAULT 1,
+                UNIQUE(symbol, is_active)
+            )'''
+        cursor.execute(watchlist_items_sql)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_active ON watchlist_items (is_active, asset_type)")
 
         # --- Migrate trades table: add live trading columns if missing ---
         new_trade_columns = [
@@ -1488,6 +1515,106 @@ def clear_stoploss_cooldown(symbol: str):
         conn.commit()
     except (sqlite3.Error, psycopg2.Error) as e:
         log.error(f"Database error in clear_stoploss_cooldown: {e}", exc_info=True)
+    finally:
+        release_db_connection(conn)
+
+
+def save_watchlist_item(symbol, asset_type, reason, user_id, ttl_days=30):
+    """Persists a watchlist item (UPSERT on symbol+is_active)."""
+    from datetime import datetime, timedelta, timezone
+    conn = None
+    expires_at = datetime.now(timezone.utc) + timedelta(days=ttl_days)
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            if is_pg:
+                query = """
+                    INSERT INTO watchlist_items (symbol, asset_type, reason, added_by_user_id, expires_at)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (symbol, is_active) DO UPDATE
+                    SET expires_at = EXCLUDED.expires_at, reason = EXCLUDED.reason
+                """
+            else:
+                query = """
+                    INSERT OR REPLACE INTO watchlist_items
+                    (symbol, asset_type, reason, added_by_user_id, expires_at, is_active)
+                    VALUES (?, ?, ?, ?, ?, 1)
+                """
+            cursor.execute(query, (symbol, asset_type, reason, user_id, expires_at))
+        conn.commit()
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in save_watchlist_item: {e}", exc_info=True)
+    finally:
+        release_db_connection(conn)
+
+
+def remove_watchlist_item(symbol):
+    """Deactivates a watchlist item."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            if is_pg:
+                query = "UPDATE watchlist_items SET is_active = FALSE WHERE symbol = %s AND is_active = TRUE"
+            else:
+                query = "UPDATE watchlist_items SET is_active = 0 WHERE symbol = ? AND is_active = 1"
+            cursor.execute(query, (symbol,))
+        conn.commit()
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in remove_watchlist_item: {e}", exc_info=True)
+    finally:
+        release_db_connection(conn)
+
+
+def get_active_watchlist(asset_type=None):
+    """Returns active, non-expired watchlist items."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            if is_pg:
+                base = "SELECT symbol, asset_type, reason, expires_at FROM watchlist_items WHERE is_active = TRUE AND expires_at > NOW()"
+                if asset_type:
+                    base += " AND asset_type = %s"
+                    cursor.execute(base, (asset_type,))
+                else:
+                    cursor.execute(base)
+            else:
+                base = "SELECT symbol, asset_type, reason, expires_at FROM watchlist_items WHERE is_active = 1 AND expires_at > datetime('now')"
+                if asset_type:
+                    base += " AND asset_type = ?"
+                    cursor.execute(base, (asset_type,))
+                else:
+                    cursor.execute(base)
+            rows = cursor.fetchall()
+            return [dict(row) if hasattr(row, 'keys') else
+                    {'symbol': row[0], 'asset_type': row[1], 'reason': row[2], 'expires_at': row[3]}
+                    for row in rows]
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in get_active_watchlist: {e}", exc_info=True)
+        return []
+    finally:
+        release_db_connection(conn)
+
+
+def expire_watchlist_items():
+    """Marks expired watchlist items as inactive."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            if is_pg:
+                query = "UPDATE watchlist_items SET is_active = FALSE WHERE is_active = TRUE AND expires_at <= NOW()"
+            else:
+                query = "UPDATE watchlist_items SET is_active = 0 WHERE is_active = 1 AND expires_at <= datetime('now')"
+            cursor.execute(query)
+        conn.commit()
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in expire_watchlist_items: {e}", exc_info=True)
     finally:
         release_db_connection(conn)
 

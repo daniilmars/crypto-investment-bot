@@ -209,7 +209,7 @@ async def db_cleanup_loop():
 
 
 async def _chat_session_cleanup_loop():
-    """Periodically cleans up expired AI chat sessions."""
+    """Periodically cleans up expired AI chat sessions and watchlist items."""
     while True:
         await asyncio.sleep(300)  # every 5 minutes
         try:
@@ -217,6 +217,11 @@ async def _chat_session_cleanup_loop():
             cleanup_expired_sessions()
         except Exception as e:
             log.error(f"Chat session cleanup error: {e}", exc_info=True)
+        try:
+            from src.database import expire_watchlist_items
+            await asyncio.to_thread(expire_watchlist_items)
+        except Exception as e:
+            log.error(f"Watchlist expiry error: {e}", exc_info=True)
 
 
 async def db_backup_loop():

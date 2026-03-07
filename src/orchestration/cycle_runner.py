@@ -66,6 +66,19 @@ async def run_bot_cycle():
 
     # Load all settings
     watch_list = settings.get('watch_list', ['BTC'])
+
+    # Merge chat watchlist additions (crypto)
+    try:
+        from src.database import get_active_watchlist
+        chat_watchlist = get_active_watchlist(asset_type='crypto')
+        for item in chat_watchlist:
+            sym = item['symbol']
+            if sym not in watch_list:
+                watch_list.append(sym)
+                log.debug(f"Watchlist: added {sym} from chat")
+    except Exception as e:
+        log.warning(f"Failed to load chat watchlist: {e}")
+
     sma_period = settings.get('sma_period', 20)
     rsi_period = settings.get('rsi_period', 14)
     rsi_overbought_threshold = settings.get('rsi_overbought_threshold', 70)
@@ -407,6 +420,19 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
             log.warning(f"[IPO] Watchlist promotion failed: {e}")
 
     watch_list = stock_settings.get('watch_list', [])
+
+    # Merge chat watchlist additions (stock)
+    try:
+        from src.database import get_active_watchlist
+        chat_watchlist = get_active_watchlist(asset_type='stock')
+        for item in chat_watchlist:
+            sym = item['symbol']
+            if sym not in watch_list:
+                watch_list.append(sym)
+                log.debug(f"Watchlist: added stock {sym} from chat")
+    except Exception as e:
+        log.warning(f"Failed to load stock chat watchlist: {e}")
+
     if not watch_list:
         log.info("Stock watch list is empty. Skipping stock cycle.")
         return

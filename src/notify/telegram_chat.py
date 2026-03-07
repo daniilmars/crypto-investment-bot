@@ -32,6 +32,7 @@ AUTHORIZED_USER_IDS = _tg_config.get('authorized_user_ids', [])
 _execute_callback: Optional[Callable] = None
 
 _trade_counter = itertools.count(1)
+_watchlist_counter = itertools.count(1)
 
 # --- Search Routing Keywords ---
 SEARCH_KEYWORDS = frozenset({
@@ -86,6 +87,7 @@ class ChatSession:
     history: list = field(default_factory=list)
     last_activity: float = field(default_factory=time.time)
     pending_trades: dict = field(default_factory=dict)
+    pending_watchlist: dict = field(default_factory=dict)
     message_timestamps: list = field(default_factory=list)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -342,7 +344,13 @@ def _build_system_instruction(context: str, use_search: bool = True) -> str:
         '"asset_type":"crypto"|"stock","reason":"brief reason"}[/TRADE_SUGGESTION]\n'
         "- Only suggest trades when the user asks for recommendations or when analysis strongly warrants it.\n"
         "- Never suggest trades that violate the circuit breaker or exceed max positions.\n"
-        "- Respect the current trading mode (paper vs live).\n\n"
+        "- Respect the current trading mode (paper vs live).\n"
+        "- To suggest adding/removing a symbol from the watchlist, use:\n"
+        '  [WATCHLIST_ADD]{"symbol":"LMT","asset_type":"stock","name":"Lockheed Martin","reason":"brief reason"}[/WATCHLIST_ADD]\n'
+        '  [WATCHLIST_REMOVE]{"symbol":"DOGE","asset_type":"crypto","reason":"brief reason"}[/WATCHLIST_REMOVE]\n'
+        "- Use WATCHLIST tags when the user asks to track, watch, monitor, add, or remove a symbol.\n"
+        "- Always resolve company names to their ticker symbol (e.g., \"Lockheed Martin\" -> \"LMT\").\n"
+        "- You can suggest watchlist additions alongside trade suggestions.\n\n"
         f"Current time: {now}\n\n"
         f"Bot State:\n{context}"
     )
@@ -459,6 +467,72 @@ def _build_trade_buttons(session: ChatSession, trades: list[dict]) -> Optional[I
     return InlineKeyboardMarkup(rows)
 
 
+# --- Watchlist Suggestion Parser ---
+def _parse_watchlist_suggestions(text: str) -> tuple[str, list[dict]]:
+    """Extracts [WATCHLIST_ADD] and [WATCHLIST_REMOVE] tags from response text."""
+    add_pattern = r'\[WATCHLIST_ADD\](.*?)\[/WATCHLIST_ADD\]'
+    remove_pattern = r'\[WATCHLIST_REMOVE\](.*?)\[/WATCHLIST_REMOVE\]'
+
+    items = []
+    for match in re.findall(add_pattern, text, re.DOTALL):
+        try:
+            item = json.loads(match.strip())
+            if item.get('symbol'):
+                item['action'] = 'add'
+                item.setdefault('asset_type', 'crypto')
+                items.append(item)
+        except (json.JSONDecodeError, AttributeError):
+            continue
+
+    for match in re.findall(remove_pattern, text, re.DOTALL):
+        try:
+            item = json.loads(match.strip())
+            if item.get('symbol'):
+                item['action'] = 'remove'
+                items.append(item)
+        except (json.JSONDecodeError, AttributeError):
+            continue
+
+    clean = re.sub(add_pattern, '', text, flags=re.DOTALL)
+    clean = re.sub(remove_pattern, '', clean, flags=re.DOTALL).strip()
+    return clean, items
+
+
+# --- Watchlist Buttons ---
+def _build_watchlist_buttons(session: ChatSession, items: list[dict]) -> Optional[InlineKeyboardMarkup]:
+    """Builds inline keyboard with watchlist action buttons."""
+    if not items:
+        return None
+
+    rows = []
+    for item in items:
+        item_id = next(_watchlist_counter)
+        session.pending_watchlist[item_id] = item
+
+        symbol = item['symbol']
+        name = item.get('name', '')
+        action = item['action']
+
+        if action == 'add':
+            label = f"\U0001f441 Watch {symbol}"
+            if name:
+                label += f" ({name})"
+        else:
+            label = f"\U0001f6ab Unwatch {symbol}"
+
+        rows.append([
+            InlineKeyboardButton(
+                label,
+                callback_data=f"wl:{session.user_id}:{item_id}:a",
+            ),
+            InlineKeyboardButton(
+                "Skip",
+                callback_data=f"wl:{session.user_id}:{item_id}:r",
+            ),
+        ])
+    return InlineKeyboardMarkup(rows)
+
+
 # --- Main Chat Handler ---
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles free-text messages (non-command) as AI chat."""
@@ -501,12 +575,20 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Parse trade suggestions
         clean_text, trades = _parse_trade_suggestions(raw_response)
 
+        # Parse watchlist suggestions
+        clean_text, watchlist_items = _parse_watchlist_suggestions(clean_text)
+
         # Update session history
         session.add_user_message(user_text)
         session.add_model_response(clean_text)
 
-        # Build trade buttons if any
-        keyboard = _build_trade_buttons(session, trades)
+        # Build trade and watchlist buttons, merge keyboards
+        trade_kb = _build_trade_buttons(session, trades)
+        watchlist_kb = _build_watchlist_buttons(session, watchlist_items)
+        trade_rows = trade_kb.inline_keyboard if trade_kb else []
+        wl_rows = watchlist_kb.inline_keyboard if watchlist_kb else []
+        combined_rows = list(trade_rows) + list(wl_rows)
+        keyboard = InlineKeyboardMarkup(combined_rows) if combined_rows else None
 
         # Send response (split if >4096 chars)
         if len(clean_text) > 4096:
@@ -632,6 +714,76 @@ async def handle_chat_trade_callback(update: Update, context: ContextTypes.DEFAU
     except Exception as e:
         log.error(f"Chat trade execution error: {e}", exc_info=True)
         await query.message.reply_text(f"Trade error: {e}")
+
+
+# --- Watchlist Callback Handler ---
+async def handle_watchlist_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles wl:* callback queries for watchlist add/remove."""
+    query = update.callback_query
+    user_id = query.from_user.id
+
+    if user_id not in AUTHORIZED_USER_IDS:
+        await query.answer("Not authorized.", show_alert=True)
+        return
+
+    data = query.data or ""
+    parts = data.split(":")
+    if len(parts) < 4:
+        await query.answer("Invalid action.")
+        return
+
+    _, owner_id_str, item_id_str, action = parts[:4]
+
+    if str(user_id) != owner_id_str:
+        await query.answer("Not your action.", show_alert=True)
+        return
+
+    item_id = int(item_id_str)
+    await query.answer()
+
+    session = _sessions.get(user_id)
+    if not session:
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text("Session expired. Start a new conversation.")
+        return
+
+    item = session.pending_watchlist.pop(item_id, None)
+    if not item:
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text("Watchlist suggestion expired.")
+        return
+
+    if action == 'r':
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text(f"Skipped watchlist change for {item['symbol']}.")
+        return
+
+    # Approved — apply watchlist change
+    from src.database import save_watchlist_item, remove_watchlist_item
+
+    symbol = item['symbol']
+    name = item.get('name', '')
+    display = f"{symbol} ({name})" if name else symbol
+
+    wl_config = app_config.get('settings', {}).get(
+        'telegram_enhancements', {}).get('ai_chat', {}).get('watchlist', {})
+    ttl_days = wl_config.get('default_ttl_days', 30)
+
+    try:
+        if item['action'] == 'add':
+            await asyncio.to_thread(
+                save_watchlist_item, symbol, item.get('asset_type', 'crypto'),
+                item.get('reason', ''), user_id, ttl_days)
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.message.reply_text(
+                f"Added {display} to watchlist ({ttl_days} days).")
+        else:
+            await asyncio.to_thread(remove_watchlist_item, symbol)
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.message.reply_text(f"Removed {display} from watchlist.")
+    except Exception as e:
+        log.error(f"Watchlist callback error: {e}", exc_info=True)
+        await query.message.reply_text(f"Watchlist error: {e}")
 
 
 def _get_price(symbol: str, asset_type: str) -> float:
