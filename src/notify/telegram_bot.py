@@ -1702,6 +1702,7 @@ async def _clearchat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Routes free-text messages to AI chat handler."""
+    log.info(f"[Chat Router] Text message received: {update.message.text[:50]!r}")
     from src.notify.telegram_chat import handle_chat_message, set_execute_callback
     # Wire execute callback if not yet set
     if _execute_callback:
