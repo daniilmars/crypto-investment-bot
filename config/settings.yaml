@@ -218,6 +218,27 @@ settings:
     increase_confidence_threshold: 0.75
     max_position_multiplier: 3.0
 
+  # -- Strategic Investment Categories --
+  # Long-term positions with thesis-driven exits instead of fixed SL/TP.
+  # Each category uses only a catastrophic stop-loss (no TP, no trailing stop).
+  # The position analyst evaluates against the original investment thesis.
+  strategic_categories:
+    growth:
+      label: "Growth (AI, Quantum, Biotech)"
+      catastrophic_sl: 0.25
+    sector_thesis:
+      label: "Sector Rotation Bet"
+      catastrophic_sl: 0.20
+    value:
+      label: "Undervalued Recovery Play"
+      catastrophic_sl: 0.15
+    macro_trend:
+      label: "Macro Trend Following"
+      catastrophic_sl: 0.20
+    speculative:
+      label: "Speculative Moonshot"
+      catastrophic_sl: 0.30
+
   # -- Auto-Trading Shadow Bot --
   # Parallel paper-trading bot that auto-executes all signals without confirmation.
   # Uses same watch list, indicators, and thresholds as the manual bot.
@@ -375,6 +396,12 @@ settings:
         enabled: true
         default_ttl_days: 30
         max_items: 10
+
+  # -- Live Dashboard Settings --
+  # Replaces periodic messages with a single auto-updating pinned dashboard.
+  live_dashboard:
+    enabled: true
+    daily_recap_hour_utc: 22
 
   # -- Position Monitor Settings (legacy, used when position_analyst is disabled) --
   # Sub-bot that monitors open positions and asks Gemini "hold or exit?"

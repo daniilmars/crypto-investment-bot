@@ -40,7 +40,7 @@ def _cursor(conn):
 # --- Connection Pool (for PostgreSQL) ---
 _pg_pool = None
 
-ALLOWED_TABLES = frozenset({"market_prices", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles", "stoploss_cooldowns", "position_additions", "ipo_events", "macro_regime_history", "source_registry", "signal_attribution", "experiment_log", "tuning_history", "session_peaks", "watchlist_items"})
+ALLOWED_TABLES = frozenset({"market_prices", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles", "stoploss_cooldowns", "position_additions", "ipo_events", "macro_regime_history", "source_registry", "signal_attribution", "experiment_log", "tuning_history", "session_peaks", "watchlist_items", "bot_state_kv"})
 
 # --- Database Connection Management ---
 
@@ -608,6 +608,20 @@ def initialize_database(db_url=None):
         cursor.execute(watchlist_items_sql)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_active ON watchlist_items (is_active, asset_type)")
 
+        # Bot State KV (persistent key-value store for dashboard message IDs, etc.)
+        bot_state_kv_sql = '''
+            CREATE TABLE IF NOT EXISTS bot_state_kv (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )''' if is_postgres_conn else '''
+            CREATE TABLE IF NOT EXISTS bot_state_kv (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )'''
+        cursor.execute(bot_state_kv_sql)
+
         # --- Migrate trades table: add live trading columns if missing ---
         new_trade_columns = [
             ("trading_mode", "TEXT DEFAULT 'paper'"),
@@ -687,6 +701,30 @@ def initialize_database(db_url=None):
                 conn.rollback()
         except Exception as e:
             log.warning(f"Could not add column 'exit_reason' to trades: {e}")
+            if is_postgres_conn:
+                conn.rollback()
+
+        # --- Migrate trades table: add strategy_type column (strategic trades) ---
+        try:
+            cursor.execute("ALTER TABLE trades ADD COLUMN strategy_type TEXT")
+            log.info("Added column 'strategy_type' to trades table.")
+        except (sqlite3.OperationalError, psycopg2.errors.DuplicateColumn):
+            if is_postgres_conn:
+                conn.rollback()
+        except Exception as e:
+            log.warning(f"Could not add column 'strategy_type' to trades: {e}")
+            if is_postgres_conn:
+                conn.rollback()
+
+        # --- Migrate trades table: add trade_reason column (investment thesis) ---
+        try:
+            cursor.execute("ALTER TABLE trades ADD COLUMN trade_reason TEXT")
+            log.info("Added column 'trade_reason' to trades table.")
+        except (sqlite3.OperationalError, psycopg2.errors.DuplicateColumn):
+            if is_postgres_conn:
+                conn.rollback()
+        except Exception as e:
+            log.warning(f"Could not add column 'trade_reason' to trades: {e}")
             if is_postgres_conn:
                 conn.rollback()
 
@@ -1515,6 +1553,111 @@ def clear_stoploss_cooldown(symbol: str):
         conn.commit()
     except (sqlite3.Error, psycopg2.Error) as e:
         log.error(f"Database error in clear_stoploss_cooldown: {e}", exc_info=True)
+    finally:
+        release_db_connection(conn)
+
+
+def save_bot_state(key: str, value: str):
+    """Persists a key-value pair in bot_state_kv (UPSERT)."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            if is_pg:
+                query = """
+                    INSERT INTO bot_state_kv (key, value, updated_at)
+                    VALUES (%s, %s, NOW())
+                    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value,
+                    updated_at = NOW()
+                """
+            else:
+                query = """
+                    INSERT OR REPLACE INTO bot_state_kv (key, value, updated_at)
+                    VALUES (?, ?, datetime('now'))
+                """
+            cursor.execute(query, (key, value))
+        conn.commit()
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in save_bot_state: {e}", exc_info=True)
+    finally:
+        release_db_connection(conn)
+
+
+def load_bot_state(key: str) -> str | None:
+    """Loads a value from bot_state_kv by key. Returns None if not found."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            query = "SELECT value FROM bot_state_kv WHERE key = %s" if is_pg else \
+                    "SELECT value FROM bot_state_kv WHERE key = ?"
+            cursor.execute(query, (key,))
+            row = cursor.fetchone()
+            if row:
+                return dict(row)['value'] if hasattr(row, 'keys') else row[0]
+            return None
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in load_bot_state: {e}", exc_info=True)
+        return None
+    finally:
+        release_db_connection(conn)
+
+
+def get_trades_closed_today(trading_strategy=None) -> list[dict]:
+    """Returns trades closed today (UTC). Optionally filtered by trading_strategy."""
+    from datetime import datetime, timezone
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            if is_pg:
+                base = """
+                    SELECT symbol, entry_price, exit_price, pnl, exit_reason,
+                           entry_timestamp, exit_timestamp, strategy_type
+                    FROM trades
+                    WHERE status = 'CLOSED'
+                    AND exit_timestamp >= date_trunc('day', NOW() AT TIME ZONE 'UTC')
+                """
+                params = []
+                if trading_strategy:
+                    base += " AND trading_strategy = %s"
+                    params.append(trading_strategy)
+                base += " ORDER BY exit_timestamp DESC"
+                cursor.execute(base, params)
+            else:
+                today_start = datetime.now(timezone.utc).strftime('%Y-%m-%d 00:00:00')
+                base = """
+                    SELECT symbol, entry_price, exit_price, pnl, exit_reason,
+                           entry_timestamp, exit_timestamp, strategy_type
+                    FROM trades
+                    WHERE status = 'CLOSED'
+                    AND exit_timestamp >= ?
+                """
+                params = [today_start]
+                if trading_strategy:
+                    base += " AND trading_strategy = ?"
+                    params.append(trading_strategy)
+                base += " ORDER BY exit_timestamp DESC"
+                cursor.execute(base, params)
+            rows = cursor.fetchall()
+            result = []
+            for row in rows:
+                if hasattr(row, 'keys'):
+                    result.append(dict(row))
+                else:
+                    result.append({
+                        'symbol': row[0], 'entry_price': row[1],
+                        'exit_price': row[2], 'pnl': row[3],
+                        'exit_reason': row[4], 'entry_timestamp': row[5],
+                        'exit_timestamp': row[6], 'strategy_type': row[7],
+                    })
+            return result
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in get_trades_closed_today: {e}", exc_info=True)
+        return []
     finally:
         release_db_connection(conn)
 

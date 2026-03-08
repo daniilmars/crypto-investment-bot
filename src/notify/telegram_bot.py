@@ -451,54 +451,6 @@ async def send_news_alert(triggered_symbols, sentiment_data, gemini_assessments=
     message = "\n".join(lines)
     await send_telegram_message(bot, CHAT_ID, message)
 
-_last_auto_summary: str | None = None
-
-
-async def send_auto_bot_summary(application: Application, summary: dict,
-                                positions: list, balance: dict, interval_hours: int):
-    """Sends a silent summary of auto-bot performance to the configured chat."""
-    global _last_auto_summary
-    if not telegram_config.get('enabled') or not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
-        log.warning("Telegram bot is not configured. Skipping auto-bot summary.")
-        return
-
-    total_pnl = summary.get('total_pnl', 0)
-    pnl_sign = "+" if total_pnl >= 0 else ""
-
-    message = f"*Auto-Bot Summary (last {interval_hours}h)*\n\n"
-    message += f"*Balance:* ${balance.get('total_usd', 0):,.2f}\n"
-    message += f"*Open Positions:* {len(positions)}\n"
-    message += f"*Trades:* {summary.get('total_closed', 0)} closed\n"
-    message += f"*PnL:* {pnl_sign}${total_pnl:,.2f} (win rate {summary.get('win_rate', 0):.1f}%)\n"
-
-    if positions:
-        message += "\n*Open positions:*\n"
-        for pos in positions:
-            symbol = pos.get('symbol', '?')
-            entry = pos.get('entry_price', 0)
-            qty = pos.get('quantity', 0)
-            current = _get_position_price(symbol) or entry
-            pnl = (current - entry) * qty
-            pnl_pct = ((current - entry) / entry * 100) if entry > 0 else 0
-            pnl_emoji = "+" if pnl_pct >= 0 else ""
-            message += f"- {symbol}: {pnl_emoji}{pnl_pct:.1f}% (${pnl:,.2f})\n"
-
-    # Deduplicate: skip if identical to the last summary sent
-    if message == _last_auto_summary:
-        log.debug("Auto-bot summary unchanged — skipping duplicate send.")
-        return
-    _last_auto_summary = message
-
-    try:
-        await application.bot.send_message(
-            chat_id=CHAT_ID, text=message, parse_mode='Markdown',
-            disable_notification=True
-        )
-        log.info("Sent auto-bot summary.")
-    except Exception as e:
-        log.error(f"Error sending auto-bot summary: {e}")
-
-
 async def send_market_event_alert(alert: dict):
     """Formats and sends a proactive market event alert.
 
@@ -582,31 +534,6 @@ async def send_market_event_alert(alert: dict):
     await send_telegram_message(bot, CHAT_ID, message)
     log.info(f"Sent market alert: {alert_type}")
 
-
-async def send_performance_report(application: Application, summary: dict, interval_hours: int):
-    """Formats and sends a performance report. Skips if no trades closed."""
-    if not telegram_config.get('enabled') or not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
-        log.error("Telegram bot is not configured.")
-        return
-
-    if summary.get('total_closed', 0) == 0:
-        log.debug("No closed trades — skipping performance report.")
-        return
-
-    message = (
-        f"📈 *Bot Performance Report ({interval_hours}h)* 📈\n\n"
-        f"✅ Bot is running.\n\n"
-        f"*Trades (Paper Trading):*\n"
-        f"- Total Closed: {summary.get('total_closed', 0)}\n"
-        f"- Wins: {summary.get('wins', 0)}\n"
-        f"- Losses: {summary.get('losses', 0)}\n\n"
-        f"*Performance:*\n"
-        f"- Total PnL: ${summary.get('total_pnl', 0):,.2f}\n"
-        f"- Win Rate: {summary.get('win_rate', 0):.2f}%\n\n"
-        f"*This is a paper trading summary.*"
-    )
-    await application.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode='Markdown')
-    log.info("Successfully sent hourly performance report.")
 
 # --- Command Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):

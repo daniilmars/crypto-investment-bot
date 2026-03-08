@@ -18,7 +18,8 @@ from src.collectors.alpha_vantage_data import (get_company_overview,
 from src.collectors.binance_data import get_current_price, get_all_prices
 from src.config import app_config
 from src.analysis.macro_regime import get_macro_regime
-from src.analysis.event_calendar import get_event_warnings_for_positions
+from src.analysis.event_calendar import (get_event_warnings_for_positions,
+                                         get_upcoming_macro_events)
 from src.database import (get_historical_prices,
                           get_trade_history_stats,
                           save_signal, save_macro_regime)
@@ -26,6 +27,7 @@ from src.execution.binance_trader import (get_account_balance,
                                           get_open_positions,
                                           _is_live_trading, _get_trading_mode)
 from src.execution.circuit_breaker import (check_circuit_breaker, get_daily_pnl,
+                                           get_circuit_breaker_status,
                                            get_recent_closed_trades,
                                            get_unrealized_pnl,
                                            update_session_peak)
@@ -386,6 +388,37 @@ async def run_bot_cycle():
                           sentiment_config=sentiment_config,
                           macro_multiplier=macro_multiplier,
                           suppress_buys=suppress_buys)
+
+    # --- Update Live Dashboard ---
+    try:
+        from src.notify.telegram_live_dashboard import update_live_dashboard
+        from src.database import get_trade_summary
+        stock_positions = await asyncio.to_thread(
+            get_open_positions, asset_type='stock')
+        auto_summary_data = await get_trade_summary(
+            24, 'auto') if auto_enabled else {}
+        cycle_data = {
+            'crypto_positions': _cached_crypto_positions,
+            'stock_positions': stock_positions,
+            'auto_positions': _cached_auto_positions,
+            'crypto_balance': await asyncio.to_thread(
+                get_account_balance, asset_type='crypto'),
+            'stock_balance': await asyncio.to_thread(
+                get_account_balance, asset_type='stock'),
+            'daily_pnl': await asyncio.to_thread(get_daily_pnl),
+            'regime': macro_regime_result,
+            'cb_status': await asyncio.to_thread(
+                get_circuit_breaker_status),
+            'events': await asyncio.to_thread(
+                get_upcoming_macro_events, 7),
+            'prices': current_prices_dict,
+            'last_signals': [],
+            'auto_summary': auto_summary_data,
+        }
+        if _application:
+            await update_live_dashboard(_application, cycle_data)
+    except Exception as e:
+        log.warning(f"Dashboard update failed: {e}")
 
 
 async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,

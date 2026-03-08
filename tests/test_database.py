@@ -24,13 +24,15 @@ def test_initialize_database_creates_tables(mock_get_db_connection, mock_release
     initialize_database()
 
     # Assert: Check if CREATE TABLE + ALTER TABLE statements were executed
-    # 18 CREATE TABLEs (incl. session_peaks, watchlist_items) + 7 CREATE INDEXes (original + watchlist)
+    # 19 CREATE TABLEs (incl. session_peaks, watchlist_items, bot_state_kv)
+    # + 7 CREATE INDEXes (original + watchlist)
     # + 6 ALTER TABLE (trade columns) + 1 ALTER TABLE (trailing_stop_peak)
     # + 1 ALTER TABLE (scraped_articles category) + 1 ALTER TABLE (scraped_articles gemini_score)
     # + 1 ALTER TABLE (trades trading_strategy) + 1 ALTER TABLE (trades exit_reason)
+    # + 1 ALTER TABLE (trades strategy_type) + 1 ALTER TABLE (trades trade_reason)
     # + 1 ALTER TABLE (cb_events asset_type)
-    # + 1 UPDATE (resolve stale cb_events) + 6 performance indexes = 44
-    assert mock_cursor.execute.call_count == 44
+    # + 1 UPDATE (resolve stale cb_events) + 6 performance indexes = 47
+    assert mock_cursor.execute.call_count == 47
 
     # Check the SQL statements (case-insensitive and ignoring whitespace)
     executed_queries = [' '.join(call[0][0].split()) for call in mock_cursor.execute.call_args_list]

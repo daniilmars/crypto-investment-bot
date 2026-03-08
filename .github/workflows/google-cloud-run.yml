@@ -202,6 +202,23 @@ jobs:
               increase_confidence_threshold: 0.75
               max_position_multiplier: 3.0
 
+            strategic_categories:
+              growth:
+                label: "Growth (AI, Quantum, Biotech)"
+                catastrophic_sl: 0.25
+              sector_thesis:
+                label: "Sector Rotation Bet"
+                catastrophic_sl: 0.20
+              value:
+                label: "Undervalued Recovery Play"
+                catastrophic_sl: 0.15
+              macro_trend:
+                label: "Macro Trend Following"
+                catastrophic_sl: 0.20
+              speculative:
+                label: "Speculative Moonshot"
+                catastrophic_sl: 0.30
+
             auto_trading:
               enabled: true
               paper_trading_initial_capital: 10000.0
@@ -336,6 +353,10 @@ jobs:
                   enabled: true
                   default_ttl_days: 30
                   max_items: 10
+
+            live_dashboard:
+              enabled: true
+              daily_recap_hour_utc: 22
 
             position_monitor:
               enabled: true

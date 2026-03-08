@@ -321,36 +321,8 @@ def test_auto_clear_trailing_stop():
 
 
 # ---------------------------------------------------------------------------
-# Telegram: auto-bot summary and status
+# Telegram: auto-bot status
 # ---------------------------------------------------------------------------
-
-def test_send_auto_bot_summary():
-    """send_auto_bot_summary sends a silent message with correct content."""
-    import asyncio
-    from src.notify.telegram_bot import send_auto_bot_summary
-
-    mock_app = MagicMock()
-    mock_bot = AsyncMock()
-    mock_app.bot = mock_bot
-
-    summary = {"total_closed": 3, "wins": 2, "losses": 1, "total_pnl": 150.0, "win_rate": 66.7}
-    positions = [{"symbol": "BTC", "entry_price": 50000.0, "quantity": 0.1}]
-    balance = {"USDT": 5150.0, "total_usd": 10150.0}
-
-    with patch('src.notify.telegram_bot.telegram_config', {'enabled': True}), \
-         patch('src.notify.telegram_bot.TOKEN', 'test_token'), \
-         patch('src.notify.telegram_bot.CHAT_ID', '12345'), \
-         patch('src.notify.telegram_bot._get_position_price', return_value=51000.0):
-        asyncio.run(
-            send_auto_bot_summary(mock_app, summary, positions, balance, 1)
-        )
-
-    mock_bot.send_message.assert_called_once()
-    call_kwargs = mock_bot.send_message.call_args[1]
-    assert call_kwargs['disable_notification'] is True
-    assert 'Auto-Bot Summary' in call_kwargs['text']
-    assert '$10,150.00' in call_kwargs['text']
-
 
 def test_auto_status_command():
     """The /auto_status command handler returns status info."""

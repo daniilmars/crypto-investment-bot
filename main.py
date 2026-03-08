@@ -16,12 +16,9 @@ from fastapi.responses import JSONResponse
 from telegram import Update
 
 from src.config import app_config
-from src.database import (get_trade_summary,
-                          initialize_database,
+from src.database import (initialize_database,
                           load_trailing_stop_peaks,
                           load_stoploss_cooldowns, load_signal_cooldowns)
-from src.execution.binance_trader import (get_account_balance,
-                                          get_open_positions)
 from src.execution.circuit_breaker import (resolve_stale_circuit_breaker_events,
                                            load_session_peaks)
 from src.logger import log
@@ -29,15 +26,14 @@ from src.analysis.market_alerts import generate_daily_digest
 from src.notify.telegram_bot import (start_bot,
                                      register_execute_callback,
                                      cleanup_expired_signals,
-                                     send_auto_bot_summary,
                                      send_market_event_alert)
-from src.notify.telegram_alerts_enhanced import (
-    send_morning_briefing, send_portfolio_digest,
+from src.notify.telegram_live_dashboard import (
+    load_dashboard_state, send_daily_recap,
 )
 from src.orchestration import bot_state
 from src.orchestration.trade_executor import execute_confirmed_signal
 from src.orchestration.cycle_runner import (
-    run_bot_cycle, run_stock_cycle, set_application,
+    run_bot_cycle, set_application,
 )
 
 # Initialize the database at the start of the application
@@ -70,41 +66,24 @@ async def bot_loop():
         await asyncio.sleep(run_interval_minutes * 60)
 
 
-async def run_single_status_update():
-    """Fetches and sends a single status update."""
-    status_config = app_config.get('settings', {}).get('regular_status_update', {})
-    interval_hours = status_config.get('interval_hours', 1)
-
-    from src.database import get_trade_summary
-    from src.notify.telegram_bot import send_performance_report
-
-    try:
-        log.info("Fetching trade summary for status update...")
-        summary = await get_trade_summary(interval_hours)
-        if application:
-            await send_performance_report(application, summary, interval_hours)
-    except Exception as e:
-        log.error(f"Error in run_single_status_update: {e}")
-
-
-async def status_update_loop():
-    """
-    A separate loop to send periodic status updates.
-    """
-    status_config = app_config.get('settings', {}).get('regular_status_update', {})
-    if not status_config.get('enabled'):
-        log.info("Regular status updates are disabled.")
+async def daily_recap_loop():
+    """Sends a daily recap at the configured hour (UTC)."""
+    cfg = app_config.get('settings', {}).get('live_dashboard', {})
+    if not cfg.get('enabled', True):
         return
-
-    interval_hours = status_config.get('interval_hours', 1)
-    log.info(f"Starting regular status update loop. Interval: {interval_hours} hours.")
-
+    target_hour = cfg.get('daily_recap_hour_utc', 22)
     while True:
+        now = datetime.now(timezone.utc)
+        next_run = now.replace(hour=target_hour, minute=0, second=0, microsecond=0)
+        if next_run <= now:
+            next_run += timedelta(days=1)
+        wait_seconds = (next_run - now).total_seconds()
+        await asyncio.sleep(wait_seconds)
         try:
-            await run_single_status_update()
+            if application:
+                await send_daily_recap(application)
         except Exception as e:
-            log.error(f"Error in status_update_loop: {e}", exc_info=True)
-        await asyncio.sleep(interval_hours * 3600)
+            log.error(f"Daily recap error: {e}", exc_info=True)
 
 
 async def _signal_cleanup_loop():
@@ -115,24 +94,6 @@ async def _signal_cleanup_loop():
         except Exception as e:
             log.error(f"Error in signal cleanup loop: {e}", exc_info=True)
         await asyncio.sleep(60)
-
-
-async def auto_bot_summary_loop():
-    """Periodic summary of auto-bot performance."""
-    auto_cfg = app_config.get('settings', {}).get('auto_trading', {})
-    if not auto_cfg.get('enabled', False):
-        return
-    interval = auto_cfg.get('summary_interval_hours', 1)
-    while True:
-        await asyncio.sleep(interval * 3600)
-        try:
-            summary = await get_trade_summary(interval, 'auto')
-            auto_positions = await asyncio.to_thread(get_open_positions, trading_strategy='auto')
-            auto_balance = await asyncio.to_thread(get_account_balance, trading_strategy='auto')
-            if application:
-                await send_auto_bot_summary(application, summary, auto_positions, auto_balance, interval)
-        except Exception as e:
-            log.error(f"Auto-bot summary error: {e}", exc_info=True)
 
 
 async def daily_digest_loop():
@@ -155,44 +116,6 @@ async def daily_digest_loop():
                 log.info("Daily market digest sent.")
         except Exception as e:
             log.error(f"Daily digest error: {e}", exc_info=True)
-
-
-async def morning_briefing_loop():
-    """Sends a morning briefing at the configured hour (UTC)."""
-    cfg = app_config.get('settings', {}).get('telegram_enhancements', {}).get(
-        'morning_briefing', {})
-    if not cfg.get('enabled', False):
-        return
-    target_hour = cfg.get('hour_utc', 13)
-    while True:
-        now = datetime.now(timezone.utc)
-        next_run = now.replace(hour=target_hour, minute=0, second=0, microsecond=0)
-        if next_run <= now:
-            next_run += timedelta(days=1)
-        wait_seconds = (next_run - now).total_seconds()
-        await asyncio.sleep(wait_seconds)
-        try:
-            if application:
-                await send_morning_briefing(application)
-        except Exception as e:
-            log.error(f"Morning briefing error: {e}", exc_info=True)
-
-
-async def portfolio_digest_loop():
-    """Periodic portfolio digest sent every N hours."""
-    cfg = app_config.get('settings', {}).get('telegram_enhancements', {}).get(
-        'portfolio_digest', {})
-    if not cfg.get('enabled', False):
-        return
-    interval = cfg.get('interval_hours', 4)
-    await asyncio.sleep(interval * 3600)  # skip first interval
-    while True:
-        try:
-            if application:
-                await send_portfolio_digest(application)
-        except Exception as e:
-            log.error(f"Portfolio digest error: {e}", exc_info=True)
-        await asyncio.sleep(interval * 3600)
 
 
 async def db_cleanup_loop():
@@ -326,29 +249,19 @@ async def startup_event():
     # Register signal confirmation callback
     register_execute_callback(execute_confirmed_signal)
 
+    # Load live dashboard state (persisted message ID)
+    await load_dashboard_state()
+
     # Start background tasks
     _background_tasks.append(asyncio.create_task(bot_loop()))
-    _background_tasks.append(asyncio.create_task(status_update_loop()))
     _background_tasks.append(asyncio.create_task(_signal_cleanup_loop()))
-
-    auto_cfg = app_config.get('settings', {}).get('auto_trading', {})
-    if auto_cfg.get('enabled', False):
-        _background_tasks.append(asyncio.create_task(auto_bot_summary_loop()))
-        log.info("Auto-trading shadow bot enabled — summary loop started.")
 
     alerts_cfg = app_config.get('settings', {}).get('market_alerts', {})
     if alerts_cfg.get('enabled', True):
         _background_tasks.append(asyncio.create_task(daily_digest_loop()))
         log.info("Daily market digest loop started.")
 
-    enhancements_cfg = app_config.get('settings', {}).get('telegram_enhancements', {})
-    if enhancements_cfg.get('morning_briefing', {}).get('enabled', False):
-        _background_tasks.append(asyncio.create_task(morning_briefing_loop()))
-        log.info("Morning briefing loop started.")
-    if enhancements_cfg.get('portfolio_digest', {}).get('enabled', False):
-        _background_tasks.append(asyncio.create_task(portfolio_digest_loop()))
-        log.info("Portfolio digest loop started.")
-
+    _background_tasks.append(asyncio.create_task(daily_recap_loop()))
     _background_tasks.append(asyncio.create_task(db_cleanup_loop()))
     _background_tasks.append(asyncio.create_task(db_backup_loop()))
     _background_tasks.append(asyncio.create_task(_chat_session_cleanup_loop()))

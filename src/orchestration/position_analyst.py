@@ -112,6 +112,8 @@ async def _run_investment_analyst(
             trailing_stop_info=ts_info,
             position_additions=additions,
             max_position_multiplier=max_mult,
+            strategy_type=position.get('strategy_type'),
+            trade_reason=position.get('trade_reason'),
         )
         bot_state.set_analyst_last_run(order_id, now)
 
@@ -144,7 +146,7 @@ async def _run_investment_analyst(
         else:
             log.info(f"[{symbol}] Position analyst: {rec} "
                      f"(confidence={confidence:.2f}, risk={risk_level})")
-            if risk_level in ('yellow', 'red'):
+            if risk_level == 'red':
                 await send_position_health_alert(
                     symbol, current_price, pnl_pct * 100, result, position)
 
