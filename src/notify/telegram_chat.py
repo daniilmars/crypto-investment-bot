@@ -268,7 +268,7 @@ def _gather_context_sync() -> str:
 
     # Trade performance (24h)
     try:
-        summary = get_trade_summary(hours_ago=24)
+        summary = get_trade_summary.sync(hours_ago=24)
         if summary and summary.get('total_closed', 0) > 0:
             lines.append("\n## 24h Trade Performance")
             lines.append(f"- Closed: {summary['total_closed']} "
@@ -299,7 +299,7 @@ def _gather_context_sync() -> str:
         if held_symbols:
             all_articles = []
             for sym in held_symbols[:5]:
-                articles = get_recent_articles(sym, hours=24, limit=5)
+                articles = get_recent_articles.sync(sym, hours=24, limit=5)
                 for a in articles:
                     title = a.get('title', '')
                     if title:
