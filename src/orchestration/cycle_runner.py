@@ -364,10 +364,14 @@ async def run_bot_cycle():
         all_open = open_positions + (auto_open_crypto if auto_enabled else [])
         event_warnings = await asyncio.to_thread(get_event_warnings_for_positions, all_open)
         for warn in event_warnings:
-            log.info(f"Event warning: {warn['symbol']} — {warn['event_type']} in {warn['hours_until']:.0f}h")
+            sym = warn['symbol']
+            log.info(f"Event warning: {sym} — {warn['event_type']} in {warn['hours_until']:.0f}h")
+            asset_type = warn.get('asset_type', 'crypto')
+            price = warn.get('current_price', 0)
             await send_telegram_alert({
-                'signal': 'INFO', 'symbol': warn['symbol'],
-                'current_price': 0,
+                'signal': 'INFO', 'symbol': sym,
+                'current_price': price,
+                'asset_type': asset_type,
                 'reason': f"Upcoming {warn['event_type']} in {warn['hours_until']:.0f}h — "
                           f"consider reducing exposure.",
             })

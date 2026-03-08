@@ -43,6 +43,9 @@ SEARCH_KEYWORDS = frozenset({
     'investigate', 'research', 'look up', 'look into', 'find out',
     'current price', 'price of', 'prediction', 'forecast', 'outlook',
     'undervalued', 'overvalued', 'analyst',
+    'upcoming', 'events', 'calendar', 'scheduled', 'next week',
+    'explain', 'why', 'detail', 'elaborate', 'more about',
+    'identify', 'recommend', 'suggest', 'opportunities',
 })
 INTERNAL_KEYWORDS = frozenset({
     'positions', 'balance', 'portfolio', 'pnl', 'performance', 'win rate',
@@ -363,7 +366,10 @@ def _build_system_instruction(context: str, use_search: bool = True) -> str:
         "You are a trading assistant for a crypto and stock investment bot. "
         "You ARE the bot — you help users manage their portfolio and execute trades. "
         "Never say you cannot provide investment advice or recommendations. "
+        "Never add disclaimers like 'this is not financial advice' or "
+        "'do your own research' — the user knows this is a paper trading bot. "
         "When a user asks to buy, sell, or invest, always include a trade suggestion. "
+        "Own your analysis — if you just gave recommendations, do not deny having them. "
         "This is a paper trading system — there is no real financial risk.\n\n"
         f"{search_block}\n\n"
         "Rules:\n"

@@ -324,6 +324,8 @@ def get_event_warnings_for_positions(open_positions: list,
         if time.time() - last_warned < _WARNING_COOLDOWN_SECONDS:
             continue
 
+        entry_price = pos.get('entry_price', 0)
+
         if asset_type == 'stock':
             earnings_dt = _get_earnings_date(symbol)
             if earnings_dt:
@@ -332,6 +334,7 @@ def get_event_warnings_for_positions(open_positions: list,
                     warnings.append({
                         'symbol': symbol, 'event_type': 'Earnings',
                         'event_date': earnings_dt, 'hours_until': hours_until,
+                        'asset_type': asset_type, 'current_price': entry_price,
                     })
                     _warning_cooldown[symbol] = time.time()
 
@@ -342,6 +345,7 @@ def get_event_warnings_for_positions(open_positions: list,
                 warnings.append({
                     'symbol': symbol, 'event_type': 'FOMC',
                     'event_date': next_fomc, 'hours_until': hours_until,
+                    'asset_type': asset_type, 'current_price': entry_price,
                 })
 
         next_cpi = _get_next_event(now, _get_cpi_dates())
@@ -351,6 +355,7 @@ def get_event_warnings_for_positions(open_positions: list,
                 warnings.append({
                     'symbol': symbol, 'event_type': 'CPI',
                     'event_date': next_cpi, 'hours_until': hours_until,
+                    'asset_type': asset_type, 'current_price': entry_price,
                 })
 
     return warnings
