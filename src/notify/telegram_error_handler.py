@@ -17,6 +17,13 @@ class TelegramErrorHandler(logging.Handler):
     MIN_INTERVAL = 60  # seconds between Telegram sends
     MAX_BATCH = 10     # max errors per message
 
+    # Known recurring errors that are noise — suppress from Telegram alerts
+    IGNORE_PATTERNS = [
+        'KASUSDT',           # Kaspa not on Binance
+        'ALPACA_API_KEY',    # Alpaca not configured
+        'Invalid symbol',    # generic invalid symbol noise
+    ]
+
     def __init__(self, token: str, chat_id: str, level=logging.ERROR):
         super().__init__(level)
         self._token = token
@@ -30,6 +37,12 @@ class TelegramErrorHandler(logging.Handler):
     def emit(self, record: logging.LogRecord):
         try:
             msg = self.format(record)
+
+            # Skip known recurring noise
+            for pattern in self.IGNORE_PATTERNS:
+                if pattern in msg:
+                    return
+
             # Deduplicate by first 120 chars (ignore timestamps)
             dedup_key = msg[:120]
             with self._lock:

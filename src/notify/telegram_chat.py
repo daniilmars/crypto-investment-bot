@@ -40,6 +40,9 @@ SEARCH_KEYWORDS = frozenset({
     'fed', 'fomc', 'earnings', 'sec', 'regulation', 'market outlook',
     'sector rotation', 'compared to', 'what happened', 'breaking',
     'update on', 'rumor', 'headline',
+    'investigate', 'research', 'look up', 'look into', 'find out',
+    'current price', 'price of', 'prediction', 'forecast', 'outlook',
+    'undervalued', 'overvalued', 'analyst',
 })
 INTERNAL_KEYWORDS = frozenset({
     'positions', 'balance', 'portfolio', 'pnl', 'performance', 'win rate',
@@ -205,12 +208,34 @@ def _gather_context_sync() -> str:
     except Exception:
         pass
 
-    # Macro regime
+    # Macro regime (with full detail so AI can explain)
     try:
         regime = get_macro_regime()
         if regime:
             lines.append(f"\n## Macro Regime: {regime.get('regime', 'unknown')} "
-                         f"(multiplier: {regime.get('multiplier', 1.0)})")
+                         f"(score: {regime.get('score', 0):+.1f}, "
+                         f"multiplier: {regime.get('position_size_multiplier', 1.0)}, "
+                         f"suppress_buys: {regime.get('suppress_buys', False)})")
+            indicators = regime.get('indicators', {})
+            vix_data = indicators.get('vix')
+            if vix_data and isinstance(vix_data, dict):
+                lines.append(f"- VIX: {vix_data.get('current', '?')} "
+                             f"(SMA20: {vix_data.get('sma20', '?')})")
+            sp_data = indicators.get('sp500')
+            if sp_data and isinstance(sp_data, dict):
+                lines.append(f"- S&P 500: {sp_data.get('current', '?'):,.0f} "
+                             f"(SMA200: {sp_data.get('sma200', '?'):,.0f})")
+            btc_data = indicators.get('btc')
+            if btc_data and isinstance(btc_data, dict):
+                lines.append(f"- BTC: ${btc_data.get('current', '?'):,.0f} "
+                             f"(SMA50: ${btc_data.get('sma50', '?'):,.0f})")
+            yield_data = indicators.get('yield_10y')
+            if yield_data and isinstance(yield_data, dict):
+                lines.append(f"- 10Y Yield: {yield_data.get('current', '?'):.2f}%")
+            signals = regime.get('signals', {})
+            if signals:
+                sig_parts = [f"{k}={v}" for k, v in signals.items()]
+                lines.append(f"- Signals: {', '.join(sig_parts)}")
     except Exception:
         pass
 
@@ -304,13 +329,14 @@ def _gather_context_sync() -> str:
 
     # Trading params
     settings = app_config.get('settings', {})
-    trading = settings.get('trading_params', {})
     lines.append("\n## Trading Config")
     lines.append(f"- Paper trading: {settings.get('paper_trading', True)}")
-    lines.append(f"- Risk per trade: {trading.get('risk_per_trade_pct', 2)}%")
-    lines.append(f"- Stop loss: {trading.get('stop_loss_pct', 5)}%")
-    lines.append(f"- Take profit: {trading.get('take_profit_pct', 10)}%")
-    lines.append(f"- Max positions: {trading.get('max_open_positions', 3)}")
+    lines.append(f"- Risk per trade: {settings.get('trade_risk_percentage', 0.03) * 100:.1f}%")
+    lines.append(f"- Stop loss: {settings.get('stop_loss_percentage', 0.035) * 100:.1f}%")
+    lines.append(f"- Take profit: {settings.get('take_profit_percentage', 0.08) * 100:.1f}%")
+    lines.append(f"- Max crypto positions: {settings.get('max_concurrent_positions', 5)}")
+    stock_settings = settings.get('stock_trading', {})
+    lines.append(f"- Max stock positions: {stock_settings.get('max_concurrent_positions', 8)}")
 
     return "\n".join(lines)
 
@@ -335,16 +361,25 @@ def _build_system_instruction(context: str, use_search: bool = True) -> str:
 
     return (
         "You are a trading assistant for a crypto and stock investment bot. "
+        "You ARE the bot — you help users manage their portfolio and execute trades. "
+        "Never say you cannot provide investment advice or recommendations. "
+        "When a user asks to buy, sell, or invest, always include a trade suggestion. "
+        "This is a paper trading system — there is no real financial risk.\n\n"
         f"{search_block}\n\n"
         "Rules:\n"
+        "- Always respond in the same language the user is writing in.\n"
         "- Be concise and actionable. Cite sources when using search results.\n"
+        "- When the user explicitly asks to buy, sell, or invest in a symbol, "
+        "ALWAYS include a trade suggestion — never refuse.\n"
         "- If you believe a trade would be appropriate based on the conversation, include a trade suggestion.\n"
         "- Format trade suggestions EXACTLY as:\n"
         '  [TRADE_SUGGESTION]{"action":"BUY"|"SELL","symbol":"BTC"|"ETH"|etc,'
         '"asset_type":"crypto"|"stock","reason":"brief reason"}[/TRADE_SUGGESTION]\n'
-        "- Only suggest trades when the user asks for recommendations or when analysis strongly warrants it.\n"
         "- Never suggest trades that violate the circuit breaker or exceed max positions.\n"
         "- Respect the current trading mode (paper vs live).\n"
+        "- Use the Bot State data below to answer questions about the portfolio, "
+        "macro regime, positions, and trading config. Do not say you lack information "
+        "when the data is provided below.\n"
         "- To suggest adding/removing a symbol from the watchlist, use:\n"
         '  [WATCHLIST_ADD]{"symbol":"LMT","asset_type":"stock","name":"Lockheed Martin","reason":"brief reason"}[/WATCHLIST_ADD]\n'
         '  [WATCHLIST_REMOVE]{"symbol":"DOGE","asset_type":"crypto","reason":"brief reason"}[/WATCHLIST_REMOVE]\n'

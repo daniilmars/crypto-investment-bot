@@ -451,9 +451,13 @@ async def send_news_alert(triggered_symbols, sentiment_data, gemini_assessments=
     message = "\n".join(lines)
     await send_telegram_message(bot, CHAT_ID, message)
 
+_last_auto_summary: str | None = None
+
+
 async def send_auto_bot_summary(application: Application, summary: dict,
                                 positions: list, balance: dict, interval_hours: int):
     """Sends a silent summary of auto-bot performance to the configured chat."""
+    global _last_auto_summary
     if not telegram_config.get('enabled') or not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
         log.warning("Telegram bot is not configured. Skipping auto-bot summary.")
         return
@@ -478,6 +482,12 @@ async def send_auto_bot_summary(application: Application, summary: dict,
             pnl_pct = ((current - entry) / entry * 100) if entry > 0 else 0
             pnl_emoji = "+" if pnl_pct >= 0 else ""
             message += f"- {symbol}: {pnl_emoji}{pnl_pct:.1f}% (${pnl:,.2f})\n"
+
+    # Deduplicate: skip if identical to the last summary sent
+    if message == _last_auto_summary:
+        log.debug("Auto-bot summary unchanged — skipping duplicate send.")
+        return
+    _last_auto_summary = message
 
     try:
         await application.bot.send_message(
@@ -574,11 +584,15 @@ async def send_market_event_alert(alert: dict):
 
 
 async def send_performance_report(application: Application, summary: dict, interval_hours: int):
-    """Formats and sends a performance report."""
+    """Formats and sends a performance report. Skips if no trades closed."""
     if not telegram_config.get('enabled') or not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
         log.error("Telegram bot is not configured.")
         return
-    
+
+    if summary.get('total_closed', 0) == 0:
+        log.debug("No closed trades — skipping performance report.")
+        return
+
     message = (
         f"📈 *Bot Performance Report ({interval_hours}h)* 📈\n\n"
         f"✅ Bot is running.\n\n"
@@ -1732,6 +1746,17 @@ async def _handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYP
     await handle_chat_message(update, context)
 
 
+# --- Error Handler ---
+async def _error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """Handles errors from Telegram handlers — logs and continues."""
+    from telegram.error import NetworkError, TimedOut
+    err = context.error
+    if isinstance(err, (NetworkError, TimedOut)):
+        log.warning(f"Telegram network error (will retry): {err}")
+    else:
+        log.error(f"Telegram handler error: {err}", exc_info=err)
+
+
 # --- Bot Lifecycle Management ---
 async def start_bot() -> Application:
     """
@@ -1781,6 +1806,7 @@ async def start_bot() -> Application:
             MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_chat_message),
         ]
         application.add_handlers(handlers)
+        application.add_error_handler(_error_handler)
         await application.initialize()
         await application.start()
         log.info("Deleting any existing webhooks...")

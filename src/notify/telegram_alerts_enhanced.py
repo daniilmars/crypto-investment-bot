@@ -63,7 +63,8 @@ def build_morning_briefing() -> str:
         regime_name = regime.get('regime', '?')
         score = regime.get('score', 0)
         indicators = regime.get('indicators', {})
-        vix = indicators.get('vix', 0)
+        vix_raw = indicators.get('vix')
+        vix = vix_raw.get('current', 0) if isinstance(vix_raw, dict) else (vix_raw or 0)
 
         # Portfolio
         crypto_bal = get_account_balance(asset_type='crypto')
@@ -89,10 +90,12 @@ def build_morning_briefing() -> str:
         ]
 
         # S&P and BTC from indicators if available
-        sp500 = indicators.get('sp500_change_pct')
-        btc_price = indicators.get('btc_price')
+        sp500_raw = indicators.get('sp500')
+        sp500 = sp500_raw.get('change_pct') if isinstance(sp500_raw, dict) else sp500_raw
+        btc_raw = indicators.get('btc')
+        btc_price = btc_raw.get('current') if isinstance(btc_raw, dict) else btc_raw
         if sp500 is not None:
-            lines.append(f"S&P {sp500:+.1f}%", )
+            lines.append(f"S&P {sp500:+.1f}%")
         if btc_price is not None:
             lines.append(f"BTC ${btc_price:,.0f}")
 
@@ -168,8 +171,8 @@ def build_portfolio_digest() -> str:
 
         # Slot usage
         settings = app_config.get('settings', {})
-        max_crypto = settings.get('max_open_positions', 5)
-        max_stocks = settings.get('stock_trading', {}).get('max_positions', 8)
+        max_crypto = settings.get('max_concurrent_positions', 5)
+        max_stocks = settings.get('stock_trading', {}).get('max_concurrent_positions', 8)
 
         # Unrealized PnL
         crypto_unrealized = sum(p.get('pnl', 0) for p in crypto_pos)
