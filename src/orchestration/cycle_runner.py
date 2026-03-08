@@ -381,13 +381,18 @@ async def run_bot_cycle():
         log.warning(f"Event warnings failed: {e}")
 
     # --- Run Stock Trading Cycle ---
-    await run_stock_cycle(settings, news_per_symbol=news_per_symbol,
-                          news_config=news_config,
-                          gemini_assessments=gemini_assessments,
-                          signal_mode=signal_mode,
-                          sentiment_config=sentiment_config,
-                          macro_multiplier=macro_multiplier,
-                          suppress_buys=suppress_buys)
+    stock_prices = await run_stock_cycle(
+        settings, news_per_symbol=news_per_symbol,
+        news_config=news_config,
+        gemini_assessments=gemini_assessments,
+        signal_mode=signal_mode,
+        sentiment_config=sentiment_config,
+        macro_multiplier=macro_multiplier,
+        suppress_buys=suppress_buys)
+
+    # Merge stock prices into current_prices_dict for dashboard
+    if stock_prices:
+        current_prices_dict.update(stock_prices)
 
     # --- Update Live Dashboard ---
     try:
@@ -435,7 +440,7 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
     stock_settings = settings.get('stock_trading', {})
     if not stock_settings.get('enabled', False):
         log.info("Stock trading is disabled. Skipping stock cycle.")
-        return
+        return {}
 
     # IPO watchlist promotion
     ipo_cfg = settings.get('ipo_tracking', {})
@@ -472,14 +477,14 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
 
     if not watch_list:
         log.info("Stock watch list is empty. Skipping stock cycle.")
-        return
+        return {}
 
     broker = stock_settings.get('broker', 'paper_only')
     use_alpaca_data = broker == 'alpaca'
 
     if not _is_market_open():
         log.info("NYSE is closed. Skipping stock cycle.")
-        return
+        return {}
 
     log.info(f"--- Starting stock trading cycle for {len(watch_list)} symbols (broker={broker}) ---")
 
@@ -729,3 +734,8 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                 asset_type='stock', trading_strategy='auto', label='AUTO', is_auto=True)
 
     log.info("--- Stock trading cycle complete ---")
+
+    # Return stock prices for dashboard enrichment
+    return {sym: stock_batch_prices[sym]['price']
+            for sym in stock_batch_prices
+            if stock_batch_prices.get(sym, {}).get('price')}
