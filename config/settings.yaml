@@ -246,7 +246,7 @@ settings:
   auto_trading:
     enabled: true
     paper_trading_initial_capital: 10000.0
-    max_concurrent_positions: 10
+    max_concurrent_positions: 20
     summary_interval_hours: 1
 
   # -- IPO Tracking Settings --
