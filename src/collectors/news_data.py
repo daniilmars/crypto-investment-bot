@@ -1,6 +1,8 @@
 import math
+import random
 import re
 import statistics
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
@@ -55,7 +57,7 @@ SYMBOL_KEYWORDS = {
     'NVDA': ['NVDA', 'Nvidia stock', 'NVIDIA'],
     'META': ['Meta Platforms', 'Meta stock'],  # "META" alone too common
     'TSLA': ['TSLA', 'Tesla stock', 'Tesla Inc'],
-    'AVGO': ['AVGO', 'Broadcom stock', 'Broadcom Inc'],
+    'AVGO': ['AVGO', 'Broadcom stock', 'Broadcom Inc', 'Broadcom'],
     'CRM': ['Salesforce stock', 'Salesforce Inc'],  # "CRM" too common
     'ORCL': ['ORCL', 'Oracle stock', 'Oracle Corp'],
     'AMD': ['AMD stock', 'Advanced Micro Devices'],  # "AMD" needs context
@@ -359,37 +361,128 @@ RSS_FEEDS = [
 _vader_analyzer = SentimentIntensityAnalyzer()
 
 RSS_FETCH_TIMEOUT = 15
+_RSS_BATCH_SIZE = 10       # feeds per batch
+_RSS_BATCH_DELAY = 0.5     # seconds between batches
+_CONSECUTIVE_ERROR_LIMIT = 5  # auto-disable after this many failures
+_ERROR_COOLDOWN_CYCLES = 4    # re-enable after N cycles (~1 hour at 15-min intervals)
+
+# Browser-like User-Agents for RSS (matching web_news_scraper.py)
+_RSS_USER_AGENTS = [
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+]
+
+# Domains known to serve spam/promotional content via Google News
+_SPAM_DOMAINS = frozenset({
+    'openpr.com', 'mexc.com', 'bitget.com', 'swikblog.com',
+    'blockonomi.com', 'bez-kabli.pl',
+})
+
+# In-memory error tracking (reset on restart, good enough for cycle-to-cycle)
+_feed_errors: dict[str, int] = {}       # url -> consecutive error count
+_feed_disabled_at: dict[str, int] = {}  # url -> cycle number when disabled
+_cycle_counter = 0
 
 
 # --- Internal Functions ---
 
 
+def _get_rss_headers():
+    """Return request headers with a randomly selected browser User-Agent."""
+    return {
+        'User-Agent': random.choice(_RSS_USER_AGENTS),
+        'Accept': 'application/rss+xml, application/xml, text/xml, */*;q=0.1',
+        'Accept-Language': 'en-US,en;q=0.9',
+    }
+
+
+def _is_spam_article(article: dict) -> bool:
+    """Check if an article comes from a known spam domain."""
+    url = article.get('source_url', '')
+    if not url:
+        return False
+    try:
+        from urllib.parse import urlparse
+        domain = urlparse(url).hostname or ''
+        domain = domain.lstrip('www.')
+        return domain in _SPAM_DOMAINS
+    except Exception:
+        return False
+
+
 def _fetch_single_rss_feed(feed_info):
     """Fetches and parses a single RSS feed."""
+    url = feed_info['url']
+
+    # Skip feeds that are temporarily disabled due to consecutive errors
+    error_count = _feed_errors.get(url, 0)
+    if error_count >= _CONSECUTIVE_ERROR_LIMIT:
+        disabled_cycle = _feed_disabled_at.get(url, 0)
+        if _cycle_counter - disabled_cycle < _ERROR_COOLDOWN_CYCLES:
+            return []  # Still in cooldown
+        # Cooldown expired — re-enable and try again
+        _feed_errors[url] = 0
+        log.info(f"Re-enabling RSS feed after cooldown: {url}")
+
     try:
-        parsed = feedparser.parse(feed_info['url'],
-                                  request_headers={'User-Agent': 'CryptoBot/1.0'})
+        parsed = feedparser.parse(url, request_headers=_get_rss_headers())
+
+        # Check for HTTP errors in feedparser
+        status = getattr(parsed, 'status', None)
+        if isinstance(status, int) and status >= 400:
+            _record_feed_error(url, f"HTTP {status}")
+            return []
+
         articles = []
         for entry in parsed.entries:
-            articles.append({
+            article = {
                 'title': getattr(entry, 'title', ''),
                 'description': getattr(entry, 'summary', ''),
                 'published_at': getattr(entry, 'published', ''),
-                'source': getattr(parsed.feed, 'title', feed_info['url']),
+                'source': getattr(parsed.feed, 'title', url),
                 'source_url': getattr(entry, 'link', ''),
                 'category': feed_info.get('category', 'unknown'),
-            })
+            }
+            if not _is_spam_article(article):
+                articles.append(article)
+
+        # Reset error count on success (even if 0 articles — feed is alive)
+        if url in _feed_errors:
+            if _feed_errors[url] > 0:
+                log.info(f"RSS feed recovered after {_feed_errors[url]} errors: {url}")
+            _feed_errors[url] = 0
+
         return articles
     except Exception as e:
-        log.warning(f"Failed to fetch RSS feed {feed_info['url']}: {e}")
+        _record_feed_error(url, str(e))
         return []
 
 
+def _record_feed_error(url: str, reason: str):
+    """Track consecutive errors and auto-disable feeds that keep failing."""
+    _feed_errors[url] = _feed_errors.get(url, 0) + 1
+    count = _feed_errors[url]
+    if count >= _CONSECUTIVE_ERROR_LIMIT:
+        _feed_disabled_at[url] = _cycle_counter
+        log.warning(f"RSS feed auto-disabled after {count} consecutive errors "
+                    f"(cooldown {_ERROR_COOLDOWN_CYCLES} cycles): {url} — {reason}")
+    elif count >= 3:
+        log.warning(f"RSS feed failing ({count}x): {url} — {reason}")
+    else:
+        log.debug(f"RSS feed error ({count}x): {url} — {reason}")
+
+
 def _fetch_rss_feeds():
-    """Fetches all RSS feeds in parallel using a thread pool.
+    """Fetches all RSS feeds in staggered batches with error tracking.
 
     Tries to load feeds from source_registry DB; falls back to hardcoded RSS_FEEDS.
     """
+    global _cycle_counter
+    _cycle_counter += 1
+
     try:
         from src.collectors.source_registry import (
             load_rss_feeds_from_registry, update_source_stats,
@@ -402,40 +495,64 @@ def _fetch_rss_feeds():
     feeds = registry_feeds if registry_feeds else RSS_FEEDS
     use_registry = registry_feeds is not None
 
+    # Shuffle feeds to avoid always hitting the same servers first
+    feeds_shuffled = list(feeds)
+    random.shuffle(feeds_shuffled)
+
     all_articles = []
-    with ThreadPoolExecutor(max_workers=14) as executor:
-        futures = {executor.submit(_fetch_single_rss_feed, feed): feed for feed in feeds}
-        try:
-            done_iter = as_completed(futures, timeout=RSS_FETCH_TIMEOUT + 5)
-            for future in done_iter:
-                try:
-                    articles = future.result(timeout=RSS_FETCH_TIMEOUT)
-                    all_articles.extend(articles)
-                    # Update source stats if using registry
-                    if use_registry:
-                        feed = futures[future]
-                        source_id = feed.get('source_id')
-                        if source_id:
-                            try:
-                                update_source_stats(source_id, articles_fetched=len(articles))
-                            except Exception as e:
-                                log.debug(f"Source stats update failed for {source_id}: {e}")
-                except Exception as e:
+    n_skipped = 0
+    n_failed = 0
+
+    # Process in staggered batches to avoid rate limiting
+    for batch_start in range(0, len(feeds_shuffled), _RSS_BATCH_SIZE):
+        batch = feeds_shuffled[batch_start:batch_start + _RSS_BATCH_SIZE]
+
+        if batch_start > 0:
+            time.sleep(_RSS_BATCH_DELAY)
+
+        with ThreadPoolExecutor(max_workers=min(len(batch), 6)) as executor:
+            futures = {executor.submit(_fetch_single_rss_feed, feed): feed
+                       for feed in batch}
+            try:
+                done_iter = as_completed(futures, timeout=RSS_FETCH_TIMEOUT + 5)
+                for future in done_iter:
                     feed = futures[future]
-                    log.warning(f"RSS feed timed out or failed: {feed['url']}: {e}")
-                    # Record error for registry sources
-                    if use_registry:
-                        source_id = feed.get('source_id')
-                        if source_id:
-                            try:
-                                update_source_stats(source_id, errors=1)
-                            except Exception as e:
-                                log.debug(f"Source error recording failed for {source_id}: {e}")
-        except TimeoutError:
-            n_unfinished = sum(1 for fut in futures if not fut.done())
-            log.warning(f"RSS fetch global timeout — {n_unfinished} feeds did not finish in time.")
-    log.info(f"Fetched {len(all_articles)} articles from {len(feeds)} RSS feeds"
-             f"{' (registry)' if use_registry else ' (hardcoded)'}.")
+                    try:
+                        articles = future.result(timeout=RSS_FETCH_TIMEOUT)
+                        if not articles and _feed_errors.get(feed['url'], 0) >= _CONSECUTIVE_ERROR_LIMIT:
+                            n_skipped += 1
+                        all_articles.extend(articles)
+                        # Update source stats if using registry
+                        if use_registry and articles:
+                            source_id = feed.get('source_id')
+                            if source_id:
+                                try:
+                                    update_source_stats(source_id,
+                                                        articles_fetched=len(articles))
+                                except Exception:
+                                    pass
+                    except Exception as e:
+                        n_failed += 1
+                        _record_feed_error(feed['url'], str(e))
+                        if use_registry:
+                            source_id = feed.get('source_id')
+                            if source_id:
+                                try:
+                                    update_source_stats(source_id, errors=1)
+                                except Exception:
+                                    pass
+            except TimeoutError:
+                n_unfinished = sum(1 for fut in futures if not fut.done())
+                log.warning(f"RSS batch timeout — {n_unfinished} feeds did not finish.")
+
+    status_parts = [f"Fetched {len(all_articles)} articles from {len(feeds)} RSS feeds"]
+    if use_registry:
+        status_parts.append("(registry)")
+    if n_skipped:
+        status_parts.append(f"({n_skipped} disabled)")
+    if n_failed:
+        status_parts.append(f"({n_failed} failed)")
+    log.info(" ".join(status_parts) + ".")
     return all_articles
 
 
@@ -469,21 +586,41 @@ def _deduplicate_articles(articles):
 def _match_article_to_symbols(title, description, symbols):
     """Matches an article to symbols using word-boundary regex matching.
 
+    Prioritises the primary subject: if a symbol matches in the title,
+    it ranks higher than one matching only in the description.  When
+    multiple symbols match, the one appearing earliest in the title wins
+    the "primary" spot, which is returned first.
+
     Only matches against keywords defined in SYMBOL_KEYWORDS with pre-compiled
     regex patterns. Symbols without keyword entries are skipped (they rely on
     RSS feeds for coverage instead of text matching).
     """
-    matched = []
-    text = f"{title} {description}"
+    title_matches = []   # (position_in_title, symbol)
+    desc_only = []
+
     for symbol in symbols:
         patterns = _KEYWORD_PATTERNS.get(symbol)
         if not patterns:
             continue
+        # Check title first
+        title_pos = None
         for pattern in patterns:
-            if pattern.search(text):
-                matched.append(symbol)
+            m = pattern.search(title)
+            if m:
+                title_pos = m.start()
                 break
-    return matched
+        if title_pos is not None:
+            title_matches.append((title_pos, symbol))
+            continue
+        # Fallback: check description
+        for pattern in patterns:
+            if pattern.search(description):
+                desc_only.append(symbol)
+                break
+
+    # Sort title matches by position (earliest mention = primary subject)
+    title_matches.sort(key=lambda x: x[0])
+    return [sym for _, sym in title_matches] + desc_only
 
 
 
