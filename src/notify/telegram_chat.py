@@ -159,7 +159,7 @@ async def _gather_context() -> str:
     parts = []
     try:
         result = await asyncio.wait_for(
-            asyncio.to_thread(_gather_context_sync), timeout=10
+            asyncio.to_thread(_gather_context_sync), timeout=15
         )
         parts.append(result)
     except asyncio.TimeoutError:
@@ -188,24 +188,15 @@ def _gather_context_sync() -> str:
         stock_pos = get_open_positions(asset_type='stock')
         all_pos = (crypto_pos or []) + (stock_pos or [])
         if all_pos:
-            # Fetch current prices for PnL calculation
+            # Use DB-cached prices (fast) instead of live API calls (slow)
             current_prices = {}
-            for p in all_pos:
-                sym = p.get('symbol', '')
-                atype = p.get('asset_type', 'crypto')
-                try:
-                    if atype == 'stock':
-                        from src.collectors.alpha_vantage_data import get_stock_price
-                        pd = get_stock_price(sym)
-                        if pd:
-                            current_prices[sym] = pd.get('price', 0)
-                    else:
-                        from src.collectors.binance_data import get_current_price
-                        pd = get_current_price(f"{sym}USDT")
-                        if pd:
-                            current_prices[sym] = float(pd.get('price', 0))
-                except Exception:
-                    pass
+            prices = get_price_history_since(hours_ago=6)
+            if prices:
+                for p in prices:
+                    sym = p.get('symbol', '')
+                    if sym and sym not in current_prices:
+                        current_prices[sym] = float(
+                            p.get('price', p.get('close', 0)))
 
             lines.append("## Open Positions")
             for p in all_pos:
