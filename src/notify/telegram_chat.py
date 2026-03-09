@@ -176,27 +176,31 @@ def _gather_context_sync() -> str:
     from src.analysis.macro_regime import get_macro_regime
     from src.database import (
         get_last_signal, get_trade_summary, get_latest_news_sentiment,
-        get_price_history_since, get_recent_articles,
+        get_recent_articles,
     )
 
     lines = []
 
     # Open positions (with current prices and PnL)
     all_pos = []
+    current_prices = {}
     try:
         crypto_pos = get_open_positions(asset_type='crypto')
         stock_pos = get_open_positions(asset_type='stock')
         all_pos = (crypto_pos or []) + (stock_pos or [])
         if all_pos:
-            # Use DB-cached prices (fast) instead of live API calls (slow)
+            # Get latest DB-cached price per held symbol (fast individual lookups)
             current_prices = {}
-            prices = get_price_history_since(hours_ago=6)
-            if prices:
-                for p in prices:
-                    sym = p.get('symbol', '')
-                    if sym and sym not in current_prices:
-                        current_prices[sym] = float(
-                            p.get('price', p.get('close', 0)))
+            from src.database import get_historical_prices
+            for p in all_pos:
+                sym = p.get('symbol', '')
+                if sym:
+                    try:
+                        price_list = get_historical_prices.sync(sym, limit=1)
+                        if price_list:
+                            current_prices[sym] = float(price_list[0])
+                    except Exception:
+                        pass
 
             lines.append("## Open Positions")
             for p in all_pos:
@@ -346,20 +350,12 @@ def _gather_context_sync() -> str:
     except Exception:
         pass
 
-    # Recent price data (last 6h, sampled — latest per symbol)
+    # Recent prices — reuse position prices already fetched above
     try:
-        prices = get_price_history_since(hours_ago=6)
-        if prices:
-            latest_prices = {}
-            for p in prices:
-                sym = p.get('symbol', '')
-                if sym and sym not in latest_prices:
-                    latest_prices[sym] = p
-            if latest_prices:
-                lines.append("\n## Recent Prices (latest)")
-                for sym, p in list(latest_prices.items())[:15]:
-                    price = p.get('price', p.get('close', 0))
-                    lines.append(f"- {sym}: ${float(price):,.2f}")
+        if current_prices:
+            lines.append("\n## Recent Prices (latest)")
+            for sym, price in list(current_prices.items())[:15]:
+                lines.append(f"- {sym}: ${float(price):,.2f}")
     except Exception:
         pass
 
