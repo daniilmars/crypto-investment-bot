@@ -158,11 +158,13 @@ def _generate_scoring_signal(symbol, market_data,
 
     if buy_score >= signal_threshold and buy_score > sell_score:
         log.info(f"[{symbol}] BUY signal generated. {reason}")
-        return {"signal": "BUY", "symbol": symbol, "reason": reason, "current_price": current_price}
+        return {"signal": "BUY", "symbol": symbol, "reason": reason, "current_price": current_price,
+                "signal_strength": buy_score / 7.0}
 
     if sell_score >= signal_threshold and sell_score > buy_score:
         log.info(f"[{symbol}] SELL signal generated. {reason}")
-        return {"signal": "SELL", "symbol": symbol, "reason": reason, "current_price": current_price}
+        return {"signal": "SELL", "symbol": symbol, "reason": reason, "current_price": current_price,
+                "signal_strength": sell_score / 7.0}
 
     log.debug(f"[{symbol}] HOLD: No strong signal detected. {reason}")
     return {"signal": "HOLD", "symbol": symbol, "reason": "No strong signal detected. " + reason}
@@ -274,4 +276,16 @@ def _generate_sentiment_signal(symbol, market_data,
     signal_type = "BUY" if direction == 'bullish' else "SELL"
     reason = f"{sentiment_reason}. Price: ${current_price:,.2f}, SMA: ${sma:,.2f}, RSI: {rsi:.2f}."
     log.info(f"[{symbol}] {signal_type} signal (sentiment mode). {reason}")
-    return {"signal": signal_type, "symbol": symbol, "reason": reason, "current_price": current_price}
+
+    # Signal strength: use effective Gemini confidence (after freshness modulation)
+    strength = 0.5  # default for VADER fallback
+    if news_sentiment_data:
+        gemini = news_sentiment_data.get('gemini_assessment')
+        if gemini:
+            raw_conf = gemini.get('confidence', 0)
+            freshness = gemini.get('catalyst_freshness', 'none')
+            f_mult = {'breaking': 1.0, 'recent': 0.8, 'stale': 0.3, 'none': 0.5}.get(freshness, 0.5)
+            strength = raw_conf * f_mult
+
+    return {"signal": signal_type, "symbol": symbol, "reason": reason, "current_price": current_price,
+            "signal_strength": strength}

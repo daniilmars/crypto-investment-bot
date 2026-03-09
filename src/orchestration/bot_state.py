@@ -35,6 +35,10 @@ _auto_signal_cooldowns: dict[str, 'datetime'] = {}
 _analyst_last_run: dict = {}
 _auto_analyst_last_run: dict = {}
 
+# --- Rotation Cooldown (per asset_type) ---
+_rotation_cooldowns: dict[str, 'datetime'] = {}     # key: asset_type
+_auto_rotation_cooldowns: dict[str, 'datetime'] = {}
+
 # --- Sell Lock (guards concurrent sell attempts) ---
 _sell_lock = asyncio.Lock()
 
@@ -176,6 +180,23 @@ def remove_auto_analyst_last_run(order_id: str):
     _auto_analyst_last_run.pop(order_id, None)
 
 
+# --- Rotation Cooldowns ---
+
+def get_rotation_cooldown(asset_type: str, is_auto: bool = False):
+    store = _auto_rotation_cooldowns if is_auto else _rotation_cooldowns
+    return store.get(asset_type)
+
+
+def set_rotation_cooldown(asset_type: str, expires_at, is_auto: bool = False):
+    store = _auto_rotation_cooldowns if is_auto else _rotation_cooldowns
+    store[asset_type] = expires_at
+
+
+def clear_rotation_cooldown(asset_type: str, is_auto: bool = False):
+    store = _auto_rotation_cooldowns if is_auto else _rotation_cooldowns
+    store.pop(asset_type, None)
+
+
 # --- Bulk operations ---
 
 def load_peaks(peaks: dict):
@@ -201,3 +222,5 @@ def clear_all():
     _auto_signal_cooldowns.clear()
     _analyst_last_run.clear()
     _auto_analyst_last_run.clear()
+    _rotation_cooldowns.clear()
+    _auto_rotation_cooldowns.clear()

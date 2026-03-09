@@ -225,6 +225,15 @@ jobs:
               max_concurrent_positions: 20
               summary_interval_hours: 1
 
+            position_rotation:
+              enabled: true
+              min_hold_hours: 24
+              min_signal_strength: 0.6
+              min_strength_advantage: 0.15
+              min_pnl_velocity_threshold: -0.005
+              rotation_cooldown_hours: 4
+              max_rotations_per_cycle: 1
+
             ipo_tracking:
               enabled: true
               auto_add_to_watchlist: true

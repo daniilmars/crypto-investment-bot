@@ -249,6 +249,18 @@ settings:
     max_concurrent_positions: 20
     summary_interval_hours: 1
 
+  # -- Position Rotation Settings --
+  # When at max positions and a strong BUY signal fires, rotate out the
+  # weakest position (by PnL velocity = % gain per day held).
+  position_rotation:
+    enabled: true
+    min_hold_hours: 24              # Don't rotate positions younger than this
+    min_signal_strength: 0.6        # New signal must be at least this strong
+    min_strength_advantage: 0.15    # Signal strength must exceed weakness by this
+    min_pnl_velocity_threshold: -0.005  # Only rotate positions with velocity below this
+    rotation_cooldown_hours: 4      # Cooldown between rotations
+    max_rotations_per_cycle: 1      # Max rotations per bot cycle
+
   # -- IPO Tracking Settings --
   ipo_tracking:
     enabled: true

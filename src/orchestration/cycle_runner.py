@@ -335,7 +335,8 @@ async def run_bot_cycle():
             await process_trade_signal(
                 symbol, signal, current_price, _cached_crypto_positions, current_balance,
                 effective_risk_pct, signal_cooldown_hours, active_max_positions,
-                suppress_buys, macro_multiplier, label=trading_mode)
+                suppress_buys, macro_multiplier, label=trading_mode,
+                current_prices=current_prices_dict)
 
         # --- Auto-Trading Shadow Bot: Position Monitoring ---
         if auto_enabled:
@@ -359,7 +360,8 @@ async def run_bot_cycle():
                 symbol, auto_signal, current_price, auto_open_crypto, auto_available,
                 effective_risk_pct, signal_cooldown_hours, auto_max,
                 suppress_buys, macro_multiplier,
-                trading_strategy='auto', label='AUTO', is_auto=True)
+                trading_strategy='auto', label='AUTO', is_auto=True,
+                current_prices=current_prices_dict)
 
     # --- Event warnings for open positions ---
     try:
@@ -703,13 +705,15 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                 symbol, signal, current_price, _cached_alpaca_positions, buying_power,
                 stock_risk_pct, signal_cooldown_hours, max_concurrent_positions,
                 suppress_buys, macro_multiplier,
-                asset_type='stock', broker='alpaca', pdt_status=pdt_status)
+                asset_type='stock', broker='alpaca', pdt_status=pdt_status,
+                current_prices=stock_prices_dict)
         else:
             current_balance = (await asyncio.to_thread(get_account_balance, asset_type='stock')).get('total_usd', paper_trading_initial_capital)
             await process_trade_signal(
                 symbol, signal, current_price, _cached_stock_positions, current_balance,
                 stock_risk_pct, signal_cooldown_hours, max_concurrent_positions,
-                suppress_buys, macro_multiplier, asset_type='stock')
+                suppress_buys, macro_multiplier, asset_type='stock',
+                current_prices=stock_prices_dict)
 
         # --- Auto-Trading Shadow Bot: Stock Position Monitoring ---
         if auto_enabled:
@@ -731,7 +735,8 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                 symbol, auto_signal, current_price, auto_open_stocks, auto_available,
                 trade_risk_percentage, signal_cooldown_hours, auto_max,
                 suppress_buys, macro_multiplier,
-                asset_type='stock', trading_strategy='auto', label='AUTO', is_auto=True)
+                asset_type='stock', trading_strategy='auto', label='AUTO', is_auto=True,
+                current_prices=stock_prices_dict)
 
     log.info("--- Stock trading cycle complete ---")
 

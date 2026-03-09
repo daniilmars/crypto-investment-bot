@@ -5,6 +5,7 @@ process_trade_signal (unified signal processing pipeline),
 and helpers for the BUY/SELL execution patterns used in bot cycles.
 """
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 from src.execution.binance_trader import (
@@ -50,6 +51,7 @@ async def process_trade_signal(
     label: str = '',
     is_auto: bool = False,
     pdt_status: dict | None = None,
+    current_prices: dict | None = None,
 ) -> dict | None:
     """Unified signal processing pipeline: cooldowns → gates → execute.
 
@@ -96,6 +98,16 @@ async def process_trade_signal(
             _set_cooldown(symbol, "BUY", signal_cooldown_hours, is_auto)
             return result
         else:
+            # Check if rotation is possible when max positions blocked
+            if 'Max concurrent positions' in _ and current_prices:
+                rotation_result = await _try_rotation(
+                    symbol, signal, current_price, positions, balance,
+                    risk_pct, macro_multiplier, signal_cooldown_hours,
+                    current_prices=current_prices,
+                    asset_type=asset_type, trading_strategy=trading_strategy,
+                    broker=broker, label=label, is_auto=is_auto)
+                if rotation_result:
+                    return rotation_result
             signal['signal'] = 'HOLD'
             return None
 
@@ -343,3 +355,122 @@ async def execute_sell(
             signal['order_result'] = order_result
         await send_telegram_alert(signal)
         return order_result
+
+
+# --- Position Rotation ---
+
+async def _try_rotation(
+    symbol: str,
+    signal: dict,
+    current_price: float,
+    positions: list,
+    balance: float,
+    risk_pct: float,
+    macro_multiplier: float,
+    signal_cooldown_hours: float,
+    *,
+    current_prices: dict,
+    asset_type: str = 'crypto',
+    trading_strategy: str = 'manual',
+    broker: str | None = None,
+    label: str = '',
+    is_auto: bool = False,
+) -> dict | None:
+    """Attempt position rotation when max positions blocks a BUY.
+
+    Evaluates the weakest position and compares it against the new signal.
+    If rotation is warranted, sells the weakest and buys the new symbol.
+    """
+    from src.orchestration.position_rotation import (
+        evaluate_rotation_candidate, format_rotation_message,
+    )
+
+    # Check rotation cooldown
+    now = datetime.now(timezone.utc)
+    cooldown_expires = bot_state.get_rotation_cooldown(asset_type, is_auto=is_auto)
+    if cooldown_expires and now < cooldown_expires:
+        return None
+
+    candidate = evaluate_rotation_candidate(positions, signal, current_prices)
+    if not candidate:
+        return None
+
+    rotate_out = candidate['rotate_out']
+    rotate_sym = rotate_out.get('symbol', '?')
+    rotate_qty = rotate_out.get('quantity', 0)
+    rotate_order_id = rotate_out.get('order_id', '')
+    rotate_price = current_prices.get(rotate_sym, 0)
+    prefix = f"[{label}] " if label else ""
+
+    if is_auto:
+        # Auto mode: execute immediately (sell then buy)
+        log.info(f"{prefix}Rotation: selling {rotate_sym} to buy {symbol}")
+
+        # Sell the weakest
+        sell_kw = {'trading_strategy': 'auto'}
+        if asset_type == 'stock':
+            sell_kw['asset_type'] = 'stock'
+        sell_result = place_order(
+            rotate_sym, "SELL", rotate_qty, rotate_price,
+            existing_order_id=rotate_order_id, **sell_kw)
+        bot_state.auto_clear_trailing_stop(rotate_order_id)
+
+        if sell_result.get('status') not in ('CLOSED', 'FILLED'):
+            log.warning(f"{prefix}Rotation sell failed for {rotate_sym}: {sell_result}")
+            return None
+
+        # Buy the new symbol
+        # Recalculate balance after sell
+        from src.execution.binance_trader import get_account_balance
+        new_balance = (await asyncio.to_thread(
+            get_account_balance, asset_type=asset_type, trading_strategy='auto')
+        ).get('USDT', 0) or (await asyncio.to_thread(
+            get_account_balance, asset_type=asset_type, trading_strategy='auto')
+        ).get('total_usd', 0)
+
+        size_mult = macro_multiplier
+        capital_to_risk = new_balance * risk_pct * size_mult
+        quantity = capital_to_risk / current_price if current_price > 0 else 0
+
+        if quantity <= 0:
+            log.warning(f"{prefix}Rotation buy skipped: insufficient balance after sell")
+            return sell_result
+
+        buy_kw = {'trading_strategy': 'auto'}
+        if asset_type == 'stock':
+            buy_kw['asset_type'] = 'stock'
+        buy_result = place_order(symbol, "BUY", quantity, current_price, **buy_kw)
+
+        # Set cooldown
+        rotation_cfg = app_config.get('settings', {}).get('position_rotation', {})
+        cooldown_hours = rotation_cfg.get('rotation_cooldown_hours', 4)
+        bot_state.set_rotation_cooldown(
+            asset_type,
+            now + timedelta(hours=cooldown_hours),
+            is_auto=is_auto)
+
+        _set_cooldown(symbol, "BUY", signal_cooldown_hours, is_auto)
+
+        # Send notification
+        msg = format_rotation_message(candidate, signal)
+        try:
+            await send_telegram_alert({
+                'signal': 'ROTATION',
+                'symbol': symbol,
+                'reason': msg,
+                'asset_type': asset_type,
+            })
+        except Exception:
+            pass
+
+        log.info(f"{prefix}Rotation complete: {rotate_sym} → {symbol}")
+        return buy_result
+
+    else:
+        # Manual mode: send rotation for confirmation
+        signal['rotation_candidate'] = candidate
+        signal['quantity'] = 0  # will be calculated on confirm
+        signal['asset_type'] = asset_type
+        log.info(f"{prefix}Sending rotation {rotate_sym} → {symbol} for confirmation")
+        await send_signal_for_confirmation(signal)
+        return None
