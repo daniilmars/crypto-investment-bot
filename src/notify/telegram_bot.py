@@ -469,20 +469,21 @@ async def send_market_event_alert(alert: dict):
         message = f"*Daily Market Calendar* (next {lookahead}h)\n\n"
         for ev in events:
             hours = ev.get('hours_until', 0)
-            urgency = " \\- NOW" if hours <= 24 else ""
+            urgency = " - NOW" if hours <= 24 else ""
             event_type = _escape_md(ev.get('event_type', '?'))
             dt = ev.get('event_date')
             date_str = dt.strftime('%b %d %H:%M UTC') if hasattr(dt, 'strftime') else str(dt)
-            message += f"{'\\*' if hours <= 24 else '  '} {event_type} \\- {_escape_md(date_str)} ({hours:.0f}h){urgency}\n"
+            marker = '*' if hours <= 24 else ' '
+            message += f"{marker} {event_type} - {_escape_md(date_str)} ({hours:.0f}h){urgency}\n"
         if not events:
-            message += "No major events scheduled\\.\n"
+            message += "No major events scheduled.\n"
 
     elif alert_type == 'event_urgency':
         event_type = alert.get('event_type', 'Event')
         hours = alert.get('hours_until', 0)
         message = (
-            f"*Event Alert: {_escape_md(event_type)} in {hours:.0f}h*\n\n"
-            f"Review your exposure before this event\\."
+            f"Event Alert: {_escape_md(event_type)} in {hours:.0f}h\n\n"
+            f"Review your exposure before this event."
         )
 
     elif alert_type == 'breaking':
@@ -493,7 +494,7 @@ async def send_market_event_alert(alert: dict):
         assessments = alert.get('assessments', {})
 
         if market_wide:
-            header = "Breaking: MARKET\\-WIDE Alert"
+            header = "Breaking: MARKET-WIDE Alert"
         else:
             header = f"Breaking: {_escape_md(', '.join(symbols))}"
 
@@ -520,12 +521,12 @@ async def send_market_event_alert(alert: dict):
         velocity_support = alert.get('velocity_support', False)
         arrow = 'up' if direction == 'bullish' else 'down'
 
-        message = f"*Sector Move: {group} \\({arrow}\\)*\n\n"
+        message = f"*Sector Move: {group} ({arrow})*\n\n"
         message += f"*Direction:* {direction}\n"
         message += f"*Confidence:* {avg_conf:.0%}\n"
         message += f"*Symbols:* {', '.join(symbols)}\n"
         if velocity_support:
-            message += "News velocity confirms trend\\.\n"
+            message += "News velocity confirms trend.\n"
 
     else:
         log.warning(f"Unknown market alert type: {alert_type}")

@@ -131,7 +131,7 @@ def _validate_order_quantity(symbol_info, quantity, price):
 
 # --- Order Placement ---
 
-def place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual"):
+def place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual", strategy_type=None, trade_reason=None):
     """
     Places an order — dispatches to paper or live based on config.
     """
@@ -139,14 +139,14 @@ def place_order(symbol, side, quantity, price, order_type="MARKET", existing_ord
         return {"status": "FAILED", "message": "Invalid price"}
     # Stocks always use paper path — Binance live API is crypto-only
     if asset_type == 'stock':
-        return _paper_place_order(symbol, side, quantity, price, order_type, existing_order_id, asset_type=asset_type, trading_strategy=trading_strategy)
+        return _paper_place_order(symbol, side, quantity, price, order_type, existing_order_id, asset_type=asset_type, trading_strategy=trading_strategy, strategy_type=strategy_type, trade_reason=trade_reason)
     if _is_live_trading() and trading_strategy != 'auto':
-        return _live_place_order(symbol, side, quantity, price, order_type, existing_order_id, asset_type=asset_type, trading_strategy=trading_strategy)
+        return _live_place_order(symbol, side, quantity, price, order_type, existing_order_id, asset_type=asset_type, trading_strategy=trading_strategy, strategy_type=strategy_type, trade_reason=trade_reason)
     else:
-        return _paper_place_order(symbol, side, quantity, price, order_type, existing_order_id, asset_type=asset_type, trading_strategy=trading_strategy)
+        return _paper_place_order(symbol, side, quantity, price, order_type, existing_order_id, asset_type=asset_type, trading_strategy=trading_strategy, strategy_type=strategy_type, trade_reason=trade_reason)
 
 
-def _paper_place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual"):
+def _paper_place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual", strategy_type=None, trade_reason=None):
     """Simulates placing an order for paper trading. Records the trade in the database."""
     conn = None
     cursor = None
@@ -163,13 +163,13 @@ def _paper_place_order(symbol, side, quantity, price, order_type="MARKET", exist
             log.info(f"Paper fill with {slippage_pct*100:.2f}% slippage: requested ${price:.4f} → filled ${fill_price:.4f}")
             prefix = "AUTO" if trading_strategy == "auto" else "PAPER"
             order_id = f"{prefix}_{symbol}_BUY_{int(time.time() * 1000)}"
-            query = ('INSERT INTO trades (symbol, order_id, side, entry_price, quantity, status, trading_mode, asset_type, trading_strategy) '
-                     'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)') if is_postgres_conn else \
-                    ('INSERT INTO trades (symbol, order_id, side, entry_price, quantity, status, trading_mode, asset_type, trading_strategy) '
-                     'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-            cursor.execute(query, (symbol, order_id, side, fill_price, quantity, "OPEN", "paper", asset_type, trading_strategy))
+            query = ('INSERT INTO trades (symbol, order_id, side, entry_price, quantity, status, trading_mode, asset_type, trading_strategy, strategy_type, trade_reason) '
+                     'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)') if is_postgres_conn else \
+                    ('INSERT INTO trades (symbol, order_id, side, entry_price, quantity, status, trading_mode, asset_type, trading_strategy, strategy_type, trade_reason) '
+                     'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            cursor.execute(query, (symbol, order_id, side, fill_price, quantity, "OPEN", "paper", asset_type, trading_strategy, strategy_type, trade_reason))
             conn.commit()
-            log.info(f"Paper trade recorded: Order ID {order_id}")
+            log.info(f"Paper trade recorded: Order ID {order_id}" + (f" [strategic: {strategy_type}]" if strategy_type else ""))
             return {"order_id": order_id, "symbol": symbol, "side": side, "quantity": quantity, "price": fill_price, "status": "FILLED"}
 
         elif side == "SELL" and existing_order_id:
@@ -230,7 +230,7 @@ def _paper_place_order(symbol, side, quantity, price, order_type="MARKET", exist
         release_db_connection(conn)
 
 
-def _live_place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual"):
+def _live_place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual", strategy_type=None, trade_reason=None):
     """Places a real order on Binance (testnet or live)."""
     from binance.exceptions import BinanceAPIException
 
@@ -268,7 +268,8 @@ def _live_place_order(symbol, side, quantity, price, order_type="MARKET", existi
             order_id = f"{trading_mode.upper()}_{symbol}_BUY_{int(time.time() * 1000)}"
             _record_live_trade(symbol, order_id, "BUY", fill_price or price, fill_qty,
                                trading_mode, exchange_order_id, fees, fill_price, fill_qty,
-                               asset_type=asset_type)
+                               asset_type=asset_type,
+                               strategy_type=strategy_type, trade_reason=trade_reason)
 
             # Place OCO bracket for stop-loss and take-profit
             oco_result = _place_oco_bracket(api_symbol, fill_price or price, fill_qty)
@@ -371,7 +372,7 @@ def _extract_fees(order):
 
 def _record_live_trade(symbol, order_id, side, entry_price, quantity,
                        trading_mode, exchange_order_id, fees, fill_price, fill_qty,
-                       asset_type="crypto"):
+                       asset_type="crypto", strategy_type=None, trade_reason=None):
     """Records a live trade in the database."""
     conn = None
     try:
@@ -380,16 +381,19 @@ def _record_live_trade(symbol, order_id, side, entry_price, quantity,
         with _cursor(conn) as cursor:
             query = (
                 'INSERT INTO trades (symbol, order_id, side, entry_price, quantity, status, '
-                'trading_mode, exchange_order_id, fees, fill_price, fill_quantity, asset_type) '
-                'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)'
+                'trading_mode, exchange_order_id, fees, fill_price, fill_quantity, asset_type, '
+                'strategy_type, trade_reason) '
+                'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)'
             ) if is_pg else (
                 'INSERT INTO trades (symbol, order_id, side, entry_price, quantity, status, '
-                'trading_mode, exchange_order_id, fees, fill_price, fill_quantity, asset_type) '
-                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                'trading_mode, exchange_order_id, fees, fill_price, fill_quantity, asset_type, '
+                'strategy_type, trade_reason) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
             )
             cursor.execute(query, (
                 symbol, order_id, side, entry_price, quantity, "OPEN",
-                trading_mode, exchange_order_id, fees, fill_price, fill_qty, asset_type
+                trading_mode, exchange_order_id, fees, fill_price, fill_qty, asset_type,
+                strategy_type, trade_reason
             ))
         conn.commit()
         log.info(f"Recorded {trading_mode} trade: {order_id} (exchange: {exchange_order_id})")

@@ -1,17 +1,43 @@
 """Position monitor — unified SL/TP/trailing stop for all position types.
 
 Handles: crypto manual, crypto auto, stock manual, stock auto.
+Strategic trades use category-specific catastrophic SL only (no TP, no trailing).
 Never blocks exits (these are protective exits).
 """
 
 from datetime import datetime, timedelta, timezone
 
+from src.config import app_config
 from src.database import save_stoploss_cooldown
 from src.execution.binance_trader import place_order
 from src.logger import log
 from src.notify.telegram_bot import send_telegram_alert
 from src.orchestration import bot_state
 from src.analysis.feedback_loop import process_closed_trade
+
+
+def _get_strategic_overrides(position: dict) -> dict | None:
+    """If position has a strategy_type, return overridden risk params.
+
+    Strategic positions use only a catastrophic stop-loss.
+    No take-profit, no trailing stop.
+    """
+    strategy_type = position.get('strategy_type')
+    if not strategy_type:
+        return None
+
+    categories = app_config.get('settings', {}).get('strategic_categories', {})
+    category = categories.get(strategy_type)
+    if not category:
+        log.warning(f"Unknown strategy_type '{strategy_type}' — using normal SL/TP")
+        return None
+
+    return {
+        'stop_loss_pct': category['catastrophic_sl'],
+        'take_profit_pct': 999.0,
+        'trailing_stop_enabled': False,
+        'label': category.get('label', strategy_type),
+    }
 
 
 async def monitor_position(
@@ -39,6 +65,13 @@ async def monitor_position(
     qty = position['quantity']
     is_auto = trading_strategy == 'auto'
 
+    # Override risk params for strategic trades
+    strategic = _get_strategic_overrides(position)
+    if strategic:
+        stop_loss_pct = strategic['stop_loss_pct']
+        take_profit_pct = strategic['take_profit_pct']
+        trailing_stop_enabled = strategic['trailing_stop_enabled']
+
     # Update trailing stop peak tracker
     if is_auto:
         peak_price = bot_state.auto_update_trailing_stop(order_id, current_price)
@@ -53,7 +86,7 @@ async def monitor_position(
     if asset_type == 'stock':
         order_kw['asset_type'] = 'stock'
 
-    # --- Trailing stop ---
+    # --- Trailing stop (disabled for strategic trades) ---
     if trailing_stop_enabled and pnl_pct >= trailing_stop_activation:
         if drawdown >= trailing_stop_distance:
             locked_gain = (peak_price - entry_price) / entry_price
@@ -70,9 +103,10 @@ async def monitor_position(
                                        f"locked ~{locked_gain * 100:.1f}% gain).")
             return 'trailing_stop'
 
-    # --- Fixed stop-loss ---
+    # --- Stop-loss (catastrophic SL for strategic trades) ---
     if pnl_pct <= -stop_loss_pct:
-        log.info(f"[{mode_label}] Stop-loss hit for {symbol}. Closing position.")
+        sl_label = f"Catastrophic SL ({strategic['label']})" if strategic else "Stop-loss"
+        log.info(f"[{mode_label}] {sl_label} hit for {symbol}. Closing position.")
         place_order(symbol, "SELL", qty, current_price,
                     existing_order_id=order_id, **order_kw)
         _cleanup_position_state(order_id, is_auto)
@@ -88,10 +122,10 @@ async def monitor_position(
                 log.info(f"[{symbol}] Stop-loss cooldown set for {stoploss_cooldown_hours}h")
         if not is_auto:
             await _send_exit_alert(symbol, current_price, asset_type,
-                                   f"Stop-loss hit ({stop_loss_pct * 100:.2f}% loss).")
+                                   f"{sl_label} hit ({stop_loss_pct * 100:.1f}% loss).")
         return 'stop_loss'
 
-    # --- Take profit ---
+    # --- Take profit (disabled for strategic trades via 999% threshold) ---
     if pnl_pct >= take_profit_pct:
         log.info(f"[{mode_label}] Take-profit hit for {symbol}. Closing position.")
         place_order(symbol, "SELL", qty, current_price,

@@ -6,6 +6,7 @@ import time
 import vertexai
 from vertexai.generative_models import GenerativeModel
 
+from src.config import app_config
 from src.logger import log
 
 # --- JSON parsing helpers ---
@@ -409,6 +410,8 @@ def analyze_position_investment(
     trailing_stop_info: dict = None,
     position_additions: list = None,
     max_position_multiplier: float = 3.0,
+    strategy_type: str = None,
+    trade_reason: str = None,
 ) -> dict | None:
     """Tri-state investment analyst: HOLD / INCREASE / SELL.
 
@@ -511,13 +514,61 @@ def analyze_position_investment(
             f"- Breaking news detected: {'YES' if news_velocity.get('breaking_detected') else 'No'}\n"
         )
 
+        # Strategic investment context
+        strategic_context = ""
+        if strategy_type and trade_reason:
+            categories = app_config.get('settings', {}).get('strategic_categories', {})
+            cat_info = categories.get(strategy_type, {})
+            cat_label = cat_info.get('label', strategy_type)
+            cat_sl = cat_info.get('catastrophic_sl', 0.20)
+            strategic_context = (
+                f"\n**STRATEGIC INVESTMENT — {cat_label.upper()}:**\n"
+                f"- Category: {strategy_type}\n"
+                f"- Original thesis: {trade_reason}\n"
+                f"- Catastrophic stop-loss: -{cat_sl*100:.0f}% (only hard exit)\n"
+                f"- No take-profit or trailing stop — this is a long-term hold\n"
+                f"- IMPORTANT: Evaluate whether the original investment thesis "
+                f"is still intact. Only recommend SELL if the thesis is broken "
+                f"(e.g., fundamental change, regulatory risk, thesis invalidated). "
+                f"Short-term price dips within the catastrophic SL range are expected.\n"
+            )
+        elif trade_reason:
+            strategic_context = f"\n- Trade reason: {trade_reason}\n"
+
+        if strategy_type:
+            risk_params = (
+                f"**Risk Parameters (Strategic — {strategy_type}):**\n"
+                f"- Catastrophic stop-loss only (no TP, no trailing stop)\n"
+                f"- Exits are thesis-driven, not price-driven\n"
+            )
+            sell_step = (
+                "STEP 3 — SELL EVALUATION (STRATEGIC INVESTMENT):\n"
+                "- The PRIMARY question: is the original investment thesis still valid?\n"
+                "- Price decline alone is NOT a sell signal for strategic positions\n"
+                "- SELL only if: thesis is broken, sector fundamentals deteriorated, "
+                "or a concrete adverse catalyst invalidates the investment reason\n"
+                "- Temporary market volatility and short-term sentiment dips = HOLD\n"
+                "- A single negative headline is NOT enough — look for thesis-breaking corroboration\n\n"
+            )
+        else:
+            risk_params = (
+                "**Bot Risk Parameters:**\n"
+                "- Stop-loss: -3.5% (auto-closes position)\n"
+                "- Take-profit: +8% (auto-closes position)\n"
+                "- Trailing stop: activates at +2%, trails 1.5% from peak\n"
+            )
+            sell_step = (
+                "STEP 3 — SELL EVALUATION:\n"
+                "- Requires concrete adverse catalyst with HIGH confidence\n"
+                "- OR multiple converging risks: adverse news + technical weakness + breaking negative velocity\n"
+                "- A single negative headline is NOT enough — look for corroboration\n"
+                "- If trailing stop is active, it will protect gains — bias toward HOLD\n\n"
+            )
+
         prompt = (
             f"You are a senior investment analyst for a trading bot. Evaluate this open position "
             f"and recommend one of: HOLD, INCREASE (add capital), or SELL.\n\n"
-            f"**Bot Risk Parameters:**\n"
-            f"- Stop-loss: -3.5% (auto-closes position)\n"
-            f"- Take-profit: +8% (auto-closes position)\n"
-            f"- Trailing stop: activates at +2%, trails 1.5% from peak\n"
+            f"{risk_params}"
             f"- The bot checks positions every 15 minutes.\n\n"
             f"**Position Details:**\n"
             f"- Symbol: {symbol}\n"
@@ -527,7 +578,8 @@ def analyze_position_investment(
             f"- Quantity: {quantity}\n"
             f"{hours_context}"
             f"{trailing_context}"
-            f"{additions_context}\n"
+            f"{additions_context}"
+            f"{strategic_context}\n"
             f"**Technical Indicators:**\n"
             f"- RSI: {technical_data.get('rsi', 'N/A')}\n"
             f"- SMA: {technical_data.get('sma', 'N/A')}\n"
@@ -547,11 +599,7 @@ def analyze_position_investment(
             "  4. NOT near take-profit (PnL < +6%)\n"
             "- NEVER recommend INCREASE when trailing stop is active — let it protect gains\n"
             "- NEVER recommend INCREASE based on momentum alone — require a specific catalyst\n\n"
-            "STEP 3 — SELL EVALUATION:\n"
-            "- Requires concrete adverse catalyst with HIGH confidence\n"
-            "- OR multiple converging risks: adverse news + technical weakness + breaking negative velocity\n"
-            "- A single negative headline is NOT enough — look for corroboration\n"
-            "- If trailing stop is active, it will protect gains — bias toward HOLD\n\n"
+            f"{sell_step}"
             "STEP 4 — DEFAULT HOLD:\n"
             "- No news = HOLD. Mixed signals = HOLD.\n"
             "- Trailing stop active = HOLD (it handles orderly exits).\n"

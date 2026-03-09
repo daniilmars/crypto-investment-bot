@@ -7,8 +7,12 @@ _SPARK_CHARS = '▁▂▃▄▅▆▇█'
 
 
 def escape_md(text: str) -> str:
-    """Escape Telegram Markdown v1 special characters in user-facing text."""
-    return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', str(text))
+    """Escape Telegram Markdown v1 special characters in user-facing text.
+
+    Markdown v1 only uses *bold*, _italic_, `code`, and [text](url).
+    Only these four chars need escaping in regular text.
+    """
+    return re.sub(r'([_*`\[])', r'\\\1', str(text))
 
 
 def text_sparkline(values: list, width: int = 10) -> str:

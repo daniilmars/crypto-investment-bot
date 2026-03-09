@@ -181,20 +181,62 @@ def _gather_context_sync() -> str:
 
     lines = []
 
-    # Open positions
+    # Open positions (with current prices and PnL)
     all_pos = []
     try:
         crypto_pos = get_open_positions(asset_type='crypto')
         stock_pos = get_open_positions(asset_type='stock')
         all_pos = (crypto_pos or []) + (stock_pos or [])
         if all_pos:
+            # Fetch current prices for PnL calculation
+            current_prices = {}
+            for p in all_pos:
+                sym = p.get('symbol', '')
+                atype = p.get('asset_type', 'crypto')
+                try:
+                    if atype == 'stock':
+                        from src.collectors.alpha_vantage_data import get_stock_price
+                        pd = get_stock_price(sym)
+                        if pd:
+                            current_prices[sym] = pd.get('price', 0)
+                    else:
+                        from src.collectors.binance_data import get_current_price
+                        pd = get_current_price(f"{sym}USDT")
+                        if pd:
+                            current_prices[sym] = float(pd.get('price', 0))
+                except Exception:
+                    pass
+
             lines.append("## Open Positions")
             for p in all_pos:
                 sym = p.get('symbol', '?')
                 entry = p.get('entry_price', 0)
                 qty = p.get('quantity', 0)
                 atype = p.get('asset_type', 'crypto')
-                lines.append(f"- {sym} ({atype}): qty={qty}, entry=${entry:,.2f}")
+                strategy = p.get('strategy_type')
+                strat_str = f", strategy={strategy}" if strategy else ""
+                # Smart quantity formatting
+                if qty >= 1:
+                    qty_str = f"{qty:.2f}"
+                elif qty >= 0.01:
+                    qty_str = f"{qty:.4f}"
+                else:
+                    qty_str = f"{qty:.6f}"
+                # Current price and PnL
+                cur_price = current_prices.get(sym)
+                if cur_price and entry > 0:
+                    pnl_pct = ((cur_price - entry) / entry) * 100
+                    pnl_usd = (cur_price - entry) * qty
+                    lines.append(
+                        f"- {sym} ({atype}{strat_str}): qty={qty_str}, "
+                        f"entry=${entry:,.2f}, now=${cur_price:,.2f}, "
+                        f"PnL={pnl_pct:+.1f}% (${pnl_usd:+,.2f})"
+                    )
+                else:
+                    lines.append(
+                        f"- {sym} ({atype}{strat_str}): qty={qty_str}, "
+                        f"entry=${entry:,.2f}"
+                    )
         else:
             lines.append("## Open Positions: None")
     except Exception as e:
@@ -378,9 +420,21 @@ def _build_system_instruction(context: str, use_search: bool = True) -> str:
         "- When the user explicitly asks to buy, sell, or invest in a symbol, "
         "ALWAYS include a trade suggestion — never refuse.\n"
         "- If you believe a trade would be appropriate based on the conversation, include a trade suggestion.\n"
-        "- Format trade suggestions EXACTLY as:\n"
+        "- Format trade suggestions EXACTLY as (one tag per symbol, you can include multiple):\n"
         '  [TRADE_SUGGESTION]{"action":"BUY"|"SELL","symbol":"BTC"|"ETH"|etc,'
-        '"asset_type":"crypto"|"stock","reason":"brief reason"}[/TRADE_SUGGESTION]\n'
+        '"asset_type":"crypto"|"stock",'
+        '"strategy_type":"growth"|"sector_thesis"|"value"|"macro_trend"|"speculative"|null,'
+        '"reason":"brief investment thesis"}[/TRADE_SUGGESTION]\n'
+        "- When analyzing multiple symbols, include a [TRADE_SUGGESTION] for EACH symbol you recommend.\n"
+        "- Strategy types for long-term positions (set null for normal short-term swing trades):\n"
+        "  growth: AI, quantum, biotech long-term plays (25% catastrophic SL only)\n"
+        "  sector_thesis: sector rotation bets (20% catastrophic SL only)\n"
+        "  value: undervalued recovery plays (15% catastrophic SL only)\n"
+        "  macro_trend: macro trend following (20% catastrophic SL only)\n"
+        "  speculative: moonshots (30% catastrophic SL only)\n"
+        "- Strategic trades have NO take-profit and NO trailing stop — exits are thesis-driven.\n"
+        "- Use strategy_type when the user discusses long-term investing, strategic bets, or sector plays.\n"
+        "- For quick trades or short-term signals, set strategy_type to null (normal SL/TP applies).\n"
         "- Never suggest trades that violate the circuit breaker or exceed max positions.\n"
         "- Respect the current trading mode (paper vs live).\n"
         "- Use the Bot State data below to answer questions about the portfolio, "
@@ -461,7 +515,8 @@ def _parse_trade_suggestions(text: str) -> tuple[str, list[dict]]:
 
     Returns (clean_text, trades) where clean_text has tags stripped.
     """
-    pattern = r'\[TRADE_SUGGESTION\](.*?)\[/TRADE_SUGGESTION\]'
+    # Tolerant closing tag: Gemini sometimes misspells it (e.g. SUGESTION)
+    pattern = r'\[TRADE_SUGGESTION\](.*?)\[/TRADE_SUGG?ESTION\]'
     matches = re.findall(pattern, text, re.DOTALL)
 
     trades = []
@@ -473,6 +528,9 @@ def _parse_trade_suggestions(text: str) -> tuple[str, list[dict]]:
                 continue
             trade.setdefault('asset_type', 'crypto')
             trade.setdefault('reason', 'AI suggestion')
+            # Normalize strategy_type: null/empty → None
+            if not trade.get('strategy_type'):
+                trade['strategy_type'] = None
             trades.append(trade)
         except (json.JSONDecodeError, AttributeError):
             continue
@@ -494,10 +552,14 @@ def _build_trade_buttons(session: ChatSession, trades: list[dict]) -> Optional[I
 
         action = trade['action']
         symbol = trade['symbol']
+        strategy = trade.get('strategy_type')
         emoji = "\U0001f7e2" if action == 'BUY' else "\U0001f534"
+        label = f"{emoji} {action} {symbol}"
+        if strategy:
+            label += f" [{strategy}]"
         rows.append([
             InlineKeyboardButton(
-                f"{emoji} {action} {symbol}",
+                label,
                 callback_data=f"ct:{session.user_id}:{trade_id}:a",
             ),
             InlineKeyboardButton(
@@ -705,26 +767,42 @@ async def handle_chat_trade_callback(update: Update, context: ContextTypes.DEFAU
             await query.message.reply_text(f"Could not get price for {symbol}.")
             return
 
+        strategy_type = trade.get('strategy_type')
+        trade_reason = trade.get('reason', 'AI chat suggestion')
+
         signal = {
             'signal': trade_action,
             'symbol': symbol,
             'current_price': current_price,
-            'reason': trade.get('reason', 'AI chat suggestion'),
+            'reason': trade_reason,
             'asset_type': asset_type,
+            'strategy_type': strategy_type,
+            'trade_reason': trade_reason,
         }
 
         if trade_action == 'BUY':
-            # Calculate quantity from balance and risk config
+            # Calculate quantity using same logic as cycle_runner
             from src.execution.binance_trader import get_account_balance
-            balance_data = await asyncio.to_thread(get_account_balance)
+            balance_data = await asyncio.to_thread(
+                get_account_balance, asset_type=asset_type)
             balance = 0
             if isinstance(balance_data, dict):
-                balance = balance_data.get('total', 0)
+                balance = balance_data.get('total_usd', 0) or balance_data.get('total', 0)
                 if not balance:
                     balance = sum(v for v in balance_data.values()
                                  if isinstance(v, (int, float)))
-            trading_params = app_config.get('settings', {}).get('trading_params', {})
-            risk_pct = trading_params.get('risk_per_trade_pct', 2) / 100.0
+            settings = app_config.get('settings', {})
+            risk_pct = settings.get('trade_risk_percentage', 0.03)
+
+            # Apply macro regime multiplier
+            try:
+                from src.analysis.macro_regime import get_macro_regime
+                regime = await asyncio.to_thread(get_macro_regime)
+                macro_mult = regime.get('position_size_multiplier', 1.0)
+                risk_pct *= macro_mult
+            except Exception:
+                pass
+
             quantity = (balance * risk_pct) / current_price if current_price > 0 else 0
             if quantity <= 0:
                 await query.message.reply_text(

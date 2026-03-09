@@ -150,6 +150,9 @@ async def execute_confirmed_signal(signal: dict) -> dict:
     log.info(f"Executing confirmed {signal_type} for {symbol} "
              f"({asset_type}, {trading_mode})")
 
+    strategy_type = signal.get('strategy_type')
+    trade_reason = signal.get('trade_reason') or signal.get('reason', '')
+
     if asset_type == 'stock':
         settings = app_config.get('settings', {})
         stock_settings = settings.get('stock_trading', {})
@@ -161,7 +164,8 @@ async def execute_confirmed_signal(signal: dict) -> dict:
         else:
             if signal_type == "BUY":
                 order_result = place_order(
-                    symbol, "BUY", quantity, current_price, asset_type='stock')
+                    symbol, "BUY", quantity, current_price, asset_type='stock',
+                    strategy_type=strategy_type, trade_reason=trade_reason)
             elif signal_type == "SELL" and position:
                 order_result = place_order(
                     symbol, "SELL", quantity, current_price,
@@ -176,7 +180,8 @@ async def execute_confirmed_signal(signal: dict) -> dict:
     else:
         # Crypto
         if signal_type == "BUY":
-            order_result = place_order(symbol, "BUY", quantity, current_price)
+            order_result = place_order(symbol, "BUY", quantity, current_price,
+                                       strategy_type=strategy_type, trade_reason=trade_reason)
         elif signal_type == "SELL" and position:
             order_result = place_order(
                 symbol, "SELL", quantity, current_price,
