@@ -1,5 +1,7 @@
 """News pipeline — collects news, runs Gemini analysis, and triggers market alerts."""
 
+import asyncio
+
 from src.analysis.gemini_news_analyzer import analyze_news_impact, analyze_news_with_search
 from src.analysis.news_velocity import compute_news_velocity
 from src.analysis.market_alerts import run_market_alerts
@@ -26,14 +28,15 @@ async def collect_and_analyze_news(
     # --- Optional: Gemini with Google Search grounding (expensive) ---
     if news_config.get('enabled', False) and use_grounded_search:
         cache_ttl = news_config.get('cache_ttl_minutes', 30)
-        gemini_assessments = analyze_news_with_search(
+        gemini_assessments = await asyncio.to_thread(
+            analyze_news_with_search,
             all_symbols, current_prices_dict, cache_ttl_minutes=cache_ttl)
 
     # --- Primary path: RSS + web scraping + plain Gemini (cheap) ---
     if gemini_assessments is None:
         if use_grounded_search:
             log.info("Grounded search unavailable — falling back to RSS+scraping pipeline.")
-        news_result = collect_news_sentiment(all_symbols)
+        news_result = await asyncio.to_thread(collect_news_sentiment, all_symbols)
         news_per_symbol = news_result.get('per_symbol', {})
         triggered_symbols = news_result.get('triggered_symbols', [])
 
@@ -60,7 +63,8 @@ async def collect_and_analyze_news(
             # Build news stats per symbol for Gemini context
             news_stats_by_symbol = _build_news_stats(symbols_with_news, news_per_symbol)
 
-            gemini_assessments = analyze_news_impact(
+            gemini_assessments = await asyncio.to_thread(
+                analyze_news_impact,
                 headlines_by_symbol, current_prices_for_news,
                 archived_articles_by_symbol=archived_articles_by_symbol or None,
                 news_stats_by_symbol=news_stats_by_symbol or None,
@@ -80,15 +84,20 @@ async def run_proactive_market_alerts(
 ):
     """Run proactive market event alerts for all symbols."""
     try:
-        news_velocity_cache = {}
-        for sym in all_symbols:
-            try:
-                news_velocity_cache[sym] = compute_news_velocity(sym)
-            except Exception:
-                pass
+        def _compute_velocities():
+            cache = {}
+            for sym in all_symbols:
+                try:
+                    cache[sym] = compute_news_velocity(sym)
+                except Exception:
+                    pass
+            return cache
+
+        news_velocity_cache = await asyncio.to_thread(_compute_velocities)
 
         stock_wl = settings.get('stock_trading', {}).get('watch_list', [])
-        market_alerts = run_market_alerts(
+        market_alerts = await asyncio.to_thread(
+            run_market_alerts,
             gemini_assessments=gemini_assessments,
             news_per_symbol=news_per_symbol,
             news_velocity_cache=news_velocity_cache,
