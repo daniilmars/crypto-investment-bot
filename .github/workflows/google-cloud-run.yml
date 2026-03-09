@@ -222,7 +222,7 @@ jobs:
             auto_trading:
               enabled: true
               paper_trading_initial_capital: 10000.0
-              max_concurrent_positions: 5
+              max_concurrent_positions: 10
               summary_interval_hours: 1
 
             ipo_tracking:
