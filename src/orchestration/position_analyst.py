@@ -286,7 +286,7 @@ async def _handle_analyst_sell(
         if asset_type == 'stock':
             order_kw['asset_type'] = 'stock'
         place_order(symbol, "SELL", position['quantity'], current_price,
-                    existing_order_id=order_id, **order_kw)
+                    existing_order_id=order_id, exit_reason='analyst_exit', **order_kw)
         bot_state.clear_trailing_stop(order_id)
         bot_state.remove_analyst_last_run(order_id)
         alert = {

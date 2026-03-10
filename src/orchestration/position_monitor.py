@@ -93,7 +93,7 @@ async def monitor_position(
             log.info(f"[{mode_label}] Trailing stop triggered for {symbol}. "
                      f"Peak: ${peak_price:,.2f}, Current: ${current_price:,.2f}")
             place_order(symbol, "SELL", qty, current_price,
-                        existing_order_id=order_id, **order_kw)
+                        existing_order_id=order_id, exit_reason='trailing_stop', **order_kw)
             _cleanup_position_state(order_id, is_auto)
             _resolve_trade_attribution(order_id, pnl_pct, entry_price,
                                        current_price, 'trailing_stop')
@@ -108,7 +108,7 @@ async def monitor_position(
         sl_label = f"Catastrophic SL ({strategic['label']})" if strategic else "Stop-loss"
         log.info(f"[{mode_label}] {sl_label} hit for {symbol}. Closing position.")
         place_order(symbol, "SELL", qty, current_price,
-                    existing_order_id=order_id, **order_kw)
+                    existing_order_id=order_id, exit_reason='stop_loss', **order_kw)
         _cleanup_position_state(order_id, is_auto)
         _resolve_trade_attribution(order_id, pnl_pct, entry_price,
                                    current_price, 'stop_loss')
@@ -129,7 +129,7 @@ async def monitor_position(
     if pnl_pct >= take_profit_pct:
         log.info(f"[{mode_label}] Take-profit hit for {symbol}. Closing position.")
         place_order(symbol, "SELL", qty, current_price,
-                    existing_order_id=order_id, **order_kw)
+                    existing_order_id=order_id, exit_reason='take_profit', **order_kw)
         _cleanup_position_state(order_id, is_auto)
         _resolve_trade_attribution(order_id, pnl_pct, entry_price,
                                    current_price, 'take_profit')

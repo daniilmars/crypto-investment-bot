@@ -131,7 +131,7 @@ def _validate_order_quantity(symbol_info, quantity, price):
 
 # --- Order Placement ---
 
-def place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual", strategy_type=None, trade_reason=None):
+def place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual", strategy_type=None, trade_reason=None, exit_reason=None):
     """
     Places an order — dispatches to paper or live based on config.
     """
@@ -139,14 +139,14 @@ def place_order(symbol, side, quantity, price, order_type="MARKET", existing_ord
         return {"status": "FAILED", "message": "Invalid price"}
     # Stocks always use paper path — Binance live API is crypto-only
     if asset_type == 'stock':
-        return _paper_place_order(symbol, side, quantity, price, order_type, existing_order_id, asset_type=asset_type, trading_strategy=trading_strategy, strategy_type=strategy_type, trade_reason=trade_reason)
+        return _paper_place_order(symbol, side, quantity, price, order_type, existing_order_id, asset_type=asset_type, trading_strategy=trading_strategy, strategy_type=strategy_type, trade_reason=trade_reason, exit_reason=exit_reason)
     if _is_live_trading() and trading_strategy != 'auto':
-        return _live_place_order(symbol, side, quantity, price, order_type, existing_order_id, asset_type=asset_type, trading_strategy=trading_strategy, strategy_type=strategy_type, trade_reason=trade_reason)
+        return _live_place_order(symbol, side, quantity, price, order_type, existing_order_id, asset_type=asset_type, trading_strategy=trading_strategy, strategy_type=strategy_type, trade_reason=trade_reason, exit_reason=exit_reason)
     else:
-        return _paper_place_order(symbol, side, quantity, price, order_type, existing_order_id, asset_type=asset_type, trading_strategy=trading_strategy, strategy_type=strategy_type, trade_reason=trade_reason)
+        return _paper_place_order(symbol, side, quantity, price, order_type, existing_order_id, asset_type=asset_type, trading_strategy=trading_strategy, strategy_type=strategy_type, trade_reason=trade_reason, exit_reason=exit_reason)
 
 
-def _paper_place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual", strategy_type=None, trade_reason=None):
+def _paper_place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual", strategy_type=None, trade_reason=None, exit_reason=None):
     """Simulates placing an order for paper trading. Records the trade in the database."""
     conn = None
     cursor = None
@@ -207,11 +207,11 @@ def _paper_place_order(symbol, side, quantity, price, order_type="MARKET", exist
 
             pnl_float = float(pnl.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
-            query_update = ('UPDATE trades SET status = %s, exit_price = %s, exit_timestamp = CURRENT_TIMESTAMP, pnl = %s '
+            query_update = ('UPDATE trades SET status = %s, exit_price = %s, exit_timestamp = CURRENT_TIMESTAMP, pnl = %s, exit_reason = %s '
                             'WHERE order_id = %s') if is_postgres_conn else \
-                           ('UPDATE trades SET status = ?, exit_price = ?, exit_timestamp = CURRENT_TIMESTAMP, pnl = ? '
+                           ('UPDATE trades SET status = ?, exit_price = ?, exit_timestamp = CURRENT_TIMESTAMP, pnl = ?, exit_reason = ? '
                             'WHERE order_id = ?')
-            cursor.execute(query_update, ("CLOSED", fill_price, pnl_float, existing_order_id))
+            cursor.execute(query_update, ("CLOSED", fill_price, pnl_float, exit_reason, existing_order_id))
             conn.commit()
 
             log.info(f"Paper trade {existing_order_id} updated to CLOSED at {price}. PnL: ${pnl_float:.2f}")
@@ -230,7 +230,7 @@ def _paper_place_order(symbol, side, quantity, price, order_type="MARKET", exist
         release_db_connection(conn)
 
 
-def _live_place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual", strategy_type=None, trade_reason=None):
+def _live_place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual", strategy_type=None, trade_reason=None, exit_reason=None):
     """Places a real order on Binance (testnet or live)."""
     from binance.exceptions import BinanceAPIException
 
@@ -327,7 +327,7 @@ def _live_place_order(symbol, side, quantity, price, order_type="MARKET", existi
 
             # Update existing trade in DB
             if existing_order_id:
-                _close_live_trade(existing_order_id, fill_price or price, fees, fill_price, fill_qty)
+                _close_live_trade(existing_order_id, fill_price or price, fees, fill_price, fill_qty, exit_reason=exit_reason)
 
             return {
                 "order_id": existing_order_id or exchange_order_id,
@@ -405,7 +405,7 @@ def _record_live_trade(symbol, order_id, side, entry_price, quantity,
         release_db_connection(conn)
 
 
-def _close_live_trade(order_id, exit_price, fees, fill_price, fill_qty):
+def _close_live_trade(order_id, exit_price, fees, fill_price, fill_qty, exit_reason=None):
     """Closes an existing trade with fill details and PnL."""
     conn = None
     try:
@@ -442,13 +442,13 @@ def _close_live_trade(order_id, exit_price, fees, fill_price, fill_qty):
 
             q_update = (
                 'UPDATE trades SET status = %s, exit_price = %s, exit_timestamp = CURRENT_TIMESTAMP, '
-                'pnl = %s, fees = %s, fill_price = %s, fill_quantity = %s WHERE order_id = %s'
+                'pnl = %s, fees = %s, fill_price = %s, fill_quantity = %s, exit_reason = %s WHERE order_id = %s'
             ) if is_pg else (
                 'UPDATE trades SET status = ?, exit_price = ?, exit_timestamp = CURRENT_TIMESTAMP, '
-                'pnl = ?, fees = ?, fill_price = ?, fill_quantity = ? WHERE order_id = ?'
+                'pnl = ?, fees = ?, fill_price = ?, fill_quantity = ?, exit_reason = ? WHERE order_id = ?'
             )
             cursor.execute(q_update, ("CLOSED", exit_price, pnl_float, fees,
-                                      fill_price, fill_qty, order_id))
+                                      fill_price, fill_qty, exit_reason, order_id))
         conn.commit()
         log.info(f"Closed trade {order_id}: exit=${exit_price}, PnL=${pnl_float:.2f}, fees=${fees:.4f}")
     except (sqlite3.Error, psycopg2.Error) as e:

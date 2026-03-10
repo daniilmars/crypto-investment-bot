@@ -220,7 +220,7 @@ async def run_bot_cycle():
         current_price = all_binance_prices.get(api_symbol)
         if current_price:
             from src.collectors.binance_data import save_price_data
-            await asyncio.to_thread(save_price_data, {'symbol': api_symbol, 'price': current_price})
+            await asyncio.to_thread(save_price_data, {'symbol': symbol, 'price': current_price})
         else:
             price_data = await asyncio.to_thread(get_current_price, api_symbol)
             if not price_data or not price_data.get('price'):

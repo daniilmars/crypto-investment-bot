@@ -320,7 +320,7 @@ async def execute_sell(
         if asset_type == 'stock':
             order_kw['asset_type'] = 'stock'
         result = place_order(symbol, "SELL", qty, current_price,
-                             existing_order_id=order_id, **order_kw)
+                             existing_order_id=order_id, exit_reason='signal_sell', **order_kw)
         bot_state.auto_clear_trailing_stop(order_id)
         return result
 
@@ -349,7 +349,7 @@ async def execute_sell(
         if asset_type == 'stock':
             order_kw['asset_type'] = 'stock'
         order_result = place_order(symbol, "SELL", qty, current_price,
-                                   existing_order_id=order_id, **order_kw)
+                                   existing_order_id=order_id, exit_reason='signal_sell', **order_kw)
         bot_state.clear_trailing_stop(order_id)
         if order_result.get('status') == 'CLOSED':
             signal['order_result'] = order_result
@@ -412,7 +412,7 @@ async def _try_rotation(
             sell_kw['asset_type'] = 'stock'
         sell_result = place_order(
             rotate_sym, "SELL", rotate_qty, rotate_price,
-            existing_order_id=rotate_order_id, **sell_kw)
+            existing_order_id=rotate_order_id, exit_reason='rotation', **sell_kw)
         bot_state.auto_clear_trailing_stop(rotate_order_id)
 
         if sell_result.get('status') not in ('CLOSED', 'FILLED'):
