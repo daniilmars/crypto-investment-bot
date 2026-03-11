@@ -104,19 +104,20 @@ async def send_signal_for_confirmation(signal: dict) -> int:
     message += f"💰 *Price:* ${price:,.2f}\n"
     message += f"📈 *Reason:* {reason}\n"
 
+    qf = _fmt_qty(quantity, asset_type)
     if quantity and signal_type == "BUY":
         total_value = quantity * price
-        message += f"💵 *Quantity:* {quantity:.6f} {symbol} (${total_value:,.2f})\n"
+        message += f"💵 *Quantity:* {qf} {symbol} (${total_value:,.2f})\n"
     elif quantity and signal_type == "SELL":
         total_value = quantity * price
-        message += f"💵 *Quantity:* {quantity:.6f} {symbol} (${total_value:,.2f})\n"
+        message += f"💵 *Quantity:* {qf} {symbol} (${total_value:,.2f})\n"
     elif quantity and signal_type == "INCREASE":
         position_data = signal.get('position', {})
         current_qty = position_data.get('quantity', 0)
         new_total = current_qty + quantity
-        message += f"📦 *Current:* {current_qty:.6f} {symbol}\n"
-        message += f"➕ *Adding:* {quantity:.6f} {symbol} (${quantity * price:,.2f})\n"
-        message += f"📦 *New Total:* {new_total:.6f} {symbol}\n"
+        message += f"📦 *Current:* {_fmt_qty(current_qty, asset_type)} {symbol}\n"
+        message += f"➕ *Adding:* {qf} {symbol} (${quantity * price:,.2f})\n"
+        message += f"📦 *New Total:* {_fmt_qty(new_total, asset_type)} {symbol}\n"
 
     message += f"⏱ *Expires in {CONFIRMATION_TIMEOUT_MINUTES} min*\n"
     message += f"_{asset_label} signal_"
@@ -150,6 +151,15 @@ def _escape_md(text: str) -> str:
     """Escape Telegram Markdown v1 special characters in user-facing text."""
     from src.notify.formatting import escape_md
     return escape_md(text)
+
+
+def _fmt_qty(qty: float, asset_type: str = 'crypto') -> str:
+    """Format quantity for display: 2 decimals for stocks, up to 6 for crypto."""
+    if asset_type == 'stock':
+        if qty >= 1:
+            return f"{qty:.2f}"
+        return f"{qty:.4f}"
+    return f"{qty:.6f}"
 
 
 async def _safe_edit(query, text: str):
@@ -197,6 +207,7 @@ async def _handle_signal_callback(update: Update, context: ContextTypes.DEFAULT_
     price = signal.get('current_price', 0)
     reason = _escape_md(signal.get('reason', 'No reason provided.'))
     quantity = signal.get('quantity', 0)
+    asset_type = signal.get('asset_type', 'crypto')
 
     if action == "a":
         # Approve — execute the trade
@@ -238,7 +249,7 @@ async def _handle_signal_callback(update: Update, context: ContextTypes.DEFAULT_
             message += f"💰 *Price:* ${price:,.2f}\n"
         message += f"📈 *Reason:* {reason}\n"
         if quantity:
-            message += f"💵 *Quantity:* {quantity:.6f} {symbol}\n"
+            message += f"💵 *Quantity:* {_fmt_qty(quantity, asset_type)} {symbol}\n"
         if order_result:
             oco = order_result.get('oco')
             if oco:

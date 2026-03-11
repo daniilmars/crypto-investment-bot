@@ -347,6 +347,7 @@ def get_event_warnings_for_positions(open_positions: list,
                     'event_date': next_fomc, 'hours_until': hours_until,
                     'asset_type': asset_type, 'current_price': entry_price,
                 })
+                _warning_cooldown[symbol] = time.time()
 
         next_cpi = _get_next_event(now, _get_cpi_dates())
         if next_cpi:
@@ -357,6 +358,7 @@ def get_event_warnings_for_positions(open_positions: list,
                     'event_date': next_cpi, 'hours_until': hours_until,
                     'asset_type': asset_type, 'current_price': entry_price,
                 })
+                _warning_cooldown[symbol] = time.time()
 
     return warnings
 

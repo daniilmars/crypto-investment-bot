@@ -308,9 +308,9 @@ def build_daily_recap() -> str:
         hold = _format_hold_duration(t.get('entry_timestamp'))
         emoji = '\U0001f7e2' if pnl >= 0 else '\U0001f534'
         reason_str = f' ({reason})' if reason else ''
-        pnl_sign = '+' if pnl >= 0 else ''
+        pnl_sign = '+' if pnl >= 0 else '-'
         return (
-            f' {emoji} {symbol}  {pnl_pct:+.1f}%  {pnl_sign}${abs(pnl):,.0f}  '
+            f' {emoji} {symbol}  {pnl_pct:+.1f}%  {pnl_sign}${abs(pnl):,.2f}  '
             f'{hold}{reason_str}'
         )
 
@@ -321,7 +321,7 @@ def build_daily_recap() -> str:
             lines.append(_format_trade(t))
             total_pnl += t.get('pnl', 0)
         tp_sign = '+' if total_pnl >= 0 else '-'
-        lines.append(f' Total: {tp_sign}${abs(total_pnl):,.0f}')
+        lines.append(f' Total: {tp_sign}${abs(total_pnl):,.2f}')
 
     if auto_trades:
         lines.append('')
@@ -331,7 +331,7 @@ def build_daily_recap() -> str:
             lines.append(_format_trade(t))
             total_auto_pnl += t.get('pnl', 0)
         ta_sign = '+' if total_auto_pnl >= 0 else '-'
-        lines.append(f' Total: {ta_sign}${abs(total_auto_pnl):,.0f}')
+        lines.append(f' Total: {ta_sign}${abs(total_auto_pnl):,.2f}')
 
     return truncate_for_telegram('\n'.join(lines))
 

@@ -558,7 +558,8 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
             log.warning(f"Circuit breaker active for stocks: {stock_cb_reason}")
             await send_telegram_alert({
                 "signal": "CIRCUIT_BREAKER", "symbol": "ALL_STOCKS",
-                "reason": f"Circuit breaker (stock): {stock_cb_reason}. Skipping all stock trading this cycle."
+                "reason": f"Circuit breaker (stock): {stock_cb_reason}. Skipping all stock trading this cycle.",
+                "asset_type": "stock",
             })
 
     for symbol in watch_list:

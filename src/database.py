@@ -2099,7 +2099,7 @@ def cleanup_old_rows(days: int = 30) -> dict:
             tables = [
                 ("market_prices", "timestamp"),
                 ("signals", "timestamp"),
-                ("news_sentiment", "analysis_timestamp"),
+                ("news_sentiment", "timestamp"),
             ]
             for table, col in tables:
                 if is_pg:
