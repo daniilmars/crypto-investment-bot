@@ -106,7 +106,7 @@ jobs:
               rsi_sell_veto_threshold: 30
               adx_min_threshold: 20
 
-            stoploss_cooldown_hours: 6
+            stoploss_cooldown_hours: 24
             signal_cooldown_hours: 4
 
             status_report_hours: 24
@@ -117,7 +117,7 @@ jobs:
             simulated_fee_pct: 0.001
             simulated_slippage_pct: 0.001
 
-            trade_risk_percentage: 0.03
+            trade_risk_percentage: 0.05
             stop_loss_percentage: 0.035
             take_profit_percentage: 0.08
             max_concurrent_positions: 5

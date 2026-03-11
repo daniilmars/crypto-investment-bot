@@ -29,7 +29,16 @@ def check_circuit_breaker(balance, daily_pnl, recent_trades, asset_type='crypto'
         (is_tripped, reason): Tuple of (bool, str). If tripped, reason explains why.
     """
     config = _get_live_config()
-    initial_capital = config.get('initial_capital', 100.0)
+    # Use asset-appropriate initial capital
+    if asset_type == 'stock':
+        stock_cfg = app_config.get('settings', {}).get('stock_trading', {})
+        initial_capital = stock_cfg.get('paper_trading_initial_capital',
+                                        app_config.get('settings', {}).get('paper_trading_initial_capital', 10000.0))
+    elif asset_type == 'auto':
+        auto_cfg = app_config.get('settings', {}).get('auto_trading', {})
+        initial_capital = auto_cfg.get('paper_trading_initial_capital', 10000.0)
+    else:
+        initial_capital = config.get('initial_capital', 100.0)
 
     # 1. Cooldown check (must be first — overrides everything during cooldown)
     cooldown_hours = config.get('cooldown_hours', 24)

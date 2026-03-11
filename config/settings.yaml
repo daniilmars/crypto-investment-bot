@@ -80,7 +80,7 @@ settings:
     adx_min_threshold: 20
 
   # Per-symbol cooldown (hours) after a stop-loss exit before re-entering.
-  stoploss_cooldown_hours: 6
+  stoploss_cooldown_hours: 24
 
   # Per-symbol cooldown (hours) to suppress repeat BUY/SELL for the same symbol.
   signal_cooldown_hours: 4
@@ -107,7 +107,7 @@ settings:
   # -- Risk Management Settings --
   # Optimized via SL/TP sweep on 23-day dataset (Jan 12 – Feb 5, 2026).
   # SL=3.5%/TP=8%: +30.6% return, 55.7% win rate, Sharpe 2.15.
-  trade_risk_percentage: 0.03
+  trade_risk_percentage: 0.05
   stop_loss_percentage: 0.035
   take_profit_percentage: 0.08
   max_concurrent_positions: 5

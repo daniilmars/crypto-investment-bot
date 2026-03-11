@@ -88,21 +88,26 @@ async def check_stoploss_cooldown(symbol: str, signal_type: str,
     if signal_type not in ("BUY", "SELL"):
         return False
 
-    if is_auto:
-        cooldown = bot_state.get_auto_stoploss_cooldown(symbol)
-        if cooldown:
-            if datetime.now(timezone.utc) < cooldown:
-                return True
-            else:
-                bot_state.remove_auto_stoploss_cooldown(symbol)
-    else:
-        cooldown = bot_state.get_stoploss_cooldown(symbol)
-        if cooldown:
-            if datetime.now(timezone.utc) < cooldown:
-                return True
-            else:
-                bot_state.remove_stoploss_cooldown(symbol)
-                await clear_stoploss_cooldown(symbol)
+    now = datetime.now(timezone.utc)
+
+    # Check both manual and auto cooldowns — a stop-loss on either
+    # bot should prevent re-entry from the other bot too.
+    for check_auto in (True, False):
+        if check_auto:
+            cooldown = bot_state.get_auto_stoploss_cooldown(symbol)
+            if cooldown:
+                if now < cooldown:
+                    return True
+                else:
+                    bot_state.remove_auto_stoploss_cooldown(symbol)
+        else:
+            cooldown = bot_state.get_stoploss_cooldown(symbol)
+            if cooldown:
+                if now < cooldown:
+                    return True
+                else:
+                    bot_state.remove_stoploss_cooldown(symbol)
+                    await clear_stoploss_cooldown(symbol)
     return False
 
 

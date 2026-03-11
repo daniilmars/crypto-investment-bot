@@ -157,12 +157,22 @@ class TestSentimentMode:
         assert 'No sentiment trigger' in signal['reason']
 
     def test_low_confidence_gemini_falls_back_to_vader(self):
-        """Gemini confidence below threshold, VADER takes over."""
+        """Gemini confidence below threshold, VADER takes over only if strong."""
+        # Weak VADER (0.4) should NOT trigger BUY without Gemini
         news_data = {
             'gemini_assessment': {'direction': 'bullish', 'confidence': 0.5, 'reasoning': 'Low conf'},
             'avg_sentiment_score': 0.4,
         }
         market_data = {'current_price': 105, 'sma': 100, 'rsi': 50}
+        signal = generate_signal(
+            symbol='BTCUSDT', market_data=market_data,
+            news_sentiment_data=news_data,
+            signal_mode='sentiment', sentiment_config=self.SENTIMENT_CONFIG,
+        )
+        assert signal['signal'] == 'HOLD'
+
+        # Strong VADER (0.6) should trigger BUY as fallback
+        news_data['avg_sentiment_score'] = 0.6
         signal = generate_signal(
             symbol='BTCUSDT', market_data=market_data,
             news_sentiment_data=news_data,

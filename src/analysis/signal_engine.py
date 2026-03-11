@@ -224,13 +224,14 @@ def _generate_sentiment_signal(symbol, market_data,
                 sentiment_reason = (f"Gemini {g_direction} ({g_confidence:.2f}, "
                                     f"freshness={freshness}): {g_reasoning}")
 
-        # VADER fallback
+        # VADER fallback — require stronger conviction without Gemini
         if direction is None:
             avg_sentiment = news_sentiment_data.get('avg_sentiment_score', 0)
-            if avg_sentiment >= min_vader_score:
+            vader_threshold = max(min_vader_score, 0.5)
+            if avg_sentiment >= vader_threshold:
                 direction = 'bullish'
                 sentiment_reason = f"VADER bullish ({avg_sentiment:.3f})"
-            elif avg_sentiment <= -min_vader_score:
+            elif avg_sentiment <= -vader_threshold:
                 direction = 'bearish'
                 sentiment_reason = f"VADER bearish ({avg_sentiment:.3f})"
 
