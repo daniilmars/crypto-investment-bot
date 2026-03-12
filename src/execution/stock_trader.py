@@ -115,6 +115,20 @@ def _record_day_trade():
     _day_trades.append(datetime.now(timezone.utc))
 
 
+def _is_same_day_trade(position: dict) -> bool:
+    """Check if closing this position would count as a day trade (opened today)."""
+    entry_ts = position.get('entry_timestamp')
+    if not entry_ts:
+        return False
+    if isinstance(entry_ts, str):
+        entry_dt = datetime.fromisoformat(entry_ts.replace('Z', '+00:00'))
+    else:
+        entry_dt = entry_ts
+    if entry_dt.tzinfo is None:
+        entry_dt = entry_dt.replace(tzinfo=timezone.utc)
+    return entry_dt.date() == datetime.now(timezone.utc).date()
+
+
 def place_stock_order(symbol, side, quantity, price):
     """
     Places a stock order via Alpaca.
@@ -163,6 +177,23 @@ def place_stock_order(symbol, side, quantity, price):
         if side == "BUY":
             # Attempt bracket order for SL/TP
             bracket = _place_bracket_order(symbol, quantity, fill_price)
+            if not bracket:
+                log.warning(f"Bracket order failed for {symbol} after BUY — "
+                            f"position has NO server-side SL/TP protection!")
+                try:
+                    import asyncio
+                    from src.notify.telegram_bot import send_telegram_alert
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        asyncio.ensure_future(send_telegram_alert({
+                            'signal': 'WARNING', 'symbol': symbol,
+                            'current_price': fill_price,
+                            'reason': ('Bracket order failed after BUY fill. '
+                                       'Position lacks server-side SL/TP — '
+                                       'relying on bot-side trailing stop only.'),
+                        }))
+                except Exception as e:
+                    log.debug(f"Bracket failure alert send failed: {e}")
             result = {
                 "order_id": order_id, "exchange_order_id": exchange_order_id,
                 "symbol": symbol, "side": side, "quantity": fill_qty,

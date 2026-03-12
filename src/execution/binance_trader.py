@@ -1,5 +1,6 @@
 import math
 import os
+import random
 import time
 import sqlite3
 from decimal import Decimal, ROUND_HALF_UP
@@ -272,7 +273,7 @@ def _live_place_order(symbol, side, quantity, price, order_type="MARKET", existi
                                strategy_type=strategy_type, trade_reason=trade_reason)
 
             # Place OCO bracket for stop-loss and take-profit
-            oco_result = _place_oco_bracket(api_symbol, fill_price or price, fill_qty)
+            oco_result = _place_oco_with_retry(api_symbol, fill_price or price, fill_qty)
 
             if not oco_result:
                 log.warning(f"OCO bracket failed for {symbol} after BUY — "
@@ -461,6 +462,21 @@ def _close_live_trade(order_id, exit_price, fees, fill_price, fill_qty, exit_rea
 
 # --- OCO Bracket Orders ---
 
+_OCO_MAX_RETRIES = 3
+_OCO_RETRY_BASE_DELAY = 1.5
+
+
+def _is_retryable_binance_error(exc) -> bool:
+    """Check if a Binance error is transient and worth retrying."""
+    type_name = type(exc).__name__
+    if type_name == 'BinanceAPIException':
+        code = getattr(exc, 'code', 0)
+        if code in (-1015, -1001, -1003):  # too many orders, disconnected, rate limit
+            return True
+    msg = str(exc).lower()
+    return any(s in msg for s in ('500', '503', 'timeout', 'connection', 'rate limit'))
+
+
 def _place_oco_bracket(symbol, entry_price, quantity):
     """
     Places an OCO (One-Cancels-Other) order with stop-loss and take-profit
@@ -495,29 +511,94 @@ def _place_oco_bracket(symbol, entry_price, quantity):
         if step > 0:
             quantity = _round_to_step_size(quantity, step)
 
+    log.info(f"Placing OCO bracket for {symbol}: TP=${take_profit_price}, SL=${stop_price}, qty={quantity}")
+    oco = client.create_oco_order(
+        symbol=symbol,
+        side='SELL',
+        quantity=quantity,
+        price=str(take_profit_price),
+        stopPrice=str(stop_price),
+        stopLimitPrice=str(stop_limit_price),
+        stopLimitTimeInForce='GTC',
+    )
+    log.info(f"OCO bracket placed: orderListId={oco.get('orderListId')}")
+    return {
+        "order_list_id": oco.get('orderListId'),
+        "take_profit": take_profit_price,
+        "stop_loss": stop_price,
+    }
+
+
+def _place_oco_with_retry(symbol, entry_price, quantity):
+    """Retry OCO bracket placement with exponential backoff.
+
+    Falls back to plain stop-loss if all retries fail.
+    """
+    for attempt in range(1, _OCO_MAX_RETRIES + 1):
+        try:
+            return _place_oco_bracket(symbol, entry_price, quantity)
+        except Exception as exc:
+            if not _is_retryable_binance_error(exc) or attempt == _OCO_MAX_RETRIES:
+                log.error(f"OCO bracket failed (attempt {attempt}/{_OCO_MAX_RETRIES}): {exc}")
+                break
+            delay = _OCO_RETRY_BASE_DELAY * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
+            log.warning(f"OCO bracket attempt {attempt} failed (retryable): {exc}. "
+                        f"Retrying in {delay:.1f}s...")
+            time.sleep(delay)
+
+    # All retries exhausted — fall back to plain stop-loss
+    log.warning(f"OCO bracket exhausted {_OCO_MAX_RETRIES} retries for {symbol}. "
+                f"Attempting fallback stop-loss order.")
+    return _place_fallback_stop_loss(symbol, entry_price, quantity)
+
+
+def _place_fallback_stop_loss(symbol, entry_price, quantity):
+    """Places a plain STOP_LOSS_LIMIT as fallback when OCO fails."""
+    client = _get_binance_client()
+    if not client:
+        return None
+
+    live_config = app_config.get('settings', {}).get('live_trading', {})
+    sl_pct = live_config.get('stop_loss_percentage', 0.03)
+    stop_price = round(entry_price * (1 - sl_pct), 8)
+    stop_limit_price = round(stop_price * 0.998, 8)
+
+    # Round to symbol precision
+    sym_info = _get_symbol_info(symbol)
+    if sym_info:
+        filters = sym_info.get('filters', {})
+        price_filter = filters.get('PRICE_FILTER', {})
+        tick_size = float(price_filter.get('tickSize', 0))
+        if tick_size > 0:
+            precision = max(0, -int(round(math.log10(tick_size))))
+            stop_price = round(stop_price, precision)
+            stop_limit_price = round(stop_limit_price, precision)
+
+        lot_filter = filters.get('LOT_SIZE', {})
+        step = float(lot_filter.get('stepSize', 0))
+        if step > 0:
+            quantity = _round_to_step_size(quantity, step)
+
     try:
-        from binance.exceptions import BinanceAPIException
-        log.info(f"Placing OCO bracket for {symbol}: TP=${take_profit_price}, SL=${stop_price}, qty={quantity}")
-        oco = client.create_oco_order(
+        log.info(f"Placing fallback STOP_LOSS_LIMIT for {symbol}: "
+                 f"SL=${stop_price}, qty={quantity}")
+        order = client.create_order(
             symbol=symbol,
             side='SELL',
+            type='STOP_LOSS_LIMIT',
+            timeInForce='GTC',
             quantity=quantity,
-            price=str(take_profit_price),
+            price=str(stop_limit_price),
             stopPrice=str(stop_price),
-            stopLimitPrice=str(stop_limit_price),
-            stopLimitTimeInForce='GTC',
         )
-        log.info(f"OCO bracket placed: orderListId={oco.get('orderListId')}")
+        log.info(f"Fallback stop-loss placed: orderId={order.get('orderId')}")
         return {
-            "order_list_id": oco.get('orderListId'),
-            "take_profit": take_profit_price,
+            "order_id": order.get('orderId'),
             "stop_loss": stop_price,
+            "fallback": True,
         }
-    except BinanceAPIException as e:
-        log.error(f"Failed to place OCO bracket: {e}")
-        return None
     except Exception as e:
-        log.error(f"Unexpected error placing OCO bracket: {e}")
+        log.error(f"Fallback stop-loss also failed for {symbol}: {e}")
         return None
 
 

@@ -241,8 +241,9 @@ async def execute_buy(
             log.warning(f"{prefix}Skipping BUY for {symbol}: quantity {quantity:.4f} below min 0.5 shares.")
             return None
     else:
-        if quantity * current_price < 1.00:
-            log.warning(f"{prefix}Skipping BUY for {symbol}: notional ${quantity * current_price:.2f} below $1.00 minimum.")
+        _min_notional = app_config.get('settings', {}).get('min_trade_notional', 5.00)
+        if quantity * current_price < _min_notional:
+            log.warning(f"{prefix}Skipping BUY for {symbol}: notional ${quantity * current_price:.2f} below ${_min_notional:.2f} minimum.")
             return None
 
     if is_auto:
@@ -335,7 +336,13 @@ async def execute_sell(
             order_result = place_stock_order(symbol, "SELL", qty, current_price)
             if order_result.get('status') == 'FILLED':
                 signal['order_result'] = order_result
-            await send_telegram_alert(signal)
+                from src.execution.stock_trader import _is_same_day_trade, _record_day_trade
+                if _is_same_day_trade(position):
+                    _record_day_trade()
+                    log.info(f"PDT: recorded day trade for {symbol}")
+                await send_telegram_alert(signal)
+            else:
+                log.warning(f"SELL order for {symbol} failed: {order_result.get('message')}")
             return order_result
 
     # Paper/live crypto or paper stock
@@ -350,10 +357,17 @@ async def execute_sell(
             order_kw['asset_type'] = 'stock'
         order_result = place_order(symbol, "SELL", qty, current_price,
                                    existing_order_id=order_id, exit_reason='signal_sell', **order_kw)
-        bot_state.clear_trailing_stop(order_id)
         if order_result.get('status') == 'CLOSED':
+            bot_state.clear_trailing_stop(order_id)
             signal['order_result'] = order_result
-        await send_telegram_alert(signal)
+            if asset_type == 'stock':
+                from src.execution.stock_trader import _is_same_day_trade, _record_day_trade
+                if _is_same_day_trade(position):
+                    _record_day_trade()
+                    log.info(f"PDT: recorded day trade for {symbol}")
+            await send_telegram_alert(signal)
+        else:
+            log.warning(f"SELL order for {symbol} failed: {order_result}")
         return order_result
 
 

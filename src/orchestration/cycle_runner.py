@@ -92,7 +92,6 @@ async def run_bot_cycle():
     sentiment_signal_cfg = settings.get('sentiment_signal', {})
     sentiment_config = {
         'min_gemini_confidence': sentiment_signal_cfg.get('min_gemini_confidence', 0.7),
-        'min_vader_score': sentiment_signal_cfg.get('min_vader_score', 0.3),
         'rsi_buy_veto_threshold': sentiment_signal_cfg.get('rsi_buy_veto_threshold', 75),
         'rsi_sell_veto_threshold': sentiment_signal_cfg.get('rsi_sell_veto_threshold', 25),
     }
@@ -237,9 +236,13 @@ async def run_bot_cycle():
         if paper_trading or is_live:
             for position in _cached_crypto_positions:
                 if position['symbol'] == symbol and position['status'] == 'OPEN':
-                    await monitor_position(
+                    result = await monitor_position(
                         position, current_price, **risk_cfg,
                         mode_label=trading_mode.upper())
+                    if result != 'none':
+                        _cached_crypto_positions = await asyncio.to_thread(
+                            get_open_positions, trading_strategy='manual')
+                        open_positions = _cached_crypto_positions
 
         # --- Pause Check ---
         if not bot_is_running.is_set():
@@ -280,18 +283,11 @@ async def run_bot_cycle():
 
         symbol_news_data = None
         ga = gemini_assessments.get('symbol_assessments', {}).get(symbol) if gemini_assessments else None
-        sym_news = news_per_symbol.get(symbol)
 
-        if ga or sym_news:
+        if ga:
             symbol_news_data = {
-                'avg_sentiment_score': sym_news.get('avg_sentiment_score', 0) if sym_news else 0,
-                'sentiment_buy_threshold': news_config.get('sentiment_buy_threshold', 0.15),
-                'sentiment_sell_threshold': news_config.get('sentiment_sell_threshold', -0.15),
-                'min_gemini_confidence': news_config.get('min_gemini_confidence',
-                                                         news_config.get('min_claude_confidence', 0.6)),
+                'gemini_assessment': ga,
             }
-            if ga:
-                symbol_news_data['gemini_assessment'] = ga
 
         signal = generate_signal(
             symbol=symbol,
@@ -342,9 +338,12 @@ async def run_bot_cycle():
         if auto_enabled:
             for position in _cached_auto_positions:
                 if position['symbol'] == symbol and position['status'] == 'OPEN':
-                    await monitor_position(
+                    result = await monitor_position(
                         position, current_price, **risk_cfg,
                         trading_strategy='auto', mode_label='AUTO')
+                    if result != 'none':
+                        _cached_auto_positions = await asyncio.to_thread(
+                            get_open_positions, trading_strategy='auto')
 
         # --- Auto-Trading Shadow Bot: Signal Execution ---
         if auto_enabled and not cb_tripped and bot_is_running.is_set() and signal is not None:
@@ -590,6 +589,10 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                         position, current_price, **risk_cfg,
                         asset_type='stock', mode_label=trading_mode_label)
 
+                    if result != 'none':
+                        _cached_stock_positions = await asyncio.to_thread(
+                            get_open_positions, asset_type='stock', trading_strategy='manual')
+
                     # Run position analyst only if position wasn't closed
                     if result == 'none':
                         await run_position_analyst(
@@ -652,18 +655,11 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
 
         stock_news_data = None
         ga = gemini_assessments.get('symbol_assessments', {}).get(symbol) if gemini_assessments else None
-        sym_news = news_per_symbol.get(symbol)
 
-        if ga or sym_news:
+        if ga:
             stock_news_data = {
-                'avg_sentiment_score': sym_news.get('avg_sentiment_score', 0) if sym_news else 0,
-                'sentiment_buy_threshold': news_config.get('sentiment_buy_threshold', 0.15),
-                'sentiment_sell_threshold': news_config.get('sentiment_sell_threshold', -0.15),
-                'min_gemini_confidence': news_config.get('min_gemini_confidence',
-                                                         news_config.get('min_claude_confidence', 0.6)),
+                'gemini_assessment': ga,
             }
-            if ga:
-                stock_news_data['gemini_assessment'] = ga
 
         stock_sentiment_config = dict(sentiment_config or {})
         stock_sentiment_config['pe_buy_veto_threshold'] = pe_sell
@@ -720,9 +716,12 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
         if auto_enabled:
             for position in _cached_auto_stock_positions:
                 if position['symbol'] == symbol and position['status'] == 'OPEN':
-                    await monitor_position(
+                    result = await monitor_position(
                         position, current_price, **risk_cfg,
                         asset_type='stock', trading_strategy='auto', mode_label='AUTO')
+                    if result != 'none':
+                        _cached_auto_stock_positions = await asyncio.to_thread(
+                            get_open_positions, asset_type='stock', trading_strategy='auto')
 
         # --- Auto-Trading Shadow Bot: Stock Signal Execution ---
         if auto_enabled and not stock_cb_tripped and bot_is_running.is_set() and signal is not None:

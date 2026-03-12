@@ -95,6 +95,11 @@ async def monitor_position(
             place_order(symbol, "SELL", qty, current_price,
                         existing_order_id=order_id, exit_reason='trailing_stop', **order_kw)
             _cleanup_position_state(order_id, is_auto)
+            if asset_type == 'stock':
+                from src.execution.stock_trader import _is_same_day_trade, _record_day_trade
+                if _is_same_day_trade(position):
+                    _record_day_trade()
+                    log.info(f"PDT: recorded day trade for {symbol}")
             _resolve_trade_attribution(order_id, pnl_pct, entry_price,
                                        current_price, 'trailing_stop')
             if not is_auto:
@@ -110,6 +115,11 @@ async def monitor_position(
         place_order(symbol, "SELL", qty, current_price,
                     existing_order_id=order_id, exit_reason='stop_loss', **order_kw)
         _cleanup_position_state(order_id, is_auto)
+        if asset_type == 'stock':
+            from src.execution.stock_trader import _is_same_day_trade, _record_day_trade
+            if _is_same_day_trade(position):
+                _record_day_trade()
+                log.info(f"PDT: recorded day trade for {symbol}")
         _resolve_trade_attribution(order_id, pnl_pct, entry_price,
                                    current_price, 'stop_loss')
         if stoploss_cooldown_hours > 0:
@@ -131,6 +141,11 @@ async def monitor_position(
         place_order(symbol, "SELL", qty, current_price,
                     existing_order_id=order_id, exit_reason='take_profit', **order_kw)
         _cleanup_position_state(order_id, is_auto)
+        if asset_type == 'stock':
+            from src.execution.stock_trader import _is_same_day_trade, _record_day_trade
+            if _is_same_day_trade(position):
+                _record_day_trade()
+                log.info(f"PDT: recorded day trade for {symbol}")
         _resolve_trade_attribution(order_id, pnl_pct, entry_price,
                                    current_price, 'take_profit')
         if not is_auto:
