@@ -165,12 +165,12 @@ def format_rotation_message(candidate: dict, new_signal: dict) -> str:
     qty = pos.get('quantity', 0)
 
     lines = [
-        f"🔄 *Position Rotation*",
-        f"",
+        "🔄 *Position Rotation*",
+        "",
         f"📤 *Closing:* {sym_out}",
         f"   Entry: ${entry:,.2f}, Qty: {qty:.4f}",
         f"   PnL velocity: {velocity:+.4f}%/day",
-        f"",
+        "",
         f"📥 *Opening:* {sym_in}",
         f"   Signal strength: {candidate['signal_strength']:.2f}",
         f"   Reason: {new_signal.get('reason', 'N/A')[:100]}",
