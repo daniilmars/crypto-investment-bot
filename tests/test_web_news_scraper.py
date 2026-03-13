@@ -14,6 +14,10 @@ from src.collectors.web_news_scraper import (
     scrape_all_sources,
     _fetch_page,
     _generic_article_fallback,
+    _scraper_health,
+    _update_scraper_health,
+    _check_scraper_health,
+    get_scraper_health,
 )
 
 
@@ -203,11 +207,15 @@ class TestNewsDataIntegration:
     """Tests that web scraping integrates with the existing news_data pipeline."""
 
     @patch('src.collectors.news_data.save_news_sentiment_batch')
+    @patch('src.collectors.news_data.save_articles_batch')
     @patch('src.collectors.news_data.get_latest_news_sentiment')
+    @patch('src.collectors.news_data._score_with_gemini',
+           side_effect=lambda articles: {a['title_hash']: 0.6 for a in articles})
     @patch('src.collectors.news_data._fetch_rss_feeds')
     @patch('src.collectors.web_news_scraper.scrape_all_sources')
     def test_web_scraping_supplements_rss(self, mock_scrape,
-                                           mock_rss, mock_prev, mock_save):
+                                           mock_rss, mock_gemini, mock_prev,
+                                           mock_save_articles, mock_save):
         mock_rss.return_value = [
             {'title': 'Bitcoin hits 100k from RSS', 'description': 'BTC milestone'},
         ]
@@ -238,10 +246,14 @@ class TestNewsDataIntegration:
         assert 'ETH' in per_symbol
 
     @patch('src.collectors.news_data.save_news_sentiment_batch')
+    @patch('src.collectors.news_data.save_articles_batch')
     @patch('src.collectors.news_data.get_latest_news_sentiment')
+    @patch('src.collectors.news_data._score_with_gemini',
+           side_effect=lambda articles: {a['title_hash']: 0.5 for a in articles})
     @patch('src.collectors.news_data._fetch_rss_feeds')
     def test_web_scraping_disabled_by_default(self, mock_rss,
-                                               mock_prev, mock_save):
+                                               mock_gemini, mock_prev,
+                                               mock_save_articles, mock_save):
         mock_rss.return_value = [
             {'title': 'Bitcoin news from RSS only', 'description': 'BTC'},
         ]
@@ -263,3 +275,124 @@ class TestNewsDataIntegration:
 
         # Should work without web scraping
         assert 'BTC' in result['per_symbol']
+
+
+class TestScraperHealth:
+    """Tests for scraper health monitoring."""
+
+    def setup_method(self):
+        """Clear health state before each test."""
+        _scraper_health.clear()
+
+    def test_update_tracks_counts(self):
+        _update_scraper_health('CoinDesk', 10)
+        _update_scraper_health('CoinDesk', 8)
+        _update_scraper_health('CoinDesk', 12)
+        assert _scraper_health['CoinDesk'] == [10, 8, 12]
+
+    def test_update_trims_to_window(self):
+        for i in range(15):
+            _update_scraper_health('CoinDesk', i)
+        assert len(_scraper_health['CoinDesk']) == 10
+        assert _scraper_health['CoinDesk'][0] == 5  # oldest kept
+
+    def test_check_detects_degraded_source(self):
+        """Source with avg 5+ that drops to 0 for 3 runs is flagged."""
+        # 4 runs with 10 articles, then 3 runs with 0
+        for _ in range(4):
+            _update_scraper_health('Reuters', 10)
+        for _ in range(3):
+            _update_scraper_health('Reuters', 0)
+
+        degraded = _check_scraper_health()
+        assert len(degraded) == 1
+        assert degraded[0][0] == 'Reuters'
+        assert degraded[0][1] == 10.0
+
+    def test_check_no_alert_for_healthy_source(self):
+        """Source returning articles is not flagged."""
+        for count in [10, 8, 12, 9, 11, 7]:
+            _update_scraper_health('CoinDesk', count)
+        degraded = _check_scraper_health()
+        assert len(degraded) == 0
+
+    def test_check_no_alert_insufficient_history(self):
+        """Sources with <4 runs are not evaluated."""
+        _update_scraper_health('NewSource', 0)
+        _update_scraper_health('NewSource', 0)
+        _update_scraper_health('NewSource', 0)
+        degraded = _check_scraper_health()
+        assert len(degraded) == 0
+
+    def test_check_no_alert_low_historical_avg(self):
+        """Source that historically had <5 articles is not flagged."""
+        for _ in range(4):
+            _update_scraper_health('SmallSite', 3)
+        for _ in range(3):
+            _update_scraper_health('SmallSite', 0)
+        degraded = _check_scraper_health()
+        assert len(degraded) == 0
+
+    def test_check_no_alert_when_recent_has_articles(self):
+        """Source that returned articles in last 3 runs is not flagged."""
+        for _ in range(4):
+            _update_scraper_health('CoinDesk', 10)
+        _update_scraper_health('CoinDesk', 0)
+        _update_scraper_health('CoinDesk', 0)
+        _update_scraper_health('CoinDesk', 5)  # recovered
+        degraded = _check_scraper_health()
+        assert len(degraded) == 0
+
+    def test_get_health_status_healthy(self):
+        for count in [10, 8, 12, 9]:
+            _update_scraper_health('CoinDesk', count)
+        status = get_scraper_health()
+        assert status['CoinDesk']['health'] == 'healthy'
+        assert status['CoinDesk']['last_count'] == 9
+        assert status['CoinDesk']['runs_tracked'] == 4
+
+    def test_get_health_status_degraded(self):
+        for _ in range(4):
+            _update_scraper_health('Reuters', 10)
+        for _ in range(3):
+            _update_scraper_health('Reuters', 0)
+        status = get_scraper_health()
+        assert status['Reuters']['health'] == 'degraded'
+        assert status['Reuters']['avg_historical'] == 10.0
+        assert status['Reuters']['avg_recent'] == 0.0
+
+    def test_get_health_status_warning(self):
+        """Source with 3 zeros but no prior history shows warning."""
+        for _ in range(3):
+            _update_scraper_health('NewSite', 0)
+        status = get_scraper_health()
+        assert status['NewSite']['health'] == 'warning'
+
+    @patch('src.collectors.web_news_scraper.ALL_SCRAPERS')
+    def test_scrape_all_updates_health(self, mock_all):
+        """scrape_all_sources records counts per source."""
+        cd_fn = MagicMock(return_value=[{'title': f'Art {i}'} for i in range(5)])
+        rt_fn = MagicMock(return_value=[])
+        mock_all.__iter__ = MagicMock(return_value=iter([
+            ('CoinDesk', cd_fn),
+            ('Reuters', rt_fn),
+        ]))
+
+        scrape_all_sources()
+
+        assert 'CoinDesk' in _scraper_health
+        assert _scraper_health['CoinDesk'][-1] == 5
+        assert 'Reuters' in _scraper_health
+        assert _scraper_health['Reuters'][-1] == 0
+
+    @patch('src.collectors.web_news_scraper.ALL_SCRAPERS')
+    def test_scrape_all_records_zero_on_failure(self, mock_all):
+        """Failed scrapers get 0 recorded in health."""
+        fail_fn = MagicMock(side_effect=Exception("timeout"))
+        mock_all.__iter__ = MagicMock(return_value=iter([
+            ('CoinDesk', fail_fn),
+        ]))
+
+        scrape_all_sources()
+
+        assert _scraper_health['CoinDesk'][-1] == 0

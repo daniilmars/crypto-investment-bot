@@ -155,7 +155,7 @@ def discover_via_gemini(category='crypto'):
     )
 
     try:
-        model = GenerativeModel('gemini-2.0-flash')
+        model = GenerativeModel('gemini-2.5-flash-lite')
         response = model.generate_content(prompt)
         text = response.text.strip()
 

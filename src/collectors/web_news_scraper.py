@@ -348,6 +348,81 @@ def scrape_the_information():
     return articles or _generic_article_fallback(soup, 'The Information', 'https://www.theinformation.com')
 
 
+# --- Scraper health tracking ---
+
+_HEALTH_WINDOW = 10  # keep last N run counts per source
+_scraper_health: dict[str, list[int]] = {}
+
+
+def _update_scraper_health(source_name: str, article_count: int):
+    """Record article count for a source, trimming to window size."""
+    history = _scraper_health.setdefault(source_name, [])
+    history.append(article_count)
+    if len(history) > _HEALTH_WINDOW:
+        _scraper_health[source_name] = history[-_HEALTH_WINDOW:]
+
+
+def _check_scraper_health() -> list[tuple[str, float]]:
+    """Check for degraded scrapers and log warnings.
+
+    Alerts when a source that historically averaged 5+ articles
+    has returned 0 for 3+ consecutive recent runs.
+
+    Returns list of (source_name, historical_avg) for degraded sources.
+    """
+    degraded = []
+    for source, history in _scraper_health.items():
+        if len(history) < 4:
+            continue
+
+        # Check last 3 runs are all zero
+        if any(c > 0 for c in history[-3:]):
+            continue
+
+        # Check if historical average (excluding last 3) was 5+
+        older = history[:-3]
+        if not older:
+            continue
+        avg = sum(older) / len(older)
+        if avg >= 5.0:
+            degraded.append((source, avg))
+            log.warning(
+                f"Scraper health alert: [{source}] returned 0 articles for "
+                f"3 consecutive runs (historical avg: {avg:.1f}). "
+                f"CSS selectors may need updating."
+            )
+
+    return degraded
+
+
+def get_scraper_health() -> dict:
+    """Return current health status for all tracked scrapers.
+
+    Returns dict of {source_name: {health, last_count, avg_historical, avg_recent, runs_tracked}}.
+    """
+    status = {}
+    for source, history in _scraper_health.items():
+        recent = history[-3:] if len(history) >= 3 else history
+        older = history[:-3] if len(history) > 3 else []
+        avg_historical = sum(older) / len(older) if older else 0
+        avg_recent = sum(recent) / len(recent) if recent else 0
+
+        health = 'healthy'
+        if len(history) >= 4 and all(c == 0 for c in recent) and avg_historical >= 5:
+            health = 'degraded'
+        elif recent and all(c == 0 for c in recent):
+            health = 'warning'
+
+        status[source] = {
+            'health': health,
+            'last_count': history[-1] if history else 0,
+            'avg_historical': round(avg_historical, 1),
+            'avg_recent': round(avg_recent, 1),
+            'runs_tracked': len(history),
+        }
+    return status
+
+
 ALL_SCRAPERS = [
     ('CoinDesk', scrape_coindesk),
     ('CoinTelegraph', scrape_cointelegraph),
@@ -390,8 +465,12 @@ def scrape_all_sources(enabled_sources=None):
                 articles = future.result(timeout=SCRAPE_TIMEOUT)
                 log.info(f"Web scraper [{source_name}]: {len(articles)} articles")
                 all_articles.extend(articles)
+                _update_scraper_health(source_name, len(articles))
             except Exception as e:
                 log.warning(f"Web scraper [{source_name}] failed: {e}")
+                _update_scraper_health(source_name, 0)
+
+    _check_scraper_health()
 
     log.info(f"Web scraping complete: {len(all_articles)} total articles from "
              f"{len(scrapers)} sources")

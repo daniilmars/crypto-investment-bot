@@ -164,7 +164,6 @@ class TestAtomicWrite:
             btc = data['per_symbol']['BTC']
             assert 'category' in btc
             assert 'article_count' in btc
-            assert 'avg_vader_score' in btc
             assert 'headlines' in btc
             assert 'articles' in btc
             assert btc['category'] == 'crypto'
@@ -172,7 +171,6 @@ class TestAtomicWrite:
             for article in btc['articles']:
                 assert 'headline' in article
                 assert 'source' in article
-                assert 'vader_score' in article
 
 
 # --- Graceful shutdown tests ---
@@ -203,37 +201,13 @@ class TestShutdown:
             assert daemon.shutdown_event.is_set()
 
 
-# --- VADER scoring tests ---
-
-class TestVaderScoring:
-    def test_positive_article(self, daemon):
-        """Positive headline should get positive VADER score."""
-        score = daemon._vader_score('Great news! Amazing profits and excellent growth', '')
-        assert score > 0
-
-    def test_negative_article(self, daemon):
-        """Negative headline should get negative VADER score."""
-        score = daemon._vader_score('Terrible crash, horrible losses and devastating failure', '')
-        assert score < 0
-
-    def test_weighted_scoring(self, daemon):
-        """Score should blend title (60%) and description (40%)."""
-        # Title positive, description negative — score should be mixed
-        score = daemon._vader_score(
-            'Bitcoin surges to new highs',
-            'However, analysts warn of significant crash risks ahead'
-        )
-        # Just verify it's a float, the weighting is tested by structure
-        assert isinstance(score, float)
-
-
 # --- Full RSS cycle test ---
 
 class TestFullCycle:
     @patch('src.collectors.scraper_daemon.save_articles_batch')
     @patch('src.collectors.scraper_daemon._fetch_rss_feeds')
     def test_rss_cycle_end_to_end(self, mock_rss, mock_db, daemon, tmp_output):
-        """Full RSS cycle: fetch → dedup → VADER → JSON + DB."""
+        """Full RSS cycle: fetch → dedup → match → JSON + DB."""
         mock_rss.return_value = [
             _make_article('Bitcoin surges past $100k'),
             _make_article('Ethereum breaks $5000 resistance'),
@@ -256,7 +230,6 @@ class TestFullCycle:
         for row in rows:
             assert 'title' in row
             assert 'title_hash' in row
-            assert 'vader_score' in row
 
     @patch('src.collectors.scraper_daemon.save_articles_batch')
     def test_no_articles_no_crash(self, mock_db, daemon):

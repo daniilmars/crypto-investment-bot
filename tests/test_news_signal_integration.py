@@ -18,35 +18,25 @@ from src.analysis.gemini_news_analyzer import (
 class TestCryptoNewsIndicator:
     """Tests that the news sentiment indicator works correctly in the crypto signal engine."""
 
-    def test_vader_bullish_tips_buy(self):
-        """VADER bullish sentiment (+1 buy) combined with SMA uptrend (+1 buy) = BUY."""
+    def test_vader_alone_does_not_trigger_buy(self):
+        """VADER bullish sentiment without Gemini does NOT trigger BUY."""
         market_data = {'current_price': 105, 'sma': 100, 'rsi': 50}
-        news_data = {
-            'avg_sentiment_score': 0.5,
-            'sentiment_buy_threshold': 0.15,
-            'sentiment_sell_threshold': -0.15,
-        }
+        news_data = {'avg_sentiment_score': 0.9}
         signal = generate_signal(
             symbol='BTCUSDT', market_data=market_data,
             news_sentiment_data=news_data, signal_threshold=2
         )
-        assert signal['signal'] == 'BUY'
-        assert 'VADER bullish' in signal['reason']
+        assert signal['signal'] == 'HOLD'
 
-    def test_vader_bearish_tips_sell(self):
-        """VADER bearish sentiment (+1 sell) combined with SMA downtrend (+1 sell) = SELL."""
+    def test_vader_alone_does_not_trigger_sell(self):
+        """VADER bearish sentiment without Gemini does NOT trigger SELL."""
         market_data = {'current_price': 95, 'sma': 100, 'rsi': 50}
-        news_data = {
-            'avg_sentiment_score': -0.5,
-            'sentiment_buy_threshold': 0.15,
-            'sentiment_sell_threshold': -0.15,
-        }
+        news_data = {'avg_sentiment_score': -0.9}
         signal = generate_signal(
             symbol='BTCUSDT', market_data=market_data,
             news_sentiment_data=news_data, signal_threshold=2
         )
-        assert signal['signal'] == 'SELL'
-        assert 'VADER bearish' in signal['reason']
+        assert signal['signal'] == 'HOLD'
 
     def test_none_news_data_no_effect(self):
         """When news_sentiment_data is None, signal engine works as before."""
@@ -54,20 +44,6 @@ class TestCryptoNewsIndicator:
         signal = generate_signal(
             symbol='BTCUSDT', market_data=market_data,
             news_sentiment_data=None
-        )
-        assert signal['signal'] == 'HOLD'
-
-    def test_neutral_sentiment_no_score_change(self):
-        """Neutral VADER sentiment doesn't add to buy or sell score."""
-        market_data = {'current_price': 105, 'sma': 100, 'rsi': 50}
-        news_data = {
-            'avg_sentiment_score': 0.05,  # Between -0.15 and 0.15
-            'sentiment_buy_threshold': 0.15,
-            'sentiment_sell_threshold': -0.15,
-        }
-        signal = generate_signal(
-            symbol='BTCUSDT', market_data=market_data,
-            news_sentiment_data=news_data
         )
         assert signal['signal'] == 'HOLD'
 
@@ -80,33 +56,23 @@ class TestStockNewsIndicator:
     def _market(self, price, sma=None, rsi=None):
         return {'current_price': price, 'sma': sma, 'rsi': rsi}
 
-    def test_vader_bullish_tips_buy(self):
-        """VADER bullish + SMA uptrend = BUY for stocks."""
-        news_data = {
-            'avg_sentiment_score': 0.5,
-            'sentiment_buy_threshold': 0.15,
-            'sentiment_sell_threshold': -0.15,
-        }
+    def test_vader_alone_does_not_trigger_buy(self):
+        """VADER bullish without Gemini does NOT trigger BUY for stocks."""
+        news_data = {'avg_sentiment_score': 0.9}
         signal = generate_stock_signal(
             symbol='AAPL', market_data=self._market(150, sma=140, rsi=50),
             news_sentiment_data=news_data, signal_threshold=2
         )
-        assert signal['signal'] == 'BUY'
-        assert 'VADER bullish' in signal['reason']
+        assert signal['signal'] == 'HOLD'
 
-    def test_vader_bearish_tips_sell(self):
-        """VADER bearish + SMA downtrend = SELL for stocks."""
-        news_data = {
-            'avg_sentiment_score': -0.5,
-            'sentiment_buy_threshold': 0.15,
-            'sentiment_sell_threshold': -0.15,
-        }
+    def test_vader_alone_does_not_trigger_sell(self):
+        """VADER bearish without Gemini does NOT trigger SELL for stocks."""
+        news_data = {'avg_sentiment_score': -0.9}
         signal = generate_stock_signal(
             symbol='AAPL', market_data=self._market(130, sma=140, rsi=50),
             news_sentiment_data=news_data, signal_threshold=2
         )
-        assert signal['signal'] == 'SELL'
-        assert 'VADER bearish' in signal['reason']
+        assert signal['signal'] == 'HOLD'
 
     def test_none_news_data_no_effect(self):
         """None news data doesn't affect stock signal."""
@@ -181,10 +147,6 @@ class TestGeminiGroundedSearch:
         """Gemini bullish assessment (+1 buy) + SMA uptrend (+1 buy) = BUY."""
         market_data = {'current_price': 105, 'sma': 100, 'rsi': 50}
         news_data = {
-            'avg_sentiment_score': 0,
-            'sentiment_buy_threshold': 0.15,
-            'sentiment_sell_threshold': -0.15,
-            'min_gemini_confidence': 0.6,
             'gemini_assessment': {'direction': 'bullish', 'confidence': 0.8, 'reasoning': 'Test'},
         }
         signal = generate_signal(
@@ -198,10 +160,6 @@ class TestGeminiGroundedSearch:
         """Gemini bearish assessment (+1 sell) + SMA downtrend (+1 sell) = SELL."""
         market_data = {'current_price': 95, 'sma': 100, 'rsi': 50}
         news_data = {
-            'avg_sentiment_score': 0,
-            'sentiment_buy_threshold': 0.15,
-            'sentiment_sell_threshold': -0.15,
-            'min_gemini_confidence': 0.6,
             'gemini_assessment': {'direction': 'bearish', 'confidence': 0.8, 'reasoning': 'Test'},
         }
         signal = generate_signal(
@@ -211,22 +169,18 @@ class TestGeminiGroundedSearch:
         assert signal['signal'] == 'SELL'
         assert 'Gemini bearish' in signal['reason']
 
-    def test_gemini_low_confidence_falls_back_to_vader(self):
-        """When Gemini confidence is below threshold, falls back to VADER."""
+    def test_gemini_low_confidence_holds_no_vader(self):
+        """When Gemini confidence is below threshold, HOLD — no VADER fallback."""
         market_data = {'current_price': 105, 'sma': 100, 'rsi': 50}
         news_data = {
-            'avg_sentiment_score': 0.5,
-            'sentiment_buy_threshold': 0.15,
-            'sentiment_sell_threshold': -0.15,
-            'min_gemini_confidence': 0.6,
+            'avg_sentiment_score': 0.9,  # High VADER — should still HOLD
             'gemini_assessment': {'direction': 'bullish', 'confidence': 0.3, 'reasoning': 'Low conf'},
         }
         signal = generate_signal(
             symbol='BTCUSDT', market_data=market_data,
             news_sentiment_data=news_data, signal_threshold=2
         )
-        assert signal['signal'] == 'BUY'
-        assert 'VADER bullish' in signal['reason']
+        assert signal['signal'] == 'HOLD'
 
 
 # --- Gemini Cache Tests ---
@@ -305,13 +259,12 @@ class TestSentimentModeIntegration:
         news_data = {
             'gemini_assessment': {'direction': 'bullish', 'confidence': 0.82, 'reasoning': 'ETF inflows',
                                   'catalyst_freshness': 'breaking'},
-            'avg_sentiment_score': 0.2,
         }
         signal = generate_signal(
             symbol='BTCUSDT', market_data=market_data,
             news_sentiment_data=news_data,
             signal_mode='sentiment',
-            sentiment_config={'min_gemini_confidence': 0.7, 'min_vader_score': 0.3,
+            sentiment_config={'min_gemini_confidence': 0.7,
                               'rsi_buy_veto_threshold': 75, 'rsi_sell_veto_threshold': 25},
         )
         assert signal['signal'] == 'BUY'
@@ -321,15 +274,15 @@ class TestSentimentModeIntegration:
         """Stock sentiment: bullish but P/E too high = HOLD."""
         market_data = {'current_price': 450, 'sma': 430, 'rsi': 50}
         news_data = {
-            'gemini_assessment': {'direction': 'bullish', 'confidence': 0.9, 'reasoning': 'AI hype'},
-            'avg_sentiment_score': 0.5,
+            'gemini_assessment': {'direction': 'bullish', 'confidence': 0.9, 'reasoning': 'AI hype',
+                                  'catalyst_freshness': 'breaking'},
         }
         signal = generate_stock_signal(
             symbol='NVDA', market_data=market_data,
             fundamental_data={'pe_ratio': 65},
             news_sentiment_data=news_data,
             signal_mode='sentiment',
-            sentiment_config={'min_gemini_confidence': 0.7, 'min_vader_score': 0.3,
+            sentiment_config={'min_gemini_confidence': 0.7,
                               'rsi_buy_veto_threshold': 75, 'rsi_sell_veto_threshold': 25,
                               'pe_buy_veto_threshold': 40},
         )

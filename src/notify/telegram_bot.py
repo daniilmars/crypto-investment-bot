@@ -11,7 +11,8 @@ from src.logger import log
 from src.config import app_config
 from src.database import (
     get_price_history_since,
-    get_database_schema, get_table_counts, get_trade_summary, get_last_signal
+    get_database_schema, get_table_counts, get_trade_summary, get_last_signal,
+    record_signal_decision,
 )
 from src.analysis.gemini_summary import generate_market_summary
 from src.gcp.costs import get_gcp_billing_summary
@@ -261,6 +262,10 @@ async def _handle_signal_callback(update: Update, context: ContextTypes.DEFAULT_
 
         await _safe_edit(query, message)
         log.info(f"Signal #{signal_id} approved: {signal_type} {symbol}")
+        try:
+            await record_signal_decision(signal, 'approved')
+        except Exception as e:
+            log.debug(f"Failed to record approved decision: {e}")
 
     elif action == "r":
         # Reject
@@ -273,6 +278,10 @@ async def _handle_signal_callback(update: Update, context: ContextTypes.DEFAULT_
         )
         await _safe_edit(query, message)
         log.info(f"Signal #{signal_id} rejected: {signal_type} {symbol}")
+        try:
+            await record_signal_decision(signal, 'rejected')
+        except Exception as e:
+            log.debug(f"Failed to record rejected decision: {e}")
     else:
         await query.answer("Unknown action.")
 
@@ -320,6 +329,10 @@ async def cleanup_expired_signals():
         except Exception as e:
             log.warning(f"Could not edit expired signal #{signal_id} message: {e}")
         log.info(f"Signal #{signal_id} expired: {signal_type} {symbol}")
+        try:
+            await record_signal_decision(signal, 'expired')
+        except Exception as e:
+            log.debug(f"Failed to record expired decision: {e}")
 
 
 # --- Alerting Functions ---
@@ -429,7 +442,7 @@ async def send_news_alert(triggered_symbols, sentiment_data, gemini_assessments=
         sym_data = sentiment_data.get(symbol, {})
         avg_score = sym_data.get('avg_sentiment_score', 0)
         volume = sym_data.get('news_volume', 0)
-        lines.append(f"*{symbol}:* {volume} articles, VADER sentiment {avg_score:+.3f}")
+        lines.append(f"*{symbol}:* {volume} articles, sentiment {avg_score:+.3f}")
 
         # Add Gemini assessment if available
         if gemini_assessments:
@@ -973,6 +986,22 @@ async def auto_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         log.error(f"Error in /auto_status: {e}")
         await update.message.reply_text("Error fetching auto-bot status.")
+
+
+@authorized
+async def auto_postmortem_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /auto_postmortem command — shows auto trade loss analysis."""
+    try:
+        from src.analysis.auto_postmortem import (
+            generate_auto_postmortem, format_postmortem_message,
+        )
+        days = int(context.args[0]) if context.args else 30
+        report = generate_auto_postmortem(days=days)
+        formatted = format_postmortem_message(report, days=days)
+        await update.message.reply_text(formatted, parse_mode='Markdown')
+    except Exception as e:
+        log.error(f"Error in /auto_postmortem: {e}")
+        await update.message.reply_text("Error generating auto post-mortem.")
 
 
 @authorized
@@ -1722,6 +1751,7 @@ async def start_bot() -> Application:
             CommandHandler("pdt", pdt_cmd),
             CommandHandler("market_hours", market_hours_cmd),
             CommandHandler("auto_status", auto_status_cmd),
+            CommandHandler("auto_postmortem", auto_postmortem_cmd),
             CommandHandler("regime", regime_cmd),
             CommandHandler("sectors", sectors_cmd),
             CommandHandler("events", events_cmd),

@@ -18,6 +18,10 @@ async def collect_and_analyze_news(
 ) -> tuple:
     """Collect news and run Gemini analysis for all symbols.
 
+    Always runs RSS+scraping first (free, feeds article DB, velocity, IPO).
+    Then uses grounded search for Gemini assessment (free within 1,500/day),
+    falling back to analyze_news_impact if grounded search fails.
+
     Returns (gemini_assessments, news_per_symbol).
     """
     news_config = settings.get('news_analysis', {})
@@ -25,53 +29,72 @@ async def collect_and_analyze_news(
     news_per_symbol = {}
     use_grounded_search = news_config.get('use_grounded_search', False)
 
-    # --- Optional: Gemini with Google Search grounding (expensive) ---
-    if news_config.get('enabled', False) and use_grounded_search:
+    # Step 1: Always collect news via RSS + web scraping (free)
+    # This feeds article DB, velocity detection, IPO detection, and news alerts.
+    news_result = await asyncio.to_thread(collect_news_sentiment, all_symbols)
+    news_per_symbol = news_result.get('per_symbol', {})
+    triggered_symbols = news_result.get('triggered_symbols', [])
+
+    if not news_config.get('enabled', False):
+        return gemini_assessments, news_per_symbol
+
+    # Step 2: Prepare collected data for Gemini (used by both paths)
+    headlines_by_symbol = {}
+    archived_articles_by_symbol = {}
+    news_stats_by_symbol = {}
+    symbols_with_news = [sym for sym in all_symbols if sym in news_per_symbol]
+
+    if symbols_with_news:
+        for sym in symbols_with_news:
+            sym_data = news_per_symbol.get(sym, {})
+            headlines_by_symbol[sym] = sym_data.get('headlines', [])
+
+        for sym in symbols_with_news:
+            try:
+                archived = await get_recent_articles(sym, hours=24)
+                if archived:
+                    archived_articles_by_symbol[sym] = archived
+            except Exception as e:
+                log.warning(f"Failed to fetch archived articles for {sym}: {e}")
+
+        news_stats_by_symbol = _build_news_stats(
+            symbols_with_news, news_per_symbol)
+
+    # Step 3: Get Gemini assessment — try grounded search first (free tier)
+    if use_grounded_search:
         cache_ttl = news_config.get('cache_ttl_minutes', 30)
         gemini_assessments = await asyncio.to_thread(
             analyze_news_with_search,
-            all_symbols, current_prices_dict, cache_ttl_minutes=cache_ttl)
+            all_symbols, current_prices_dict,
+            cache_ttl_minutes=cache_ttl,
+            headlines_by_symbol=headlines_by_symbol or None,
+            archived_articles_by_symbol=archived_articles_by_symbol or None,
+            news_stats_by_symbol=news_stats_by_symbol or None,
+        )
+        if gemini_assessments is None:
+            log.info("Grounded search unavailable — falling back to "
+                     "analyze_news_impact.")
 
-    # --- Primary path: RSS + web scraping + plain Gemini (cheap) ---
-    if gemini_assessments is None:
-        if use_grounded_search:
-            log.info("Grounded search unavailable — falling back to RSS+scraping pipeline.")
-        news_result = await asyncio.to_thread(collect_news_sentiment, all_symbols)
-        news_per_symbol = news_result.get('per_symbol', {})
-        triggered_symbols = news_result.get('triggered_symbols', [])
+    # Step 4: Fall back to analyze_news_impact if grounded search
+    # failed or is disabled
+    if gemini_assessments is None and symbols_with_news:
+        current_prices_for_news = {}
+        for sym in symbols_with_news:
+            sym_data = news_per_symbol.get(sym, {})
+            current_prices_for_news[sym] = current_prices_dict.get(
+                sym, sym_data.get('current_price', 0))
 
-        symbols_with_news = [sym for sym in all_symbols if sym in news_per_symbol]
-        if symbols_with_news and news_config.get('enabled', False):
-            headlines_by_symbol = {}
-            current_prices_for_news = {}
-            for sym in symbols_with_news:
-                sym_data = news_per_symbol.get(sym, {})
-                headlines_by_symbol[sym] = sym_data.get('headlines', [])
-                current_prices_for_news[sym] = current_prices_dict.get(
-                    sym, sym_data.get('current_price', 0))
+        gemini_assessments = await asyncio.to_thread(
+            analyze_news_impact,
+            headlines_by_symbol, current_prices_for_news,
+            archived_articles_by_symbol=archived_articles_by_symbol or None,
+            news_stats_by_symbol=news_stats_by_symbol or None,
+        )
 
-            # Enrich Gemini prompt with archived articles from DB
-            archived_articles_by_symbol = {}
-            for sym in symbols_with_news:
-                try:
-                    archived = await get_recent_articles(sym, hours=24)
-                    if archived:
-                        archived_articles_by_symbol[sym] = archived
-                except Exception as e:
-                    log.warning(f"Failed to fetch archived articles for {sym}: {e}")
-
-            # Build news stats per symbol for Gemini context
-            news_stats_by_symbol = _build_news_stats(symbols_with_news, news_per_symbol)
-
-            gemini_assessments = await asyncio.to_thread(
-                analyze_news_impact,
-                headlines_by_symbol, current_prices_for_news,
-                archived_articles_by_symbol=archived_articles_by_symbol or None,
-                news_stats_by_symbol=news_stats_by_symbol or None,
-            )
-            if triggered_symbols:
-                await send_news_alert(triggered_symbols, news_per_symbol,
-                                      gemini_assessments=gemini_assessments)
+    # Send news alerts for triggered symbols (regardless of assessment path)
+    if triggered_symbols:
+        await send_news_alert(triggered_symbols, news_per_symbol,
+                              gemini_assessments=gemini_assessments)
 
     return gemini_assessments, news_per_symbol
 

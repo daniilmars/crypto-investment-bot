@@ -7,7 +7,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 import feedparser
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 from src.config import app_config
 from src.database import (
@@ -358,7 +357,6 @@ RSS_FEEDS = [
     {'url': 'https://seekingalpha.com/market_currents.xml', 'category': 'financial'},
 ]
 
-_vader_analyzer = SentimentIntensityAnalyzer()
 
 RSS_FETCH_TIMEOUT = 15
 _RSS_BATCH_SIZE = 10       # feeds per batch
@@ -768,7 +766,7 @@ def collect_news_sentiment(symbols):
                 })
         gemini_article_scores = _score_with_gemini(articles_for_scoring)
 
-    # 3. VADER score each headline, use Gemini score when available, match to symbols
+    # 3. Score each headline with Gemini, match to symbols
     symbol_articles = {symbol: [] for symbol in symbols}
     archive_rows = []
 
@@ -780,29 +778,16 @@ def collect_news_sentiment(symbols):
         if not matched_symbols:
             continue
 
-        # VADER scoring (always runs, serves as fallback)
-        title_score = _vader_analyzer.polarity_scores(title)['compound'] if title else 0
-        desc_score = _vader_analyzer.polarity_scores(description)['compound'] if description else 0
-
-        if title and description:
-            vader_score = title_score * 0.6 + desc_score * 0.4
-        elif title:
-            vader_score = title_score
-        else:
-            vader_score = desc_score
-
         title_hash = compute_title_hash(title) if title else None
-
-        # Use Gemini score when available, fall back to VADER
         gemini_score = gemini_article_scores.get(title_hash) if title_hash else None
-        effective_score = gemini_score if gemini_score is not None else vader_score
 
         for symbol in matched_symbols:
-            symbol_articles[symbol].append({
-                'title': title,
-                'score': effective_score,
-                'published_at': article.get('published_at', ''),
-            })
+            if gemini_score is not None:
+                symbol_articles[symbol].append({
+                    'title': title,
+                    'score': gemini_score,
+                    'published_at': article.get('published_at', ''),
+                })
 
             # Accumulate archive rows for DB storage
             if title_hash:
@@ -813,7 +798,6 @@ def collect_news_sentiment(symbols):
                     'source_url': article.get('source_url', ''),
                     'description': description,
                     'symbol': symbol,
-                    'vader_score': vader_score,
                     'gemini_score': gemini_score,
                     'category': article.get('category', 'unknown'),
                 })

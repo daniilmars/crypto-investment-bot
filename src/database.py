@@ -40,7 +40,7 @@ def _cursor(conn):
 # --- Connection Pool (for PostgreSQL) ---
 _pg_pool = None
 
-ALLOWED_TABLES = frozenset({"market_prices", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles", "stoploss_cooldowns", "position_additions", "ipo_events", "macro_regime_history", "source_registry", "signal_attribution", "experiment_log", "tuning_history", "session_peaks", "watchlist_items", "bot_state_kv"})
+ALLOWED_TABLES = frozenset({"market_prices", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles", "stoploss_cooldowns", "position_additions", "ipo_events", "macro_regime_history", "source_registry", "signal_attribution", "experiment_log", "tuning_history", "session_peaks", "watchlist_items", "bot_state_kv", "signal_decisions"})
 
 # --- Database Connection Management ---
 
@@ -607,6 +607,40 @@ def initialize_database(db_url=None):
             )'''
         cursor.execute(watchlist_items_sql)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_active ON watchlist_items (is_active, asset_type)")
+
+        # Signal Decisions (tracks manual confirm/reject/expire decisions)
+        signal_decisions_sql = '''
+            CREATE TABLE IF NOT EXISTS signal_decisions (
+                id SERIAL PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                signal_type TEXT NOT NULL,
+                asset_type TEXT DEFAULT 'crypto',
+                decision TEXT NOT NULL,
+                signal_strength REAL,
+                gemini_confidence REAL,
+                catalyst_freshness TEXT,
+                reason TEXT,
+                price REAL,
+                decided_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )''' if is_postgres_conn else '''
+            CREATE TABLE IF NOT EXISTS signal_decisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                signal_type TEXT NOT NULL,
+                asset_type TEXT DEFAULT 'crypto',
+                decision TEXT NOT NULL,
+                signal_strength REAL,
+                gemini_confidence REAL,
+                catalyst_freshness TEXT,
+                reason TEXT,
+                price REAL,
+                decided_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )'''
+        cursor.execute(signal_decisions_sql)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_signal_decisions_symbol "
+            "ON signal_decisions (symbol, decided_at)"
+        )
 
         # Bot State KV (persistent key-value store for dashboard message IDs, etc.)
         bot_state_kv_sql = '''
@@ -1265,7 +1299,7 @@ def save_articles_batch(articles: list):
     Saves a batch of scraped articles to the database, skipping duplicates.
 
     Each article dict should have: title, title_hash, source, source_url,
-    description, symbol, vader_score.
+    description, symbol. Optional: gemini_score, category.
     """
     if not articles:
         return
@@ -1601,6 +1635,83 @@ def load_bot_state(key: str) -> str | None:
     except (sqlite3.Error, psycopg2.Error) as e:
         log.error(f"Database error in load_bot_state: {e}", exc_info=True)
         return None
+    finally:
+        release_db_connection(conn)
+
+
+@async_db
+def record_signal_decision(signal: dict, decision: str):
+    """Persist a manual signal confirmation decision."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            query = '''
+                INSERT INTO signal_decisions
+                    (symbol, signal_type, asset_type, decision, signal_strength,
+                     gemini_confidence, catalyst_freshness, reason, price)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ''' if is_pg else '''
+                INSERT INTO signal_decisions
+                    (symbol, signal_type, asset_type, decision, signal_strength,
+                     gemini_confidence, catalyst_freshness, reason, price)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            '''
+            cursor.execute(query, (
+                signal.get('symbol', ''),
+                signal.get('signal', ''),
+                signal.get('asset_type', 'crypto'),
+                decision,
+                signal.get('signal_strength'),
+                signal.get('gemini_confidence'),
+                signal.get('catalyst_freshness'),
+                signal.get('reason', ''),
+                signal.get('current_price'),
+            ))
+        conn.commit()
+        log.debug(f"Recorded signal decision: {decision} for "
+                  f"{signal.get('signal')} {signal.get('symbol')}")
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in record_signal_decision: {e}")
+    finally:
+        release_db_connection(conn)
+
+
+@async_db
+def get_signal_decisions(limit=100, decision=None) -> list[dict]:
+    """Query signal decisions, optionally filtered by decision type."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            params = []
+            if is_pg:
+                query = "SELECT * FROM signal_decisions"
+                if decision:
+                    query += " WHERE decision = %s"
+                    params.append(decision)
+                query += " ORDER BY decided_at DESC LIMIT %s"
+                params.append(limit)
+            else:
+                query = "SELECT * FROM signal_decisions"
+                if decision:
+                    query += " WHERE decision = ?"
+                    params.append(decision)
+                query += " ORDER BY decided_at DESC LIMIT ?"
+                params.append(limit)
+            cursor.execute(query, tuple(params))
+            rows = cursor.fetchall()
+            if rows and hasattr(rows[0], 'keys'):
+                return [dict(r) for r in rows]
+            if rows:
+                cols = [d[0] for d in cursor.description]
+                return [dict(zip(cols, r)) for r in rows]
+            return []
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in get_signal_decisions: {e}")
+        return []
     finally:
         release_db_connection(conn)
 

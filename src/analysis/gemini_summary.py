@@ -27,7 +27,7 @@ def generate_market_summary(price_history: list, last_signal: dict,
 
     try:
         vertexai.init(project=project_id, location=location)
-        model = GenerativeModel('gemini-2.0-flash')
+        model = GenerativeModel('gemini-2.5-flash-lite')
 
         # --- Data Preparation ---
         price_df = pd.DataFrame(price_history)

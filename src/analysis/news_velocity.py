@@ -48,19 +48,19 @@ def compute_news_velocity(symbol: str) -> dict:
                     cursor.execute(count_q, (symbol, f'-{hours}'))
                 counts[hours] = cursor.fetchone()[0]
 
-                # Average sentiment: prefer gemini_score, fallback to vader_score
+                # Average sentiment from Gemini scores only
                 if is_pg:
                     sent_q = (
-                        "SELECT AVG(COALESCE(gemini_score, vader_score)) FROM scraped_articles "
+                        "SELECT AVG(gemini_score) FROM scraped_articles "
                         "WHERE symbol = %s AND collected_at >= NOW() - INTERVAL '%s hours' "
-                        "AND COALESCE(gemini_score, vader_score) IS NOT NULL"
+                        "AND gemini_score IS NOT NULL"
                     )
                     cursor.execute(sent_q, (symbol, hours))
                 else:
                     sent_q = (
-                        "SELECT AVG(COALESCE(gemini_score, vader_score)) FROM scraped_articles "
+                        "SELECT AVG(gemini_score) FROM scraped_articles "
                         "WHERE symbol = ? AND collected_at >= datetime('now', ? || ' hours') "
-                        "AND COALESCE(gemini_score, vader_score) IS NOT NULL"
+                        "AND gemini_score IS NOT NULL"
                     )
                     cursor.execute(sent_q, (symbol, f'-{hours}'))
                 row = cursor.fetchone()

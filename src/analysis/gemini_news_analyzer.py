@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import re
 import time
 
@@ -55,6 +56,43 @@ def clear_gemini_article_cache():
     _gemini_article_cache.clear()
 
 
+_MAX_RETRIES = 3
+_RETRY_BASE_DELAY = 2.0
+
+
+def _is_retryable_error(exc: Exception) -> bool:
+    """Check if a Gemini API error is transient and worth retrying."""
+    type_name = type(exc).__name__
+    if type_name in ('ResourceExhausted', 'InternalServerError',
+                     'ServiceUnavailable', 'DeadlineExceeded', 'TooManyRequests'):
+        return True
+    msg = str(exc).lower()
+    return any(s in msg for s in ('429', '500', '503', 'resource exhausted',
+                                  'quota', 'rate limit', 'unavailable'))
+
+
+def _call_with_retry(fn, *args, **kwargs):
+    """Call a Gemini API function with exponential backoff on transient errors.
+
+    Retries up to _MAX_RETRIES times on 429/500/503 errors.
+    Raises the original exception if all retries exhausted or error is not retryable.
+    """
+    last_exc = None
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            last_exc = e
+            if attempt < _MAX_RETRIES and _is_retryable_error(e):
+                delay = _RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, 1)
+                log.warning(f"Gemini API transient error (attempt {attempt + 1}/{_MAX_RETRIES + 1}), "
+                            f"retrying in {delay:.1f}s: {e}")
+                time.sleep(delay)
+            else:
+                raise
+    raise last_exc
+
+
 def _score_single_batch(model, articles: list) -> list | None:
     """Sends a single batch of articles to Gemini and returns a list of scores.
 
@@ -69,19 +107,28 @@ def _score_single_batch(model, articles: list) -> list | None:
     articles_text = "\n".join(numbered_lines)
 
     prompt = (
-        "Score each article's financial/crypto market sentiment from -1.0 "
-        "(very bearish) to +1.0 (very bullish). 0.0 = neutral or irrelevant.\n\n"
-        "Consider:\n"
-        "- Positive catalysts (ETF approvals, partnerships, earnings beats) → positive\n"
-        "- Negative catalysts (hacks, regulatory bans, earnings misses) → negative\n"
-        "- Opinion pieces, vague predictions, irrelevant news → near 0.0\n\n"
+        "You are a trading desk analyst scoring news articles for a short-term "
+        "trading bot (3.5% stop-loss, 8% take-profit, 15-minute cycles).\n\n"
+        "Score each article from -1.0 (very bearish) to +1.0 (very bullish).\n\n"
+        "SCORING RULES:\n"
+        "- Only ACTIONABLE news that can move prices within 24h deserves |score| > 0.3\n"
+        "- Concrete events (ETF ruling, hack, earnings, regulatory action, "
+        "major partnership, Fed decision) → high magnitude (0.5-1.0)\n"
+        "- Recycled narratives, opinion pieces, 'experts predict', "
+        "price predictions, vague 'could/may/might' → near 0.0\n"
+        "- Press releases and corporate fluff → near 0.0\n"
+        "- If the same story appears multiple times, only the first matters → "
+        "duplicates get 0.0\n"
+        "- Consider source: Reuters/Bloomberg/SEC filings > CoinDesk/CoinTelegraph > blogs/KOLs\n"
+        "- Earnings beats/misses: score by MAGNITUDE of surprise, not just direction\n"
+        "- Macro news (CPI, FOMC, tariffs): score based on deviation from consensus\n\n"
         f"Articles:\n{articles_text}\n\n"
         "Respond ONLY with a JSON array of numbers in the same order:\n"
         f"[0.6, -0.3, 0.0, ...]"
     )
 
     try:
-        response = model.generate_content(prompt)
+        response = _call_with_retry(model.generate_content, prompt)
         text = response.text.strip()
         scores = _parse_gemini_json(text)
 
@@ -138,7 +185,7 @@ def score_articles_batch(articles: list, batch_size: int = 50) -> dict:
 
     try:
         vertexai.init(project=project_id, location=location)
-        model = GenerativeModel('gemini-2.0-flash')
+        model = GenerativeModel('gemini-2.5-flash-lite')
     except Exception as e:
         log.error(f"Failed to initialize Gemini for article scoring: {e}")
         return {}
@@ -163,16 +210,25 @@ def score_articles_batch(articles: list, batch_size: int = 50) -> dict:
 
 
 def analyze_news_with_search(symbols: list, current_prices: dict,
-                             cache_ttl_minutes: int = 30) -> dict | None:
+                             cache_ttl_minutes: int = 30,
+                             headlines_by_symbol: dict = None,
+                             archived_articles_by_symbol: dict = None,
+                             news_stats_by_symbol: dict = None) -> dict | None:
     """
-    Uses Gemini with Google Search grounding to find and analyze news for the given symbols.
+    Uses Gemini with Google Search grounding + our RSS/scraper headlines
+    to produce a comprehensive news assessment per symbol.
 
-    Instead of relying on RSS feeds + VADER, this lets Gemini search the web itself
-    and return grounded sentiment assessments with citations.
+    Combines two data sources:
+    - Our curated RSS/scraper headlines (60+ feeds, trusted sources)
+    - Gemini's own Google Search results (real-time web search)
 
     Args:
         symbols: list of ticker symbols (e.g. ['BTC', 'ETH', 'AAPL'])
         current_prices: {symbol: float} — current prices for context
+        cache_ttl_minutes: cache TTL for Gemini responses
+        headlines_by_symbol: {symbol: [headline, ...]} from RSS/scraping
+        archived_articles_by_symbol: {symbol: [{title, source, ...}, ...]} from DB
+        news_stats_by_symbol: {symbol: {news_volume, positive_ratio, ...}}
 
     Returns:
         dict with 'symbol_assessments' and 'market_mood', or None on failure.
@@ -203,39 +259,94 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
 
         client = genai.Client(vertexai=True, project=project_id, location=location)
 
-        # Build price context
-        price_lines = []
+        # Build per-symbol context sections
+        symbol_sections = []
         for sym in symbols:
             price = current_prices.get(sym)
-            if price:
-                price_lines.append(f"- {sym}: ${price:,.2f}")
-            else:
-                price_lines.append(f"- {sym}: price unknown")
-        price_context = "\n".join(price_lines)
+            price_str = f"${price:,.2f}" if price else "unknown"
+            section = f"**{sym}** (current price: {price_str})"
 
+            # Add our collected headlines
+            if headlines_by_symbol and sym in headlines_by_symbol:
+                top = headlines_by_symbol[sym][:10]
+                if top:
+                    section += "\nOur RSS/scraper headlines:\n" + "\n".join(
+                        f"- {h}" for h in top)
+
+            # Add archived articles with source attribution
+            if archived_articles_by_symbol and sym in archived_articles_by_symbol:
+                archived = archived_articles_by_symbol[sym][:5]
+                if archived:
+                    archive_lines = []
+                    for a in archived:
+                        source = a.get('source', '?')
+                        category = a.get('category', '')
+                        cat_tag = f" ({category})" if category else ""
+                        line = f"- [{source}{cat_tag}] {a.get('title', '')}"
+                        desc = a.get('description', '')
+                        if desc and len(desc) > 50:
+                            line += f"\n  {desc[:500]}"
+                        archive_lines.append(line)
+                    section += "\nRecent archived articles:\n" + "\n".join(archive_lines)
+
+            # Add pre-computed news stats
+            if news_stats_by_symbol and sym in news_stats_by_symbol:
+                stats = news_stats_by_symbol[sym]
+                section += (
+                    f"\nNews stats: {stats.get('news_volume', 0)} articles, "
+                    f"positive/negative: {stats.get('positive_ratio', 0):.0%}/"
+                    f"{stats.get('negative_ratio', 0):.0%}")
+
+            symbol_sections.append(section)
+
+        collected_context = "\n\n".join(symbol_sections)
         symbols_str = ", ".join(symbols)
+
         prompt = (
-            f"Search for the latest news (last 24-48 hours) about these assets: {symbols_str}\n\n"
-            f"Current prices:\n{price_context}\n\n"
-            "For each asset, assess the short-term market sentiment based on the news you find.\n\n"
-            "Respond ONLY with valid JSON in this exact format:\n"
+            "You are a senior trading desk analyst. Use BOTH the headlines we collected "
+            "from our RSS feeds AND your own Google Search results to assess news impact.\n\n"
+            "BOT PARAMETERS:\n"
+            "- Stop-loss: -3.5%, Take-profit: +8%, Trailing stop: +2%/1.5%\n"
+            "- 15-minute decision cycles. Only confidence >= 0.5 triggers trades.\n\n"
+            "INSTRUCTIONS:\n"
+            "1. Review our collected headlines below for each symbol\n"
+            "2. Search the web for any additional breaking news we may have missed\n"
+            "3. Cross-reference both sources — corroborated stories get higher confidence\n"
+            "4. Only CONCRETE catalysts (regulatory, ETF, hack, earnings surprise, "
+            "Fed decision) justify confidence >= 0.6\n"
+            "5. Opinion pieces, recycled narratives, price predictions → confidence <= 0.4\n\n"
+            f"--- Symbols to analyze: {symbols_str} ---\n\n"
+            f"{collected_context}\n\n"
+            "Now search the web for any additional news about these assets, then respond "
+            "ONLY with valid JSON:\n"
             "{\n"
             '  "symbol_assessments": {\n'
-            '    "SYMBOL": {"direction": "bullish|bearish|neutral", "confidence": 0.0, "reasoning": "..."}\n'
+            '    "SYMBOL": {\n'
+            '      "direction": "bullish|bearish|neutral",\n'
+            '      "confidence": 0.0,\n'
+            '      "reasoning": "one sentence: [catalyst] + [expected impact]",\n'
+            '      "catalyst_type": "regulatory|etf|hack_exploit|macro|partnership|'
+            'protocol_upgrade|fund_flow|earnings|none",\n'
+            '      "catalyst_freshness": "breaking|recent|stale|none",\n'
+            '      "sentiment_divergence": false,\n'
+            '      "key_headline": "the single most impactful headline"\n'
+            '    }\n'
             "  },\n"
-            '  "market_mood": "..."\n'
+            '  "market_mood": "brief overall sentiment phrase",\n'
+            '  "cross_asset_theme": "common driver across symbols, or null"\n'
             "}\n\n"
-            "Rules:\n"
-            "- direction must be one of: bullish, bearish, neutral\n"
-            "- confidence must be a float between 0.0 and 1.0\n"
-            "- reasoning should be one sentence summarizing the key news drivers\n"
-            "- market_mood should be a brief overall sentiment phrase\n"
-            "- Include ALL requested symbols in symbol_assessments\n"
-            "- Do not include any text outside the JSON object"
+            "CONFIDENCE CALIBRATION:\n"
+            "- 0.0-0.3: no catalyst, noise, stale news\n"
+            "- 0.3-0.5: weak catalyst or unconfirmed reports\n"
+            "- 0.5-0.7: concrete catalyst from reliable source\n"
+            "- 0.7-0.9: major catalyst with corroboration\n"
+            "- 0.9-1.0: extraordinary event (black swan)\n"
+            "- Include ALL requested symbols. When in doubt, score LOWER."
         )
 
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
+        response = _call_with_retry(
+            client.models.generate_content,
+            model="gemini-2.5-flash-lite",
             contents=prompt,
             config=GenerateContentConfig(
                 tools=[Tool(google_search=GoogleSearch())],
@@ -294,7 +405,7 @@ def analyze_news_impact(headlines_by_symbol: dict, current_prices: dict,
 
     try:
         vertexai.init(project=project_id, location=location)
-        model = GenerativeModel('gemini-2.0-flash')
+        model = GenerativeModel('gemini-2.5-flash-lite')
 
         # Build the prompt
         symbol_sections = []
@@ -337,55 +448,84 @@ def analyze_news_impact(headlines_by_symbol: dict, current_prices: dict,
         headlines_text = "\n\n".join(symbol_sections)
 
         prompt = (
-            "You are a crypto/financial news analyst for a trading bot that runs 15-minute cycles "
-            "with 3.5% stop-loss and 8% take-profit. Your job is to assess short-term (<24h) "
-            "market impact from news.\n\n"
-            "Analyze these recent headlines using the following 4-step framework:\n\n"
-            "STEP 1 — CATALYST SCAN: Identify concrete events vs noise.\n"
-            "- Catalysts: regulatory action, ETF approval/rejection, exchange hack/exploit, "
-            "major partnership, macro policy (Fed, CPI), protocol upgrade, large fund flow.\n"
-            "- Noise: opinion pieces, price predictions, recycled narratives, vague 'experts say' articles.\n"
-            "- Only catalysts should drive confidence above 0.6.\n\n"
-            "STEP 2 — SOURCE WEIGHT: Not all sources are equal.\n"
-            "- Tier 1 (high weight): regulatory filings, wire services (Reuters, AP), exchange announcements.\n"
-            "- Tier 2 (medium): CoinDesk, CoinTelegraph, Bloomberg, established financial media.\n"
-            "- Tier 3 (low): blogs, KOLs, unknown sources, articles without body text.\n"
-            "- Articles with body excerpts are more reliable than headline-only.\n\n"
-            "STEP 3 — CONSENSUS vs DIVERGENCE: Do headlines agree?\n"
-            "- If most headlines point the same direction → higher confidence.\n"
-            "- If headlines conflict (some bullish, some bearish) → flag divergence, lower confidence.\n"
-            "- Note the sentiment_divergence in your response.\n\n"
-            "STEP 4 — TIME HORIZON: Only short-term catalysts matter.\n"
-            "- Events happening now or within 24h → can drive high confidence.\n"
-            "- Speculative future events (months away) → low confidence regardless of importance.\n"
-            "- Stale news (>48h old, already priced in) → neutral/low confidence.\n\n"
+            "You are a senior trading desk analyst scoring news for an automated trading bot.\n\n"
+            "BOT PARAMETERS (critical context — your assessment drives real trades):\n"
+            "- Stop-loss: -3.5%, Take-profit: +8%, Trailing stop: +2% activation / 1.5% trail\n"
+            "- 15-minute decision cycles. Only signals with confidence ≥ 0.5 trigger trades.\n"
+            "- The bot WILL enter positions based on your assessment. False positives cost money.\n\n"
+            "ANALYSIS FRAMEWORK — apply ALL steps before scoring:\n\n"
+            "STEP 1 — CATALYST SCAN (most important):\n"
+            "Ask: 'Is there a SPECIFIC, CONCRETE event that will move the price >3.5% in 24h?'\n"
+            "- YES catalysts (can justify confidence ≥ 0.6):\n"
+            "  • Regulatory action (SEC ruling, country ban/approval, enforcement action)\n"
+            "  • ETF approval/rejection/filing updates\n"
+            "  • Exchange hack, exploit, or insolvency\n"
+            "  • Major earnings surprise (beat/miss > 10%)\n"
+            "  • Central bank decision deviating from consensus (rate surprise)\n"
+            "  • Protocol upgrade, hard fork, or major vulnerability\n"
+            "  • Large verifiable fund flows (whale alerts, treasury moves)\n"
+            "  • Major partnership/acquisition with named counterparty\n"
+            "- NO catalysts (confidence MUST stay ≤ 0.4):\n"
+            "  • Price predictions ('BTC could reach $X')\n"
+            "  • Recycled narratives repackaged with new dates\n"
+            "  • Opinion/editorial pieces ('why I'm bullish on...')\n"
+            "  • Vague 'sources say', 'insiders hint', 'rumored'\n"
+            "  • Press releases without market impact\n"
+            "  • Articles that are ABOUT price movement rather than CAUSING it\n"
+            "  • General market commentary ('crypto market shows resilience')\n\n"
+            "STEP 2 — SOURCE CREDIBILITY:\n"
+            "- Tier 1 (trust fully): SEC/CFTC filings, Fed statements, exchange official posts, "
+            "Reuters, Bloomberg, AP wire\n"
+            "- Tier 2 (weight normally): CoinDesk, CoinTelegraph, Decrypt, WSJ, FT, CNBC\n"
+            "- Tier 3 (discount heavily): blogs, crypto Twitter, unknown outlets, "
+            "articles without body text (headline-only = low trust)\n"
+            "- If ONLY Tier 3 sources report something, cap confidence at 0.4\n\n"
+            "STEP 3 — CONSENSUS vs DIVERGENCE:\n"
+            "- Headlines all agree → confidence boost\n"
+            "- Headlines conflict → cap confidence at 0.5 max, set sentiment_divergence=true\n"
+            "- Single source with no corroboration → treat with skepticism\n\n"
+            "STEP 4 — FRESHNESS & PRICED-IN CHECK:\n"
+            "- Breaking (< 2h old, not yet reflected in price) → full weight\n"
+            "- Recent (2-12h) → partial weight, market may have moved already\n"
+            "- Stale (>24h) → near-zero weight, already priced in\n"
+            "- Scheduled events (CPI, FOMC, earnings dates) that haven't happened yet "
+            "→ only the RESULT matters, not pre-event speculation\n\n"
+            "STEP 5 — PRICE IMPACT ESTIMATION:\n"
+            "Ask: 'Given the bot's 3.5% SL and 8% TP, will this news move the price enough?'\n"
+            "- If expected move < 2% → neutral (not worth the trade risk)\n"
+            "- If expected move 2-5% → moderate confidence (direction must be clear)\n"
+            "- If expected move > 5% → high confidence (if catalyst is concrete)\n"
+            "- For correlated assets: if BTC news drives the move, altcoins follow with "
+            "higher beta — flag this in cross_asset_theme\n\n"
             f"--- Headlines by Symbol ---\n{headlines_text}\n\n"
-            "For each symbol, provide:\n"
-            "- direction: one of 'bullish', 'bearish', or 'neutral'\n"
-            "- confidence: a float between 0.0 and 1.0\n"
-            "- reasoning: a brief one-sentence explanation\n"
-            "- catalyst_type: one of 'regulatory', 'etf', 'hack_exploit', 'macro', 'partnership', "
-            "'protocol_upgrade', 'fund_flow', 'earnings', 'none' (use 'none' if no real catalyst)\n"
-            "- catalyst_freshness: one of 'breaking', 'recent', 'stale', 'none'\n"
-            "- sentiment_divergence: true if headlines conflict, false if consensus\n"
-            "- key_headline: the single most impactful headline driving your assessment\n\n"
-            "Also provide:\n"
-            "- 'market_mood': a brief overall sentiment phrase\n"
-            "- 'cross_asset_theme': a one-sentence theme if multiple assets share a common driver "
-            "(e.g. 'broad risk-off on Fed hawkishness'), or null if none\n\n"
-            "Respond ONLY with valid JSON in this exact format:\n"
+            "Respond ONLY with valid JSON:\n"
             "{\n"
             '  "symbol_assessments": {\n'
-            '    "SYMBOL": {"direction": "bullish|bearish|neutral", "confidence": 0.0, '
-            '"reasoning": "...", "catalyst_type": "...", "catalyst_freshness": "...", '
-            '"sentiment_divergence": false, "key_headline": "..."}\n'
+            '    "SYMBOL": {\n'
+            '      "direction": "bullish|bearish|neutral",\n'
+            '      "confidence": 0.0,\n'
+            '      "reasoning": "one sentence: [catalyst] + [expected impact]",\n'
+            '      "catalyst_type": "regulatory|etf|hack_exploit|macro|partnership|'
+            'protocol_upgrade|fund_flow|earnings|none",\n'
+            '      "catalyst_freshness": "breaking|recent|stale|none",\n'
+            '      "sentiment_divergence": false,\n'
+            '      "key_headline": "the single most impactful headline"\n'
+            '    }\n'
             "  },\n"
-            '  "market_mood": "...",\n'
-            '  "cross_asset_theme": "..." or null\n'
-            "}"
+            '  "market_mood": "brief overall sentiment phrase",\n'
+            '  "cross_asset_theme": "common driver across symbols, or null"\n'
+            "}\n\n"
+            "CONFIDENCE CALIBRATION (follow strictly):\n"
+            "- 0.0-0.3: no catalyst, noise only, or stale/priced-in news\n"
+            "- 0.3-0.5: weak catalyst or unconfirmed reports from lower-tier sources\n"
+            "- 0.5-0.7: concrete catalyst from reliable source, clear direction\n"
+            "- 0.7-0.9: major catalyst (regulatory, hack, earnings surprise) with corroboration\n"
+            "- 0.9-1.0: extraordinary event (exchange insolvency, country ban, black swan)\n"
+            "- When in doubt, score LOWER. The bot has stop-losses for protection — "
+            "but false entries waste capital and trigger cooldowns."
         )
 
-        response = model.generate_content(prompt)
+        response = _call_with_retry(model.generate_content, prompt)
         text = response.text.strip()
         result = _parse_gemini_json(text)
         _validate_gemini_response(result, ['symbol_assessments', 'market_mood'],
@@ -455,7 +595,7 @@ def analyze_position_investment(
 
     try:
         vertexai.init(project=project_id, location=location)
-        model = GenerativeModel('gemini-2.0-flash')
+        model = GenerativeModel('gemini-2.5-flash-lite')
 
         # Format articles for prompt
         if recent_articles:
@@ -620,7 +760,7 @@ def analyze_position_investment(
             "- Do not include any text outside the JSON object"
         )
 
-        response = model.generate_content(prompt)
+        response = _call_with_retry(model.generate_content, prompt)
         text = response.text.strip()
         result = _parse_gemini_json(text)
         _validate_gemini_response(
@@ -674,7 +814,7 @@ def analyze_position_health(position: dict, current_price: float,
 
     try:
         vertexai.init(project=project_id, location=location)
-        model = GenerativeModel('gemini-2.0-flash')
+        model = GenerativeModel('gemini-2.5-flash-lite')
 
         headlines_text = "\n".join(f"- {h}" for h in recent_headlines[:10]) if recent_headlines else "No recent headlines."
 
@@ -740,7 +880,7 @@ def analyze_position_health(position: dict, current_price: float,
             "- Do not include any text outside the JSON object"
         )
 
-        response = model.generate_content(prompt)
+        response = _call_with_retry(model.generate_content, prompt)
         text = response.text.strip()
         result = _parse_gemini_json(text)
         _validate_gemini_response(result,

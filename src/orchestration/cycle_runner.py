@@ -299,6 +299,12 @@ async def run_bot_cycle():
             rsi_oversold_threshold=rsi_oversold_threshold,
         )
         log.info(f"Generated Signal for {symbol}: {signal}")
+
+        # Enrich signal with Gemini metadata for decision tracking
+        if ga and signal.get('signal') != 'HOLD':
+            signal['gemini_confidence'] = ga.get('confidence')
+            signal['catalyst_freshness'] = ga.get('catalyst_freshness')
+
         await save_signal(signal)
 
         # Record signal attribution for non-HOLD signals
@@ -344,6 +350,12 @@ async def run_bot_cycle():
                     if result != 'none':
                         _cached_auto_positions = await asyncio.to_thread(
                             get_open_positions, trading_strategy='auto')
+                    elif market_price_data:
+                        await run_position_analyst(
+                            position, current_price, market_price_data,
+                            settings, news_per_symbol,
+                            trailing_stop_activation=trailing_stop_activation,
+                            trading_strategy='auto')
 
         # --- Auto-Trading Shadow Bot: Signal Execution ---
         if auto_enabled and not cb_tripped and bot_is_running.is_set() and signal is not None:
@@ -683,6 +695,12 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
         )
         signal['asset_type'] = 'stock'
         log.info(f"Generated Stock Signal for {symbol}: {signal}")
+
+        # Enrich signal with Gemini metadata for decision tracking
+        if ga and signal.get('signal') != 'HOLD':
+            signal['gemini_confidence'] = ga.get('confidence')
+            signal['catalyst_freshness'] = ga.get('catalyst_freshness')
+
         await save_signal(signal)
 
         # --- Trade Execution (broker-aware, unified pipeline) ---
@@ -722,6 +740,13 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                     if result != 'none':
                         _cached_auto_stock_positions = await asyncio.to_thread(
                             get_open_positions, asset_type='stock', trading_strategy='auto')
+                    else:
+                        await run_position_analyst(
+                            position, current_price,
+                            {'current_price': current_price, 'sma': None, 'rsi': None},
+                            settings, news_per_symbol,
+                            trailing_stop_activation=trailing_stop_activation,
+                            asset_type='stock', trading_strategy='auto')
 
         # --- Auto-Trading Shadow Bot: Stock Signal Execution ---
         if auto_enabled and not stock_cb_tripped and bot_is_running.is_set() and signal is not None:

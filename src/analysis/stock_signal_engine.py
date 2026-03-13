@@ -17,7 +17,7 @@ def generate_stock_signal(symbol, market_data, volume_data=None, fundamental_dat
 
     Args:
         signal_mode: "scoring" (legacy multi-indicator) or "sentiment" (Gemini-first).
-        sentiment_config: dict with min_gemini_confidence, min_vader_score,
+        sentiment_config: dict with min_gemini_confidence,
                           rsi_buy_veto_threshold, rsi_sell_veto_threshold,
                           pe_buy_veto_threshold.
     """
@@ -157,11 +157,10 @@ def _generate_stock_scoring_signal(symbol, market_data, volume_data=None, fundam
             buy_score += 1
             reasons.append(f"Low beta {beta:.2f} with reasonable P/E (defensive value)")
 
-    # --- Indicator 5: News Sentiment (Gemini preferred, VADER fallback) ---
+    # --- Indicator 5: News Sentiment (Gemini only) ---
     if news_sentiment_data:
         gemini = news_sentiment_data.get('gemini_assessment')
         min_conf = news_sentiment_data.get('min_gemini_confidence', 0.6)
-        used_gemini = False
 
         if gemini and gemini.get('confidence', 0) >= min_conf:
             direction = gemini.get('direction', 'neutral')
@@ -169,22 +168,9 @@ def _generate_stock_scoring_signal(symbol, market_data, volume_data=None, fundam
             if direction == 'bullish':
                 buy_score += 1
                 reasons.append(f"News: Gemini bullish ({confidence:.2f})")
-                used_gemini = True
             elif direction == 'bearish':
                 sell_score += 1
                 reasons.append(f"News: Gemini bearish ({confidence:.2f})")
-                used_gemini = True
-
-        if not used_gemini:
-            avg_sentiment = news_sentiment_data.get('avg_sentiment_score', 0)
-            buy_threshold = news_sentiment_data.get('sentiment_buy_threshold', 0.15)
-            sell_threshold = news_sentiment_data.get('sentiment_sell_threshold', -0.15)
-            if avg_sentiment > buy_threshold:
-                buy_score += 1
-                reasons.append(f"News: VADER bullish ({avg_sentiment:.3f})")
-            elif avg_sentiment < sell_threshold:
-                sell_score += 1
-                reasons.append(f"News: VADER bearish ({avg_sentiment:.3f})")
 
     # --- Indicator 6: MACD Momentum ---
     if historical_prices and len(historical_prices) >= 26:
@@ -236,7 +222,6 @@ def _generate_stock_sentiment_signal(symbol, market_data, fundamental_data=None,
 
     Flow:
         1. Gemini direction + confidence >= threshold (primary trigger)
-           - Fallback: VADER score >= threshold
         2. SMA trend must agree (don't trade against the trend)
         3. RSI must not veto (don't buy overbought, don't sell oversold)
         4. P/E must not veto BUY (don't buy overvalued stocks)
@@ -261,12 +246,11 @@ def _generate_stock_sentiment_signal(symbol, market_data, fundamental_data=None,
                 "current_price": current_price}
 
     min_gemini_conf = sentiment_config.get('min_gemini_confidence', 0.7)
-    min_vader_score = sentiment_config.get('min_vader_score', 0.3)
     rsi_buy_veto = sentiment_config.get('rsi_buy_veto_threshold', 75)
     rsi_sell_veto = sentiment_config.get('rsi_sell_veto_threshold', 25)
     pe_buy_veto = sentiment_config.get('pe_buy_veto_threshold', 40)
 
-    # --- Step 1: Sentiment trigger (Gemini primary, VADER fallback) ---
+    # --- Step 1: Sentiment trigger (Gemini only) ---
     direction = None
     sentiment_reason = ""
 
@@ -288,17 +272,6 @@ def _generate_stock_sentiment_signal(symbol, market_data, fundamental_data=None,
                 direction = g_direction
                 sentiment_reason = (f"Gemini {g_direction} ({g_confidence:.2f}, "
                                     f"freshness={freshness}): {g_reasoning}")
-
-        # VADER fallback — require stronger conviction without Gemini
-        if direction is None:
-            avg_sentiment = news_sentiment_data.get('avg_sentiment_score', 0)
-            vader_threshold = max(min_vader_score, 0.5)
-            if avg_sentiment >= vader_threshold:
-                direction = 'bullish'
-                sentiment_reason = f"VADER bullish ({avg_sentiment:.3f})"
-            elif avg_sentiment <= -vader_threshold:
-                direction = 'bearish'
-                sentiment_reason = f"VADER bearish ({avg_sentiment:.3f})"
 
     if direction is None:
         reason = f"No sentiment trigger. Price: ${current_price:,.2f}, SMA: ${sma:,.2f}, RSI: {rsi:.2f}."

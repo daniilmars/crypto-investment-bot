@@ -74,7 +74,6 @@ class TestSentimentMode:
     }
     SENTIMENT_CONFIG = {
         'min_gemini_confidence': 0.7,
-        'min_vader_score': 0.3,
         'rsi_buy_veto_threshold': 75,
         'rsi_sell_veto_threshold': 25,
     }
@@ -156,12 +155,11 @@ class TestSentimentMode:
         assert signal['signal'] == 'HOLD'
         assert 'No sentiment trigger' in signal['reason']
 
-    def test_low_confidence_gemini_falls_back_to_vader(self):
-        """Gemini confidence below threshold, VADER takes over only if strong."""
-        # Weak VADER (0.4) should NOT trigger BUY without Gemini
+    def test_low_confidence_gemini_holds_no_vader_fallback(self):
+        """Gemini confidence below threshold = HOLD. VADER never triggers signals."""
         news_data = {
             'gemini_assessment': {'direction': 'bullish', 'confidence': 0.5, 'reasoning': 'Low conf'},
-            'avg_sentiment_score': 0.4,
+            'avg_sentiment_score': 0.9,  # High VADER — should still HOLD
         }
         market_data = {'current_price': 105, 'sma': 100, 'rsi': 50}
         signal = generate_signal(
@@ -170,22 +168,12 @@ class TestSentimentMode:
             signal_mode='sentiment', sentiment_config=self.SENTIMENT_CONFIG,
         )
         assert signal['signal'] == 'HOLD'
+        assert 'VADER' not in signal['reason']
 
-        # Strong VADER (0.6) should trigger BUY as fallback
-        news_data['avg_sentiment_score'] = 0.6
-        signal = generate_signal(
-            symbol='BTCUSDT', market_data=market_data,
-            news_sentiment_data=news_data,
-            signal_mode='sentiment', sentiment_config=self.SENTIMENT_CONFIG,
-        )
-        assert signal['signal'] == 'BUY'
-        assert 'VADER bullish' in signal['reason']
-
-    def test_vader_below_threshold_holds(self):
-        """VADER score below min_vader_score = HOLD."""
+    def test_no_gemini_assessment_holds(self):
+        """No Gemini assessment = HOLD regardless of VADER score."""
         news_data = {
-            'gemini_assessment': {'direction': 'bullish', 'confidence': 0.3, 'reasoning': 'Low conf'},
-            'avg_sentiment_score': 0.1,  # Below 0.3 threshold
+            'avg_sentiment_score': 0.9,  # Strong VADER — should still HOLD
         }
         market_data = {'current_price': 105, 'sma': 100, 'rsi': 50}
         signal = generate_signal(

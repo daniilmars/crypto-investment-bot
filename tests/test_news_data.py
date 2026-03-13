@@ -441,15 +441,14 @@ class TestGeminiArticleScoring:
         'settings': {'news_analysis': {'enabled': True, 'use_gemini_scoring': True,
                                         'volume_spike_multiplier': 3.0, 'sentiment_shift_threshold': 0.3}},
     })
-    def test_collect_falls_back_to_vader(
+    def test_no_gemini_score_excludes_article(
         self, mock_rss, mock_gemini, mock_save_articles, mock_save_sent, mock_prev
     ):
-        """When Gemini returns no score, VADER is used as fallback."""
+        """When Gemini returns no score, article is excluded from aggregates."""
         result = collect_news_sentiment(['BTC'])
 
-        assert 'BTC' in result['per_symbol']
-        # VADER should produce a positive score for "amazing surge wonderful"
-        assert result['per_symbol']['BTC']['avg_sentiment_score'] > 0
+        # No Gemini score → article not included → BTC not in per_symbol
+        assert 'BTC' not in result['per_symbol']
 
     @patch('src.collectors.news_data.get_latest_news_sentiment', return_value={})
     @patch('src.collectors.news_data.save_news_sentiment_batch')
@@ -530,6 +529,9 @@ class TestCollectNewsSentiment:
         'BTC': {'news_volume': 2, 'avg_sentiment_score': 0.0}
     })
     @patch('src.collectors.news_data.save_news_sentiment_batch')
+    @patch('src.collectors.news_data.save_articles_batch')
+    @patch('src.collectors.news_data._score_with_gemini',
+           side_effect=lambda articles: {a['title_hash']: 0.5 for a in articles})
     @patch('src.collectors.news_data._fetch_rss_feeds', return_value=[
         {'title': 'Bitcoin price surges to new ATH', 'description': 'BTC up', 'published_at': '', 'source': 'Test'},
         {'title': 'Bitcoin rally continues strong', 'description': 'BTC gains', 'published_at': '', 'source': 'Test'},
@@ -542,7 +544,7 @@ class TestCollectNewsSentiment:
     @patch('src.collectors.news_data.app_config', {
         'settings': {'news_analysis': {'enabled': True, 'volume_spike_multiplier': 3.0, 'sentiment_shift_threshold': 0.3}},
     })
-    def test_volume_spike_triggers(self, mock_rss, mock_save, mock_prev):
+    def test_volume_spike_triggers(self, mock_rss, mock_gemini, mock_save_articles, mock_save, mock_prev):
         result = collect_news_sentiment(['BTC'])
         assert 'BTC' in result['per_symbol']
         assert 'BTC' in result['triggered_symbols']
@@ -551,6 +553,9 @@ class TestCollectNewsSentiment:
         'BTC': {'news_volume': 5, 'avg_sentiment_score': -0.5}
     })
     @patch('src.collectors.news_data.save_news_sentiment_batch')
+    @patch('src.collectors.news_data.save_articles_batch')
+    @patch('src.collectors.news_data._score_with_gemini',
+           side_effect=lambda articles: {a['title_hash']: 0.7 for a in articles})
     @patch('src.collectors.news_data._fetch_rss_feeds', return_value=[
         {'title': 'Bitcoin amazing surge wonderful', 'description': 'BTC great', 'published_at': '', 'source': 'T'},
         {'title': 'Bitcoin excellent performance superb', 'description': 'BTC good', 'published_at': '', 'source': 'T'},
@@ -561,8 +566,8 @@ class TestCollectNewsSentiment:
     @patch('src.collectors.news_data.app_config', {
         'settings': {'news_analysis': {'enabled': True, 'volume_spike_multiplier': 3.0, 'sentiment_shift_threshold': 0.3}},
     })
-    def test_sentiment_shift_triggers(self, mock_rss, mock_save, mock_prev):
+    def test_sentiment_shift_triggers(self, mock_rss, mock_gemini, mock_save_articles, mock_save, mock_prev):
         result = collect_news_sentiment(['BTC'])
-        # With very positive headlines vs previous -0.5, shift should exceed 0.3
+        # With Gemini score 0.7 vs previous -0.5, shift of 1.2 exceeds 0.3
         assert 'BTC' in result['per_symbol']
         assert result['per_symbol']['BTC']['avg_sentiment_score'] > -0.2

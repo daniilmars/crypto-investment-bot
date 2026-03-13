@@ -29,6 +29,7 @@ async def run_position_analyst(
     *,
     trailing_stop_activation: float,
     asset_type: str = 'crypto',
+    trading_strategy: str = 'manual',
 ) -> str | None:
     """Run the position analyst or legacy health monitor for an open position.
 
@@ -38,13 +39,14 @@ async def run_position_analyst(
     entry_price = position['entry_price']
     pnl_pct = (current_price - entry_price) / entry_price
     order_id = position['order_id']
+    is_auto = trading_strategy == 'auto'
 
     analyst_cfg = settings.get('position_analyst', {})
     if analyst_cfg.get('enabled', False):
         return await _run_investment_analyst(
             position, symbol, current_price, entry_price, pnl_pct,
             order_id, market_price_data, analyst_cfg, settings,
-            trailing_stop_activation, asset_type,
+            trailing_stop_activation, asset_type, is_auto,
         )
 
     # Fallback: legacy position_monitor
@@ -52,7 +54,7 @@ async def run_position_analyst(
         return await _run_legacy_health_monitor(
             position, symbol, current_price, pnl_pct, order_id,
             market_price_data, settings, news_per_symbol,
-            trailing_stop_activation, asset_type,
+            trailing_stop_activation, asset_type, is_auto,
         )
 
     return None
@@ -61,12 +63,14 @@ async def run_position_analyst(
 async def _run_investment_analyst(
     position, symbol, current_price, entry_price, pnl_pct,
     order_id, market_price_data, analyst_cfg, settings,
-    trailing_stop_activation, asset_type,
+    trailing_stop_activation, asset_type, is_auto=False,
 ) -> str | None:
     """Run the Gemini investment analyst (tri-state: HOLD/INCREASE/SELL)."""
     now = datetime.now(timezone.utc)
     check_interval = analyst_cfg.get('check_interval_minutes', 30)
-    last_check = bot_state.get_analyst_last_run(order_id)
+    _get_last_run = bot_state.get_auto_analyst_last_run if is_auto else bot_state.get_analyst_last_run
+    _set_last_run = bot_state.set_auto_analyst_last_run if is_auto else bot_state.set_analyst_last_run
+    last_check = _get_last_run(order_id)
     if last_check and (now - last_check).total_seconds() / 60 < check_interval:
         log.debug(f"[{symbol}] Skipping analyst — last run "
                   f"{(now - last_check).total_seconds() / 60:.0f}m ago")
@@ -89,7 +93,7 @@ async def _run_investment_analyst(
                 and not velocity['breaking_detected']
                 and velocity['sentiment_trend'] == 'stable'):
             log.debug(f"[{symbol}] Position analyst: no news activity, default HOLD")
-            bot_state.set_analyst_last_run(order_id, now)
+            _set_last_run(order_id, now)
             return 'hold'
 
         # 2. Gather data
@@ -102,7 +106,7 @@ async def _run_investment_analyst(
             'regime': 'unknown',
         }
         ts_info = _build_trailing_stop_info(
-            order_id, pnl_pct, trailing_stop_activation)
+            order_id, pnl_pct, trailing_stop_activation, is_auto=is_auto)
         max_mult = analyst_cfg.get('max_position_multiplier', 3.0)
 
         # 3. Call Gemini analyst
@@ -115,7 +119,7 @@ async def _run_investment_analyst(
             strategy_type=position.get('strategy_type'),
             trade_reason=position.get('trade_reason'),
         )
-        bot_state.set_analyst_last_run(order_id, now)
+        _set_last_run(order_id, now)
 
         if not result:
             return None
@@ -128,20 +132,20 @@ async def _run_investment_analyst(
         signal_cooldown_hours = app_config.get('settings', {}).get('signal_cooldown_hours', 4)
 
         if rec == 'increase' and confidence >= analyst_cfg.get('increase_confidence_threshold', 0.75):
-            if await check_signal_cooldown(symbol, "INCREASE", signal_cooldown_hours):
+            if await check_signal_cooldown(symbol, "INCREASE", signal_cooldown_hours, is_auto=is_auto):
                 log.debug(f"[{symbol}] Skipping INCREASE: signal cooldown active.")
             else:
                 await _handle_increase(
                     position, symbol, current_price, entry_price,
-                    additions, result, reasoning, analyst_cfg, asset_type)
-                bot_state.set_signal_cooldown(
-                    symbol, "INCREASE",
-                    datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours))
+                    additions, result, reasoning, analyst_cfg, asset_type, is_auto)
+                _set_cd = bot_state.set_auto_signal_cooldown if is_auto else bot_state.set_signal_cooldown
+                _set_cd(symbol, "INCREASE",
+                        datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours))
 
         elif rec == 'sell' and confidence >= analyst_cfg.get('exit_confidence_threshold', 0.8):
             await _handle_analyst_sell(
                 position, symbol, current_price, order_id,
-                confidence, reasoning, asset_type)
+                confidence, reasoning, asset_type, is_auto)
 
         else:
             log.info(f"[{symbol}] Position analyst: {rec} "
@@ -160,13 +164,14 @@ async def _run_investment_analyst(
 async def _run_legacy_health_monitor(
     position, symbol, current_price, pnl_pct, order_id,
     market_price_data, settings, news_per_symbol,
-    trailing_stop_activation, asset_type,
+    trailing_stop_activation, asset_type, is_auto=False,
 ) -> str | None:
     """Run the legacy position health monitor (binary: hold/exit)."""
     pos_monitor_cfg = settings.get('position_monitor', {})
     now = datetime.now(timezone.utc)
     check_interval = pos_monitor_cfg.get('check_interval_minutes', 60)
-    last_check = bot_state.get_analyst_last_run(order_id)
+    _get_last_run = bot_state.get_auto_analyst_last_run if is_auto else bot_state.get_analyst_last_run
+    last_check = _get_last_run(order_id)
     if last_check and (now - last_check).total_seconds() / 60 < check_interval:
         return None
 
@@ -197,13 +202,14 @@ async def _run_legacy_health_monitor(
             'regime': 'unknown',
         }
         ts_info = _build_trailing_stop_info(
-            order_id, pnl_pct, trailing_stop_activation)
+            order_id, pnl_pct, trailing_stop_activation, is_auto=is_auto)
 
         health = analyze_position_health(
             position, current_price, pos_headlines, tech_data,
             hours_held=age_hours, trailing_stop_info=ts_info,
         )
-        bot_state.set_analyst_last_run(order_id, now)
+        _set_last_run = bot_state.set_auto_analyst_last_run if is_auto else bot_state.set_analyst_last_run
+        _set_last_run(order_id, now)
 
         if health:
             exit_threshold = pos_monitor_cfg.get('exit_confidence_threshold', 0.8)
@@ -222,7 +228,7 @@ async def _run_legacy_health_monitor(
 
 async def _handle_increase(
     position, symbol, current_price, entry_price,
-    additions, result, reasoning, analyst_cfg, asset_type,
+    additions, result, reasoning, analyst_cfg, asset_type, is_auto=False,
 ):
     """Handle an INCREASE recommendation from the analyst."""
     order_id = position['order_id']
@@ -246,14 +252,15 @@ async def _handle_increase(
         log.info(f"[{symbol}] INCREASE blocked: would exceed {max_mult}x cap")
         return
 
-    balance = get_account_balance(asset_type=asset_type)
+    trading_strategy = 'auto' if is_auto else 'manual'
+    balance = get_account_balance(asset_type=asset_type, trading_strategy=trading_strategy)
     available = balance.get('USDT', 0)
     if add_value > available:
         log.info(f"[{symbol}] INCREASE blocked: need ${add_value:.2f} "
                  f"but only ${available:.2f} available")
         return
 
-    if is_confirmation_required("INCREASE"):
+    if not is_auto and is_confirmation_required("INCREASE"):
         await send_signal_for_confirmation({
             'signal': 'INCREASE', 'symbol': symbol,
             'current_price': current_price,
@@ -264,15 +271,17 @@ async def _handle_increase(
         })
     else:
         add_to_position(order_id, symbol, add_qty, current_price,
-                        reason=reasoning, asset_type=asset_type)
+                        reason=reasoning, asset_type=asset_type,
+                        trading_strategy=trading_strategy)
 
 
 async def _handle_analyst_sell(
     position, symbol, current_price, order_id,
-    confidence, reasoning, asset_type,
+    confidence, reasoning, asset_type, is_auto=False,
 ):
     """Handle a SELL recommendation from the analyst."""
-    if is_confirmation_required("SELL"):
+    trading_strategy = 'auto' if is_auto else 'manual'
+    if not is_auto and is_confirmation_required("SELL"):
         await send_signal_for_confirmation({
             'signal': 'SELL', 'symbol': symbol,
             'current_price': current_price,
@@ -286,13 +295,19 @@ async def _handle_analyst_sell(
         if asset_type == 'stock':
             order_kw['asset_type'] = 'stock'
         place_order(symbol, "SELL", position['quantity'], current_price,
-                    existing_order_id=order_id, exit_reason='analyst_exit', **order_kw)
-        bot_state.clear_trailing_stop(order_id)
-        bot_state.remove_analyst_last_run(order_id)
+                    existing_order_id=order_id, exit_reason='analyst_exit',
+                    trading_strategy=trading_strategy, **order_kw)
+        if is_auto:
+            bot_state.auto_clear_trailing_stop(order_id)
+            bot_state.remove_auto_analyst_last_run(order_id)
+        else:
+            bot_state.clear_trailing_stop(order_id)
+            bot_state.remove_analyst_last_run(order_id)
+        mode_label = 'AUTO ' if is_auto else ''
         alert = {
             "signal": "SELL", "symbol": symbol,
             "current_price": current_price,
-            "reason": f"Position analyst sell ({confidence:.0%}): {reasoning}",
+            "reason": f"{mode_label}Position analyst sell ({confidence:.0%}): {reasoning}",
         }
         if asset_type == 'stock':
             alert['asset_type'] = 'stock'
@@ -311,9 +326,10 @@ def _parse_entry_timestamp(entry_ts) -> datetime:
 
 
 def _build_trailing_stop_info(order_id: str, pnl_pct: float,
-                               trailing_stop_activation: float) -> dict | None:
+                               trailing_stop_activation: float,
+                               is_auto: bool = False) -> dict | None:
     """Build trailing stop info dict if peak price is tracked."""
-    peak_price = bot_state.get_peak(order_id)
+    peak_price = bot_state.get_auto_peak(order_id) if is_auto else bot_state.get_peak(order_id)
     if peak_price is None:
         return None
     return {

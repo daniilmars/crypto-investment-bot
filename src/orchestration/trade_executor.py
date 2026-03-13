@@ -78,7 +78,26 @@ async def process_trade_signal(
         signal['signal'] = 'HOLD'
         signal_type = 'HOLD'
 
-    # 2. BUY path
+    # 2. Auto signal quality gate — block weak signals
+    if is_auto and signal_type in ("BUY", "SELL"):
+        signal_strength = signal.get('signal_strength', 0)
+        auto_cfg = app_config.get('settings', {}).get('auto_trading', {})
+
+        if signal_type == "BUY":
+            min_strength = auto_cfg.get('min_signal_strength', 0.65)
+            # Raise bar in CAUTION/RISK_OFF regime
+            if macro_multiplier < 1.0:
+                min_strength += auto_cfg.get('caution_strength_boost', 0.10)
+        else:
+            min_strength = auto_cfg.get('min_sell_signal_strength', 0.50)
+
+        if signal_strength < min_strength:
+            log.info(f"[{label}] Skipping auto {signal_type} for {symbol}: "
+                     f"signal_strength {signal_strength:.2f} < {min_strength:.2f} "
+                     f"(macro_mult={macro_multiplier})")
+            return None
+
+    # 3. BUY path
     if signal_type == "BUY":
         if pdt_status and pdt_status.get('is_restricted'):
             log.info(f"Skipping BUY for {symbol}: PDT rule — no day trades remaining.")
@@ -111,7 +130,7 @@ async def process_trade_signal(
             signal['signal'] = 'HOLD'
             return None
 
-    # 3. SELL path
+    # 4. SELL path
     elif signal_type == "SELL":
         position_to_close = next(
             (p for p in positions
@@ -128,7 +147,7 @@ async def process_trade_signal(
             _set_cooldown(symbol, "SELL", signal_cooldown_hours, is_auto)
             return None
 
-    # 4. HOLD
+    # 5. HOLD
     else:
         log.info(f"Signal is HOLD for {symbol}. No trade action taken.")
         return None

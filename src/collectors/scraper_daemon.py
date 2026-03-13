@@ -14,14 +14,11 @@ Output: data/scraped-news.json (atomic write, same schema as standalone scraper)
 import json
 import os
 import shutil
-import statistics
 import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 from src.collectors.news_data import (
     _fetch_rss_feeds, _match_article_to_symbols,
@@ -111,7 +108,6 @@ class ScraperDaemon:
         # Raw articles pending deep enrichment
         self._pending_enrichment: list = []
 
-        self.vader = SentimentIntensityAnalyzer()
         self.metrics = DaemonMetrics()
         self._threads: list[threading.Thread] = []
 
@@ -325,10 +321,7 @@ class ScraperDaemon:
                 if batch:
                     log.info(f"[Deep] Enriching {len(batch)} articles...")
                     enriched = enrich_articles_batch(batch)
-                    # Re-score enriched articles with updated descriptions
                     enriched_count = sum(1 for a in enriched if a.get('_enriched'))
-                    if enriched_count > 0:
-                        self._rescore_enriched(enriched)
                     log.info(f"[Deep] Enriched {enriched_count}/{len(batch)} articles")
 
                 self.metrics.deep_cycles += 1
@@ -360,7 +353,7 @@ class ScraperDaemon:
     # --- Core processing ---
 
     def _process_articles(self, articles, tier):
-        """Dedup, VADER score, match to symbols, write output + archive to DB.
+        """Dedup, match to symbols, write output + archive to DB.
 
         Returns the number of new (non-duplicate) articles processed.
         """
@@ -387,8 +380,8 @@ class ScraperDaemon:
             with self._lock:
                 self._pending_enrichment.extend(important)
 
-        # VADER score and match to symbols
-        scored_rows = []
+        # Match to symbols and archive
+        archive_rows = []
         with self._lock:
             for article in new_articles:
                 title = article.get('title', '')
@@ -398,28 +391,24 @@ class ScraperDaemon:
                 if not matched:
                     continue
 
-                score = self._vader_score(title, description)
-
                 for sym in matched:
                     entry = {
                         'headline': title,
                         'source': article.get('source', 'Unknown'),
                         'source_url': article.get('source_url', ''),
-                        'vader_score': round(score, 4),
                     }
                     self._symbol_articles[sym].append(entry)
                     # Keep only last 15 per symbol
                     if len(self._symbol_articles[sym]) > 15:
                         self._symbol_articles[sym] = self._symbol_articles[sym][-15:]
 
-                    scored_rows.append({
+                    archive_rows.append({
                         'title': title,
                         'title_hash': compute_title_hash(title),
                         'source': article.get('source', ''),
                         'source_url': article.get('source_url', ''),
                         'description': description,
                         'symbol': sym,
-                        'vader_score': score,
                         'category': article.get('category', ''),
                     })
 
@@ -427,7 +416,7 @@ class ScraperDaemon:
             self.metrics.dedup_cache_size = len(self._seen_titles)
 
         # Archive to DB
-        self._archive_to_db(scored_rows)
+        self._archive_to_db(archive_rows)
 
         # Write output JSON
         self._write_output()
@@ -437,33 +426,6 @@ class ScraperDaemon:
 
         return len(new_articles)
 
-    def _rescore_enriched(self, enriched_articles):
-        """Re-score enriched articles that now have full body text."""
-        with self._lock:
-            for article in enriched_articles:
-                if not article.get('_enriched'):
-                    continue
-                title = article.get('title', '')
-                description = article.get('description', '')
-                matched = _match_article_to_symbols(title, description, ALL_SYMBOLS)
-                if not matched:
-                    continue
-
-                score = self._vader_score(title, description)
-                for sym in matched:
-                    # Update existing entry if found
-                    for entry in self._symbol_articles.get(sym, []):
-                        if entry['headline'] == title:
-                            entry['vader_score'] = round(score, 4)
-                            break
-
-    def _vader_score(self, title, description):
-        """Compute weighted VADER compound score from title + description."""
-        title_score = self.vader.polarity_scores(title)['compound'] if title else 0
-        desc_score = self.vader.polarity_scores(description)['compound'] if description else 0
-        if title and description:
-            return title_score * 0.6 + desc_score * 0.4
-        return title_score or desc_score
 
     def _write_output(self):
         """Atomically write per-symbol JSON output."""
@@ -473,11 +435,9 @@ class ScraperDaemon:
                 articles = self._symbol_articles[sym]
                 if not articles:
                     continue
-                scores = [a['vader_score'] for a in articles]
                 per_symbol[sym] = {
                     'category': 'crypto' if sym in CRYPTO_SYMBOLS else 'stocks',
                     'article_count': len(articles),
-                    'avg_vader_score': round(statistics.mean(scores), 4),
                     'headlines': [a['headline'] for a in articles[:10]],
                     'articles': articles[:15],
                 }

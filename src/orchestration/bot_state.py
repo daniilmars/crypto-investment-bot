@@ -78,6 +78,10 @@ def auto_update_trailing_stop(order_id: str, current_price: float) -> float:
     return new_peak
 
 
+def get_auto_peak(order_id: str) -> float | None:
+    return _auto_trailing_stop_peaks.get(order_id)
+
+
 def auto_clear_trailing_stop(order_id: str):
     _auto_trailing_stop_peaks.pop(order_id, None)
 

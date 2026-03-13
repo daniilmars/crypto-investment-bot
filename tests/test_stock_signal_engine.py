@@ -185,7 +185,6 @@ class TestStockSentimentMode:
     }
     SENTIMENT_CONFIG = {
         'min_gemini_confidence': 0.7,
-        'min_vader_score': 0.3,
         'rsi_buy_veto_threshold': 75,
         'rsi_sell_veto_threshold': 25,
         'pe_buy_veto_threshold': 40,
@@ -262,19 +261,18 @@ class TestStockSentimentMode:
         assert signal['signal'] == "HOLD"
         assert 'No sentiment trigger' in signal['reason']
 
-    def test_vader_fallback(self):
-        """Gemini below threshold, VADER bullish takes over."""
+    def test_no_vader_fallback(self):
+        """Gemini below threshold = HOLD. VADER never triggers signals."""
         news_data = {
             'gemini_assessment': {'direction': 'bullish', 'confidence': 0.5, 'reasoning': 'Low conf'},
-            'avg_sentiment_score': 0.5,
+            'avg_sentiment_score': 0.9,  # Strong VADER — should still HOLD
         }
         signal = generate_stock_signal(
             symbol="AAPL", market_data=_market(price=150, sma=140, rsi=50),
             news_sentiment_data=news_data,
             signal_mode='sentiment', sentiment_config=self.SENTIMENT_CONFIG,
         )
-        assert signal['signal'] == "BUY"
-        assert 'VADER bullish' in signal['reason']
+        assert signal['signal'] == "HOLD"
 
     def test_scoring_mode_backward_compatible(self):
         """Explicit signal_mode='scoring' works identically to the default."""

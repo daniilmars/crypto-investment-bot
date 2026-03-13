@@ -126,8 +126,9 @@ settings:
   # -- News Analysis Settings --
   news_analysis:
     enabled: true
-    # Use Google Search grounding ($0.035/call) — set false to use cheap RSS+scraping path
-    use_grounded_search: false
+    # Use Google Search grounding (free within 1,500 prompts/day on Vertex AI).
+    # RSS+scraping always runs regardless; grounded search replaces analyze_news_impact.
+    use_grounded_search: true
     # Web scraping supplements RSS feeds with direct page content
     web_scraping:
       enabled: true
@@ -249,6 +250,9 @@ settings:
     paper_trading_initial_capital: 10000.0
     max_concurrent_positions: 20
     summary_interval_hours: 1
+    min_signal_strength: 0.65
+    min_sell_signal_strength: 0.50
+    caution_strength_boost: 0.10
 
   # -- Position Rotation Settings --
   # When at max positions and a strong BUY signal fires, rotate out the

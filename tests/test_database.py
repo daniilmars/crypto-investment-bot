@@ -24,15 +24,15 @@ def test_initialize_database_creates_tables(mock_get_db_connection, mock_release
     initialize_database()
 
     # Assert: Check if CREATE TABLE + ALTER TABLE statements were executed
-    # 19 CREATE TABLEs (incl. session_peaks, watchlist_items, bot_state_kv)
-    # + 7 CREATE INDEXes (original + watchlist)
+    # 20 CREATE TABLEs (incl. session_peaks, watchlist_items, bot_state_kv, signal_decisions)
+    # + 8 CREATE INDEXes (original + watchlist + signal_decisions)
     # + 6 ALTER TABLE (trade columns) + 1 ALTER TABLE (trailing_stop_peak)
     # + 1 ALTER TABLE (scraped_articles category) + 1 ALTER TABLE (scraped_articles gemini_score)
     # + 1 ALTER TABLE (trades trading_strategy) + 1 ALTER TABLE (trades exit_reason)
     # + 1 ALTER TABLE (trades strategy_type) + 1 ALTER TABLE (trades trade_reason)
     # + 1 ALTER TABLE (cb_events asset_type)
-    # + 1 UPDATE (resolve stale cb_events) + 6 performance indexes = 47
-    assert mock_cursor.execute.call_count == 47
+    # + 1 UPDATE (resolve stale cb_events) + 6 performance indexes = 49
+    assert mock_cursor.execute.call_count == 49
 
     # Check the SQL statements (case-insensitive and ignoring whitespace)
     executed_queries = [' '.join(call[0][0].split()) for call in mock_cursor.execute.call_args_list]
@@ -51,8 +51,10 @@ def test_initialize_database_creates_tables(mock_get_db_connection, mock_release
     assert any("CREATE TABLE IF NOT EXISTS signal_attribution" in query for query in executed_queries)
     assert any("CREATE TABLE IF NOT EXISTS experiment_log" in query for query in executed_queries)
     assert any("CREATE TABLE IF NOT EXISTS tuning_history" in query for query in executed_queries)
+    assert any("CREATE TABLE IF NOT EXISTS signal_decisions" in query for query in executed_queries)
     assert any("idx_signal_attribution_symbol" in query for query in executed_queries)
     assert any("idx_signal_attribution_order" in query for query in executed_queries)
+    assert any("idx_signal_decisions_symbol" in query for query in executed_queries)
 
     mock_conn.commit.assert_called_once()
     mock_release.assert_called_once_with(mock_conn)
@@ -110,7 +112,6 @@ class TestArticleArchive:
                 'source_url': 'https://coindesk.com/1',
                 'description': 'BTC surged today.',
                 'symbol': 'BTC',
-                'vader_score': 0.75,
                 'category': 'crypto',
             },
             {
@@ -120,7 +121,6 @@ class TestArticleArchive:
                 'source_url': 'https://cointelegraph.com/2',
                 'description': 'ETH protocol change.',
                 'symbol': 'ETH',
-                'vader_score': 0.3,
                 'category': 'crypto',
             },
         ]
@@ -384,7 +384,6 @@ class TestGeminiScoreDB:
             'source_url': '',
             'description': '',
             'symbol': 'BTC',
-            'vader_score': 0.5,
             'category': 'crypto',
             'gemini_score': 0.7,
         }]
