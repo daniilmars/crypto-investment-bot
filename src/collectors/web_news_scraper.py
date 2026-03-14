@@ -133,92 +133,6 @@ def scrape_decrypt():
     return articles or _generic_article_fallback(soup, 'Decrypt', 'https://decrypt.co')
 
 
-def scrape_reuters_business():
-    """Scrape Reuters business section for macro/financial headlines."""
-    soup = _fetch_page('https://www.reuters.com/business/')
-    if not soup:
-        return []
-
-    articles = []
-    for tag in soup.select('a[href*="/business/"]'):
-        headline = tag.get_text(strip=True)
-        href = tag.get('href', '')
-        if not headline or len(headline) < 15:
-            continue
-        url = href if href.startswith('http') else f'https://www.reuters.com{href}'
-        articles.append({
-            'title': headline,
-            'description': '',
-            'source': 'Reuters',
-            'source_url': url,
-        })
-    return articles or _generic_article_fallback(soup, 'Reuters', 'https://www.reuters.com')
-
-
-def scrape_marketwatch():
-    """Scrape MarketWatch latest news for market headlines."""
-    soup = _fetch_page('https://www.marketwatch.com/latest-news')
-    if not soup:
-        return []
-
-    articles = []
-    for tag in soup.select('a[href*="/story/"]'):
-        headline = tag.get_text(strip=True)
-        href = tag.get('href', '')
-        if not headline or len(headline) < 15:
-            continue
-        url = href if href.startswith('http') else f'https://www.marketwatch.com{href}'
-        articles.append({
-            'title': headline,
-            'description': '',
-            'source': 'MarketWatch',
-            'source_url': url,
-        })
-    return articles or _generic_article_fallback(soup, 'MarketWatch', 'https://www.marketwatch.com')
-
-
-def scrape_yahoo_finance():
-    """Scrape Yahoo Finance for stock/market headlines."""
-    soup = _fetch_page('https://finance.yahoo.com/topic/stock-market-news/')
-    if not soup:
-        return []
-
-    articles = []
-    for tag in soup.select('a[href*="/news/"]'):
-        headline = tag.get_text(strip=True)
-        href = tag.get('href', '')
-        if not headline or len(headline) < 15:
-            continue
-        url = href if href.startswith('http') else f'https://finance.yahoo.com{href}'
-        articles.append({
-            'title': headline,
-            'description': '',
-            'source': 'Yahoo Finance',
-            'source_url': url,
-        })
-    return articles or _generic_article_fallback(soup, 'Yahoo Finance', 'https://finance.yahoo.com')
-
-
-def scrape_theblock():
-    """Scrape The Block for crypto news headlines."""
-    soup = _fetch_page('https://www.theblock.co/latest')
-    if not soup:
-        return []
-
-    articles = []
-    seen = set()
-    for tag in soup.select('a[href*="/post/"], h2, h3'):
-        headline = tag.get_text(strip=True)
-        if not headline or len(headline) < 20 or headline.lower() in seen:
-            continue
-        seen.add(headline.lower())
-        articles.append({
-            'title': headline,
-            'description': '',
-            'source': 'The Block',
-            'source_url': 'https://www.theblock.co/latest',
-        })
-    return articles or _generic_article_fallback(soup, 'The Block', 'https://www.theblock.co')
 
 
 def scrape_cnbc():
@@ -296,56 +210,6 @@ def scrape_techcrunch_ai():
     return articles or _generic_article_fallback(soup, 'TechCrunch AI', 'https://techcrunch.com')
 
 
-def scrape_venturebeat_ai():
-    """Scrape VentureBeat AI category for AI industry headlines."""
-    soup = _fetch_page('https://venturebeat.com/category/ai/')
-    if not soup:
-        return []
-
-    articles = []
-    seen = set()
-    for tag in soup.select('h2 a, h3 a, a[href*="/ai/"]'):
-        headline = tag.get_text(strip=True)
-        href = tag.get('href', '')
-        if not headline or len(headline) < 25 or len(headline) > 250:
-            continue
-        if headline.lower() in seen:
-            continue
-        seen.add(headline.lower())
-        url = href if href.startswith('http') else f'https://venturebeat.com{href}'
-        articles.append({
-            'title': headline,
-            'description': '',
-            'source': 'VentureBeat AI',
-            'source_url': url,
-            'category': 'ai',
-        })
-    return articles or _generic_article_fallback(soup, 'VentureBeat AI', 'https://venturebeat.com')
-
-
-def scrape_the_information():
-    """Scrape The Information for AI/tech headlines (paywalled — headlines only)."""
-    soup = _fetch_page('https://www.theinformation.com/')
-    if not soup:
-        return []
-
-    articles = []
-    seen = set()
-    for tag in soup.select('h2, h3, [class*="headline"]'):
-        headline = tag.get_text(strip=True)
-        if not headline or len(headline) < 25 or len(headline) > 250:
-            continue
-        if headline.lower() in seen:
-            continue
-        seen.add(headline.lower())
-        articles.append({
-            'title': headline,
-            'description': '',
-            'source': 'The Information',
-            'source_url': 'https://www.theinformation.com/',
-            'category': 'ai',
-        })
-    return articles or _generic_article_fallback(soup, 'The Information', 'https://www.theinformation.com')
 
 
 # --- Scraper health tracking ---
@@ -426,16 +290,10 @@ def get_scraper_health() -> dict:
 ALL_SCRAPERS = [
     ('CoinDesk', scrape_coindesk),
     ('CoinTelegraph', scrape_cointelegraph),
-    ('The Block', scrape_theblock),
     ('Decrypt', scrape_decrypt),
-    ('Reuters', scrape_reuters_business),
     ('CNBC', scrape_cnbc),
     ('AP News', scrape_apnews),
-    ('MarketWatch', scrape_marketwatch),
-    ('Yahoo Finance', scrape_yahoo_finance),
     ('TechCrunch AI', scrape_techcrunch_ai),
-    ('VentureBeat AI', scrape_venturebeat_ai),
-    ('The Information', scrape_the_information),
 ]
 
 

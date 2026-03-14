@@ -2,17 +2,11 @@
 
 from unittest.mock import patch, MagicMock
 
-import pytest
-
 from src.collectors.web_news_scraper import (
     scrape_coindesk,
     scrape_cointelegraph,
     scrape_decrypt,
-    scrape_reuters_business,
-    scrape_marketwatch,
-    scrape_yahoo_finance,
     scrape_all_sources,
-    _fetch_page,
     _generic_article_fallback,
     _scraper_health,
     _update_scraper_health,
@@ -45,24 +39,6 @@ DECRYPT_HTML = """
 </body></html>
 """
 
-REUTERS_HTML = """
-<html><body>
-<a href="/business/fed-holds-rates-steady-march">Fed Holds Interest Rates Steady Amid Economic Uncertainty</a>
-<a href="/business/x">Short one here</a>
-</body></html>
-"""
-
-MARKETWATCH_HTML = """
-<html><body>
-<a href="/story/nvidia-earnings-beat-expectations-2026">Nvidia Earnings Beat Wall Street Expectations Again</a>
-</body></html>
-"""
-
-YAHOO_HTML = """
-<html><body>
-<a href="/news/tesla-deliveries-surge-q1-2026">Tesla Deliveries Surge 30% in Q1 2026</a>
-</body></html>
-"""
 
 
 def _mock_fetch(html):
@@ -98,33 +74,11 @@ class TestIndividualScrapers:
         assert 'Mining Difficulty' in articles[0]['title']
 
     @patch('src.collectors.web_news_scraper._fetch_page')
-    def test_scrape_reuters(self, mock_fetch):
-        mock_fetch.return_value = _mock_fetch(REUTERS_HTML)
-        articles = scrape_reuters_business()
-        assert len(articles) == 1
-        assert 'Fed' in articles[0]['title']
-
-    @patch('src.collectors.web_news_scraper._fetch_page')
-    def test_scrape_marketwatch(self, mock_fetch):
-        mock_fetch.return_value = _mock_fetch(MARKETWATCH_HTML)
-        articles = scrape_marketwatch()
-        assert len(articles) == 1
-        assert 'Nvidia' in articles[0]['title']
-
-    @patch('src.collectors.web_news_scraper._fetch_page')
-    def test_scrape_yahoo_finance(self, mock_fetch):
-        mock_fetch.return_value = _mock_fetch(YAHOO_HTML)
-        articles = scrape_yahoo_finance()
-        assert len(articles) == 1
-        assert 'Tesla' in articles[0]['title']
-
-    @patch('src.collectors.web_news_scraper._fetch_page')
     def test_scraper_returns_empty_on_failure(self, mock_fetch):
         mock_fetch.return_value = None
         assert scrape_coindesk() == []
         assert scrape_cointelegraph() == []
         assert scrape_decrypt() == []
-        assert scrape_reuters_business() == []
 
 
 class TestScrapeAllSources:
@@ -144,8 +98,8 @@ class TestScrapeAllSources:
     def test_scrape_all_combines_results(self, mock_all):
         mock_all.__iter__ = MagicMock(return_value=iter([
             ('CoinDesk', MagicMock(return_value=[{'title': 'BTC news'}])),
-            ('Reuters', MagicMock(return_value=[{'title': 'Fed news'}])),
-            ('Yahoo Finance', MagicMock(return_value=[{'title': 'AAPL news'}])),
+            ('Decrypt', MagicMock(return_value=[{'title': 'DeFi news'}])),
+            ('CNBC', MagicMock(return_value=[{'title': 'Market news'}])),
         ]))
         # Patch to list for len()
         mock_all.__len__ = MagicMock(return_value=3)
@@ -300,13 +254,13 @@ class TestScraperHealth:
         """Source with avg 5+ that drops to 0 for 3 runs is flagged."""
         # 4 runs with 10 articles, then 3 runs with 0
         for _ in range(4):
-            _update_scraper_health('Reuters', 10)
+            _update_scraper_health('TestSource', 10)
         for _ in range(3):
-            _update_scraper_health('Reuters', 0)
+            _update_scraper_health('TestSource', 0)
 
         degraded = _check_scraper_health()
         assert len(degraded) == 1
-        assert degraded[0][0] == 'Reuters'
+        assert degraded[0][0] == 'TestSource'
         assert degraded[0][1] == 10.0
 
     def test_check_no_alert_for_healthy_source(self):
@@ -353,13 +307,13 @@ class TestScraperHealth:
 
     def test_get_health_status_degraded(self):
         for _ in range(4):
-            _update_scraper_health('Reuters', 10)
+            _update_scraper_health('TestSource', 10)
         for _ in range(3):
-            _update_scraper_health('Reuters', 0)
+            _update_scraper_health('TestSource', 0)
         status = get_scraper_health()
-        assert status['Reuters']['health'] == 'degraded'
-        assert status['Reuters']['avg_historical'] == 10.0
-        assert status['Reuters']['avg_recent'] == 0.0
+        assert status['TestSource']['health'] == 'degraded'
+        assert status['TestSource']['avg_historical'] == 10.0
+        assert status['TestSource']['avg_recent'] == 0.0
 
     def test_get_health_status_warning(self):
         """Source with 3 zeros but no prior history shows warning."""
@@ -372,18 +326,18 @@ class TestScraperHealth:
     def test_scrape_all_updates_health(self, mock_all):
         """scrape_all_sources records counts per source."""
         cd_fn = MagicMock(return_value=[{'title': f'Art {i}'} for i in range(5)])
-        rt_fn = MagicMock(return_value=[])
+        empty_fn = MagicMock(return_value=[])
         mock_all.__iter__ = MagicMock(return_value=iter([
             ('CoinDesk', cd_fn),
-            ('Reuters', rt_fn),
+            ('Decrypt', empty_fn),
         ]))
 
         scrape_all_sources()
 
         assert 'CoinDesk' in _scraper_health
         assert _scraper_health['CoinDesk'][-1] == 5
-        assert 'Reuters' in _scraper_health
-        assert _scraper_health['Reuters'][-1] == 0
+        assert 'Decrypt' in _scraper_health
+        assert _scraper_health['Decrypt'][-1] == 0
 
     @patch('src.collectors.web_news_scraper.ALL_SCRAPERS')
     def test_scrape_all_records_zero_on_failure(self, mock_all):
