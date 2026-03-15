@@ -16,7 +16,7 @@ asset_class_limits:
     # At 3/4 crypto positions, new BUY gets 50% size; at 2/4 gets 75%
     concentration_scaling: true
   stock:
-    max_positions: 6
+    max_positions: 8
     concentration_scaling: false
 
 groups:
@@ -57,97 +57,193 @@ groups:
     max_positions: 1
     symbols: [XMR, ZEC, DASH]
 
-  # --- US Stocks ---
+  # --- Stocks (cross-regional industry sectors) ---
   tech_mega:
     max_positions: 2
-    symbols: [AAPL, MSFT, GOOGL, AMZN, META, NVDA, TSLA]
+    symbols: [AAPL, MSFT, GOOGL, AMZN, META, NVDA, TSLA, SAP.DE, 9984.T, "0700.HK", 9988.HK]
 
   semiconductors:
-    max_positions: 2
-    symbols: [NVDA, AMD, INTC, TSM, AVGO, QCOM, MU, ASML, LRCX, KLAC]
+    max_positions: 3
+    symbols:
+      - NVDA
+      - AMD
+      - INTC
+      - AVGO
+      - QCOM
+      - MU
+      - LRCX
+      - KLAC
+      - MRVL
+      - AMAT
+      - SNPS
+      - CDNS
+      - TXN
+      - ADI
+      - ASML.AS
+      - IFX.DE
+      - 8035.T
+      - 2330.TW
+      - 2454.TW
+      - "000660.KS"
 
   software_cloud:
     max_positions: 2
-    symbols: [CRM, ADBE, NOW, SNOW, PLTR, DDOG, NET, CRWD, ZS]
+    symbols:
+      - CRM
+      - ADBE
+      - SNOW
+      - PLTR
+      - DDOG
+      - NET
+      - CRWD
+      - ZS
+      - PANW
+      - FTNT
+      - APP
+      - WKL.AS
+      - ADYEN.AS
+      - DSY.PA
+      - "035420.KS"
+      - 3888.HK
 
   ai_pure_play:
     max_positions: 2
-    symbols: [PLTR, AI, SNOW, PATH, UPST, SOUN, BBAI]
+    symbols: [AI, BBAI, UPST, PATH, SOUN, SMCI, VRT, DELL, ARM, ANET, MDB, ESTC, CFLT, IONQ, RGTI]
 
-  financials:
+  financials_banks:
+    max_positions: 3
+    symbols:
+      - JPM
+      - BAC
+      - GS
+      - MS
+      - WFC
+      - C
+      - SCHW
+      - BLK
+      - SOFI
+      - HSBA.L
+      - BARC.L
+      - LLOY.L
+      - LSEG.L
+      - BNP.PA
+      - UBSG.SW
+      - UCG.MI
+      - ISP.MI
+      - SAN.MC
+      - INGA.AS
+      - BBVA.MC
+      - DB1.DE
+      - DANSKE.CO
+      - 8306.T
+      - "0005.HK"
+      - "0388.HK"
+      - 3968.HK
+      - HDFCBANK.NS
+      - ICICIBANK.NS
+      - BAJFINANCE.NS
+      - SBIN.NS
+      - CBA.AX
+      - NAB.AX
+      - MQG.AX
+      - D05.SI
+      - O39.SI
+      - U11.SI
+
+  financials_insurance:
     max_positions: 2
-    symbols: [JPM, BAC, GS, MS, V, MA, AXP, BLK, SCHW]
+    symbols: [V, MA, AXP, BRK-B, ALV.DE, MUV2.DE, CS.PA, ZURN.SW, PRU.L, 1299.HK, 2318.HK]
 
   healthcare:
-    max_positions: 2
-    symbols: [JNJ, UNH, PFE, ABBV, MRK, LLY, TMO, ABT]
+    max_positions: 3
+    symbols:
+      - UNH
+      - JNJ
+      - LLY
+      - PFE
+      - ABBV
+      - MRK
+      - TMO
+      - ABT
+      - AMGN
+      - GILD
+      - ISRG
+      - AZN.L
+      - GSK.L
+      - NOVO-B.CO
+      - ROG.SW
+      - NOVN.SW
+      - SAN.PA
+      - PHIA.AS
+      - FRE.DE
+      - 4519.T
+      - 7741.T
+      - CSL.AX
+      - 4502.T
+      - 2269.HK
 
   energy:
     max_positions: 2
-    symbols: [XOM, CVX, COP, SLB, EOG, OXY, MPC, VLO]
+    symbols: [XOM, CVX, COP, SLB, EOG, OXY, SHEL.L, BP.L, TTE.PA, ENI.MI, NESTE.HE, RELIANCE.NS, WDS.AX]
+
+  automotive:
+    max_positions: 2
+    symbols: [MBG.DE, BMW.DE, VOW3.DE, STLAM.MI, RACE.MI, 7203.T, 7267.T, 6902.T, "005380.KS", "373220.KS", 1211.HK, RIVN]
 
   consumer_disc:
     max_positions: 2
-    symbols: [AMZN, TSLA, HD, NKE, SBUX, MCD, TJX, BKNG]
+    symbols: [HD, MCD, NKE, SBUX, TJX, LOW, BKNG, CMG, UBER, ABNB, MC.PA, OR.PA, ADS.DE, ITX.MC, KER.PA, 3690.HK, 9618.HK, 2020.HK, 9999.HK, 9983.T]
 
   consumer_staples:
     max_positions: 2
-    symbols: [PG, KO, PEP, COST, WMT, CL, MDLZ]
+    symbols: [WMT, COST, KO, PG, PEP, PM, ULVR.L, NESN.SW, DGE.L, HEN3.DE, BATS.L, AD.AS, HINDUNILVR.NS]
 
   industrials:
-    max_positions: 2
-    symbols: [CAT, DE, HON, UPS, BA, RTX, LMT, GE]
+    max_positions: 3
+    symbols:
+      - CAT
+      - BA
+      - GE
+      - HON
+      - RTX
+      - UPS
+      - DE
+      - LMT
+      - SIE.DE
+      - AIR.PA
+      - SAF.PA
+      - SU.PA
+      - ABB.ST
+      - VOLV-B.ST
+      - MAERSK-B.CO
+      - ATCO-A.ST
+      - RHM.DE
+      - KNEBV.HE
+      - 6501.T
+      - 6367.T
+      - 6861.T
+      - 6954.T
+      - 6098.T
+      - 2317.TW
+      - 2308.TW
+      - LT.NS
 
   communication:
     max_positions: 2
-    symbols: [GOOGL, META, DIS, NFLX, CMCSA, T, VZ]
+    symbols: [DIS, NFLX, CMCSA, TMUS, CHTR, TTD, DTE.DE, VOD.L, ERIC-B.ST, NOKIA.HE, WPP.L, 9432.T, "0941.HK", 1024.HK]
+
+  consumer_electronics:
+    max_positions: 2
+    symbols: ["005930.KS", 6758.T, 1810.HK, "066570.KS"]
 
   utilities_reits:
     max_positions: 2
-    symbols: [NEE, DUK, SO, AMT, PLD, CCI, EQIX, O]
+    symbols: [NEE, SO, DUK, AMT, PLD, CCI, ENEL.MI, IBE.MC, NG.L, ORSTED.CO]
 
   materials:
-    max_positions: 1
-    symbols: [LIN, APD, SHW, ECL, NEM, FCX, NUE]
-
-  # --- EU Stocks ---
-  uk:
     max_positions: 2
-    symbols: [SHEL, AZN, HSBA, ULVR, BP, GSK, RIO, LSEG]
+    symbols: [LIN, APD, SHW, FCX, BAS.DE, AI.PA, GLEN.L, AAL.L, RIO.L, UPM.HE, NZYM-B.CO, 4063.T, "051910.KS", BHP.AX, FMG.AX]
 
-  germany:
+  it_services:
     max_positions: 2
-    symbols: [SAP, SIE, ALV, DTE, BAS, MBG, BMW, ADS]
-
-  france:
-    max_positions: 2
-    symbols: [MC, OR, TTE, SAN, AIR, SU, BNP, DG]
-
-  netherlands_swiss:
-    max_positions: 2
-    symbols: [ASML, NESN, ROG, NOVN, UNA, INGA, ABN]
-
-  southern:
-    max_positions: 2
-    symbols: [ISP, UCG, ENEL, IBE, SAN, BBVA, EDP, GALP]
-
-  nordics:
-    max_positions: 2
-    symbols: [NOVO-B, ERIC-B, VOLV-B, SAND, NESTE, MAERSK-B]
-
-  # --- Asia Stocks ---
-  japan:
-    max_positions: 2
-    symbols: [7203, 6758, 8306, 9984, 6902, 8035, 9433]
-
-  hong_kong:
-    max_positions: 2
-    symbols: ["0700", "9988", "1299", "0005", "0941", "2318"]
-
-  korea_taiwan:
-    max_positions: 2
-    symbols: [005930, 000660, 2330, 2454, 2317, 035420]
-
-  australia_india_sg:
-    max_positions: 2
-    symbols: [BHP, CBA, CSL, RELIANCE, TCS, INFY, DBS, OCBC]
+    symbols: [TCS.NS, INFY.NS, WIPRO.NS, COIN, WBC.AX]

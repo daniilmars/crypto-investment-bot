@@ -120,6 +120,92 @@ def truncate_for_telegram(text: str, max_len: int = 4096) -> str:
     return truncated + '\n\n_...truncated_'
 
 
+# Ticker → short display name for Telegram readability.
+# Only needed for codes that aren't self-explanatory (Asian numeric codes,
+# some EU tickers). US/well-known symbols are omitted — they pass through as-is.
+_STOCK_NAMES: dict[str, str] = {
+    # Japan (.T)
+    '7203.T': 'Toyota', '6758.T': 'Sony', '9984.T': 'SoftBank',
+    '6861.T': 'Keyence', '8306.T': 'MUFG', '6902.T': 'Denso',
+    '7741.T': 'HOYA', '4063.T': 'Shin-Etsu', '6501.T': 'Hitachi',
+    '8035.T': 'Tokyo Electron', '9432.T': 'NTT', '6367.T': 'Daikin',
+    '7267.T': 'Honda', '4519.T': 'Chugai Pharma', '6954.T': 'Fanuc',
+    '6098.T': 'Recruit', '9983.T': 'Uniqlo', '4502.T': 'Takeda',
+    '8058.T': 'Mitsubishi Corp', '8001.T': 'ITOCHU', '6273.T': 'SMC',
+    '4568.T': 'Daiichi Sankyo', '7974.T': 'Nintendo', '9999.HK': 'NetEase',
+    # Hong Kong (.HK)
+    '0700.HK': 'Tencent', '9988.HK': 'Alibaba', '1299.HK': 'AIA',
+    '0005.HK': 'HSBC HK', '3690.HK': 'Meituan', '0941.HK': 'China Mobile',
+    '1211.HK': 'BYD', '2318.HK': 'Ping An', '0388.HK': 'HKEX',
+    '9618.HK': 'JD.com', '1810.HK': 'Xiaomi', '2020.HK': 'Anta Sports',
+    '3968.HK': 'CM Bank', '2269.HK': 'WuXi Bio', '1024.HK': 'Kuaishou',
+    '3888.HK': 'Kingsoft', '2382.HK': 'Sunny Optical',
+    # South Korea (.KS)
+    '005930.KS': 'Samsung', '000660.KS': 'SK Hynix',
+    '373220.KS': 'LG Energy', '035420.KS': 'Naver',
+    '005380.KS': 'Hyundai Motor', '051910.KS': 'LG Chem',
+    '066570.KS': 'LG Electronics', '028260.KS': 'Samsung C&T',
+    # Taiwan (.TW)
+    '2330.TW': 'TSMC', '2317.TW': 'Foxconn', '2454.TW': 'MediaTek',
+    '2308.TW': 'Delta Elec', '2603.TW': 'Evergreen Marine',
+    # India (.NS)
+    'RELIANCE.NS': 'Reliance', 'TCS.NS': 'TCS', 'INFY.NS': 'Infosys',
+    'HDFCBANK.NS': 'HDFC Bank', 'ICICIBANK.NS': 'ICICI Bank',
+    'WIPRO.NS': 'Wipro', 'BAJFINANCE.NS': 'Bajaj Finance',
+    'LT.NS': 'Larsen&Toubro', 'HINDUNILVR.NS': 'Hindustan Unilever',
+    'SBIN.NS': 'SBI',
+    # Australia (.AX)
+    'BHP.AX': 'BHP', 'CBA.AX': 'CommBank', 'CSL.AX': 'CSL',
+    'WBC.AX': 'Westpac', 'NAB.AX': 'NAB', 'FMG.AX': 'Fortescue',
+    'MQG.AX': 'Macquarie', 'WDS.AX': 'Woodside', 'ALL.AX': 'Aristocrat',
+    # Singapore (.SI)
+    'D05.SI': 'DBS', 'O39.SI': 'OCBC', 'U11.SI': 'UOB',
+    # EU — only the less obvious ones
+    'HSBA.L': 'HSBC', 'ULVR.L': 'Unilever', 'LSEG.L': 'LSE Group',
+    'DGE.L': 'Diageo', 'GLEN.L': 'Glencore', 'AAL.L': 'Anglo American',
+    'NG.L': 'Natl Grid', 'BARC.L': 'Barclays', 'LLOY.L': 'Lloyds',
+    'VOD.L': 'Vodafone', 'PRU.L': 'Prudential', 'BATS.L': 'BAT',
+    'EXPN.L': 'Experian', 'RKT.L': 'Reckitt', 'WPP.L': 'WPP',
+    'FLTR.L': 'Flutter', 'IHG.L': 'IHG Hotels',
+    'SAP.DE': 'SAP', 'SIE.DE': 'Siemens', 'ALV.DE': 'Allianz', 'DTE.DE': 'Deutsche Telekom',
+    'BAS.DE': 'BASF', 'MBG.DE': 'Mercedes', 'BMW.DE': 'BMW',
+    'VOW3.DE': 'VW', 'MUV2.DE': 'Munich Re', 'IFX.DE': 'Infineon',
+    'ADS.DE': 'adidas', 'HEN3.DE': 'Henkel', 'FRE.DE': 'Fresenius',
+    'DB1.DE': 'Deutsche Boerse', 'RHM.DE': 'Rheinmetall',
+    'MC.PA': 'LVMH', 'TTE.PA': 'TotalEnergies', 'SAN.PA': 'Sanofi',
+    'OR.PA': 'L\'Oreal', 'AI.PA': 'Air Liquide', 'BNP.PA': 'BNP Paribas',
+    'SU.PA': 'Schneider', 'AIR.PA': 'Airbus', 'SAF.PA': 'Safran',
+    'CS.PA': 'AXA', 'DSY.PA': 'Dassault Sys', 'KER.PA': 'Kering',
+    'RMS.PA': 'Hermes', 'EL.PA': 'EssilorLuxottica',
+    'ASML.AS': 'ASML', 'INGA.AS': 'ING', 'PHIA.AS': 'Philips',
+    'WKL.AS': 'Wolters Kluwer', 'ADYEN.AS': 'Adyen', 'AD.AS': 'Ahold',
+    'NESN.SW': 'Nestle', 'ROG.SW': 'Roche', 'NOVN.SW': 'Novartis',
+    'UBSG.SW': 'UBS', 'ZURN.SW': 'Zurich Insurance',
+    'SAN.MC': 'Santander', 'ITX.MC': 'Inditex', 'IBE.MC': 'Iberdrola',
+    'BBVA.MC': 'BBVA',
+    'ENI.MI': 'ENI', 'ENEL.MI': 'Enel', 'UCG.MI': 'UniCredit',
+    'ISP.MI': 'Intesa', 'RACE.MI': 'Ferrari', 'STLAM.MI': 'Stellantis',
+    'NOVO-B.CO': 'Novo Nordisk', 'MAERSK-B.CO': 'Maersk',
+    'DANSKE.CO': 'Danske Bank', 'ORSTED.CO': 'Orsted',
+    'VOLV-B.ST': 'Volvo', 'ERIC-B.ST': 'Ericsson', 'ABB.ST': 'ABB',
+    'SAND.ST': 'Sandvik', 'ATCO-A.ST': 'Atlas Copco',
+    'NESTE.HE': 'Neste', 'UPM.HE': 'UPM', 'NOKIA.HE': 'Nokia',
+    'KNEBV.HE': 'Kone', 'NZYM-B.CO': 'Novozymes',
+}
+
+
+def symbol_display_name(symbol: str) -> str:
+    """Return a human-readable label for Telegram messages.
+
+    For mapped symbols: 'Samsung (005930.KS)'
+    For unmapped symbols: returns as-is ('AAPL')
+    """
+    name = _STOCK_NAMES.get(symbol.upper() if '.' not in symbol else symbol)
+    if name:
+        return f"{name} ({symbol})"
+    return symbol
+
+
 def format_region_label(symbol: str) -> str:
     """Determine region label for a stock symbol based on suffix/convention."""
     # Common EU exchanges

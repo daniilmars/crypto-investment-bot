@@ -26,6 +26,7 @@ from src.collectors.binance_data import get_current_price
 from src.analysis.macro_regime import get_macro_regime
 from src.analysis.sector_limits import get_sector_exposure_summary
 from src.analysis.event_calendar import get_upcoming_macro_events
+from src.notify.formatting import symbol_display_name
 from src.state import bot_is_running
 
 # --- Bot Initialization ---
@@ -100,8 +101,9 @@ async def send_signal_for_confirmation(signal: dict) -> int:
     asset_label = "Stock" if asset_type == "stock" else "Crypto"
     mode = _get_trading_mode()
     mode_label = f" [{mode.upper()}]" if mode != 'paper' else ""
+    display = _display_name(symbol)
 
-    message = f"📊 *NEW SIGNAL: {signal_type} {symbol}*{mode_label}\n\n"
+    message = f"📊 *NEW SIGNAL: {signal_type} {display}*{mode_label}\n\n"
     message += f"💰 *Price:* ${price:,.2f}\n"
     message += f"📈 *Reason:* {reason}\n"
 
@@ -205,6 +207,7 @@ async def _handle_signal_callback(update: Update, context: ContextTypes.DEFAULT_
     signal = pending['signal']
     signal_type = signal.get('signal', 'N/A')
     symbol = signal.get('symbol', 'N/A').upper()
+    display = _display_name(symbol)
     price = signal.get('current_price', 0)
     reason = _escape_md(signal.get('reason', 'No reason provided.'))
     quantity = signal.get('quantity', 0)
@@ -220,7 +223,7 @@ async def _handle_signal_callback(update: Update, context: ContextTypes.DEFAULT_
             except Exception as e:
                 log.error(f"Error executing confirmed signal #{signal_id}: {e}")
                 error_msg = (
-                    f"⚠️ *EXECUTION FAILED: {signal_type} {symbol}*\n\n"
+                    f"⚠️ *EXECUTION FAILED: {signal_type} {display}*\n\n"
                     f"💰 *Price:* ${price:,.2f}\n"
                     f"📈 *Reason:* {reason}\n\n"
                     f"*Error:* {_escape_md(str(e)[:200])}"
@@ -232,7 +235,7 @@ async def _handle_signal_callback(update: Update, context: ContextTypes.DEFAULT_
         if order_result and order_result.get('status') == 'SKIPPED':
             skip_reason = _escape_md(order_result.get('message', 'Unknown reason'))
             message = (
-                f"⚠️ *SKIPPED: {signal_type} {symbol}*\n\n"
+                f"⚠️ *SKIPPED: {signal_type} {display}*\n\n"
                 f"*Reason:* {skip_reason}\n\n"
                 f"_Signal was approved but could not be executed_"
             )
@@ -242,7 +245,7 @@ async def _handle_signal_callback(update: Update, context: ContextTypes.DEFAULT_
             return
 
         # Build success message
-        message = f"✅ *EXECUTED: {signal_type} {symbol}*\n\n"
+        message = f"✅ *EXECUTED: {signal_type} {display}*\n\n"
         if order_result:
             fill_price = order_result.get('price', price)
             message += f"💰 *Fill price:* ${fill_price:,.2f}\n"
@@ -271,7 +274,7 @@ async def _handle_signal_callback(update: Update, context: ContextTypes.DEFAULT_
         # Reject
         await query.answer("Signal skipped.")
         message = (
-            f"❌ *SKIPPED: {signal_type} {symbol}*\n\n"
+            f"❌ *SKIPPED: {signal_type} {display}*\n\n"
             f"💰 *Price:* ${price:,.2f}\n"
             f"📈 *Reason:* {reason}\n\n"
             f"_Rejected by user_"
@@ -311,11 +314,12 @@ async def cleanup_expired_signals():
         signal = pending['signal']
         signal_type = signal.get('signal', 'N/A')
         symbol = signal.get('symbol', 'N/A').upper()
+        display = _display_name(symbol)
         price = signal.get('current_price', 0)
         reason = signal.get('reason', 'No reason provided.')
 
         message = (
-            f"⏰ *EXPIRED: {signal_type} {symbol}*\n\n"
+            f"⏰ *EXPIRED: {signal_type} {display}*\n\n"
             f"💰 *Price:* ${price:,.2f}\n"
             f"📈 *Reason:* {reason}\n\n"
             f"_Auto-rejected after {CONFIRMATION_TIMEOUT_MINUTES} min_"
@@ -354,9 +358,10 @@ async def send_telegram_alert(signal: dict):
     if mode != 'paper':
         alert_header = f"{alert_header} [{mode.upper()}]"
 
+    display = _display_name(symbol)
     message = (
         f"🚨 *{alert_header}* 🚨\n\n"
-        f"*{signal_type} Signal for {symbol}*\n\n"
+        f"*{signal_type} Signal for {display}*\n\n"
         f"*Price:* ${price:,.2f}\n"
         f"*Reason:* {reason}"
     )
@@ -410,9 +415,10 @@ async def send_position_health_alert(symbol: str, current_price: float,
     else:
         emoji = "🟢"
 
+    display = _display_name(symbol)
     message = (
         f"{emoji} *Position Health Alert* {emoji}\n\n"
-        f"*{symbol}*\n"
+        f"*{display}*\n"
         f"- Entry: ${entry_price:,.2f}\n"
         f"- Current: ${current_price:,.2f}\n"
         f"- PnL: {pnl_pct:+.2f}%\n\n"
@@ -442,7 +448,7 @@ async def send_news_alert(triggered_symbols, sentiment_data, gemini_assessments=
         sym_data = sentiment_data.get(symbol, {})
         avg_score = sym_data.get('avg_sentiment_score', 0)
         volume = sym_data.get('news_volume', 0)
-        lines.append(f"*{symbol}:* {volume} articles, sentiment {avg_score:+.3f}")
+        lines.append(f"*{_display_name(symbol)}:* {volume} articles, sentiment {avg_score:+.3f}")
 
         # Add Gemini assessment if available
         if gemini_assessments:
@@ -512,6 +518,7 @@ async def send_market_event_alert(alert: dict):
 
     elif alert_type == 'breaking':
         symbols = alert.get('symbols', [])
+        display_syms = [_display_name(s) for s in symbols]
         catalyst = _escape_md(alert.get('catalyst_type', 'unknown'))
         market_wide = alert.get('market_wide', False)
         theme = alert.get('cross_asset_theme')
@@ -520,20 +527,20 @@ async def send_market_event_alert(alert: dict):
         if market_wide:
             header = "Breaking: MARKET-WIDE Alert"
         else:
-            header = f"Breaking: {_escape_md(', '.join(symbols))}"
+            header = f"Breaking: {', '.join(display_syms)}"
 
         message = f"*{header}*\n"
         message += f"*Catalyst:* {catalyst}\n"
         if theme:
             message += f"*Theme:* {_escape_md(theme)}\n"
-        message += f"*Symbols:* {', '.join(symbols)}\n"
+        message += f"*Symbols:* {', '.join(display_syms)}\n"
 
         for sym, assessment in assessments.items():
             direction = assessment.get('direction', '?')
             confidence = assessment.get('confidence', 0)
             headline = assessment.get('key_headline', '')
             arrow = '+' if direction == 'bullish' else '-' if direction == 'bearish' else '~'
-            message += f"\n{arrow} *{sym}* ({direction}, {confidence:.0%})"
+            message += f"\n{arrow} *{_display_name(sym)}* ({direction}, {confidence:.0%})"
             if headline:
                 message += f"\n  {_escape_md(headline[:80])}"
 
@@ -541,6 +548,7 @@ async def send_market_event_alert(alert: dict):
         group = _escape_md(alert.get('group', '?'))
         direction = alert.get('direction', '?')
         symbols = alert.get('symbols', [])
+        display_syms = [_display_name(s) for s in symbols]
         avg_conf = alert.get('avg_confidence', 0)
         velocity_support = alert.get('velocity_support', False)
         arrow = 'up' if direction == 'bullish' else 'down'
@@ -548,7 +556,7 @@ async def send_market_event_alert(alert: dict):
         message = f"*Sector Move: {group} ({arrow})*\n\n"
         message += f"*Direction:* {direction}\n"
         message += f"*Confidence:* {avg_conf:.0%}\n"
-        message += f"*Symbols:* {', '.join(symbols)}\n"
+        message += f"*Symbols:* {', '.join(display_syms)}\n"
         if velocity_support:
             message += "News velocity confirms trend.\n"
 
@@ -623,6 +631,11 @@ async def gcosts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     summary = get_gcp_billing_summary()
     await update.message.reply_text(summary, parse_mode='Markdown')
 
+def _display_name(symbol: str) -> str:
+    """Short display name for Telegram: 'Samsung (005930.KS)' or 'AAPL'."""
+    return _escape_md(symbol_display_name(symbol))
+
+
 def _is_stock_symbol(symbol):
     """Checks if a symbol is a stock (present in stock_trading watch_list)."""
     stock_watch_list = app_config.get('settings', {}).get('stock_trading', {}).get('watch_list', [])
@@ -669,8 +682,9 @@ async def positions(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 log.debug(f"Sparkline generation failed for {symbol}: {e}")
             spark_str = f"  {sparkline}" if sparkline else ""
+            display = _display_name(symbol)
             message += (
-                f"{emoji} *{symbol}*  {pnl_pct:+.1f}%  ${pnl:+,.2f}{spark_str}\n"
+                f"{emoji} *{display}*  {pnl_pct:+.1f}%  ${pnl:+,.2f}{spark_str}\n"
                 f"  Entry ${entry_price:,.2f} -> ${current_price:,.2f}  Qty: {quantity}\n\n"
             )
         message += f"*Total PnL: ${total_pnl:+,.2f}*"
@@ -846,7 +860,7 @@ async def stocks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pnl_pct = pos.get('unrealized_plpc', 0) * 100
                 total_pnl += pnl
                 message += (
-                    f"*{pos['symbol']}*\n"
+                    f"*{_display_name(pos['symbol'])}*\n"
                     f"- Qty: {pos['quantity']:.4f}\n"
                     f"- Entry: ${pos['entry_price']:,.2f}\n"
                     f"- Current: ${pos['current_price']:,.2f}\n"
@@ -881,7 +895,7 @@ async def stocks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 message += f"_{region}:_\n"
                 for symbol, qty, entry, current, pnl, pnl_pct in sorted(items, key=lambda x: x[5], reverse=True):
                     emoji = pnl_emoji(pnl_pct)
-                    message += f"  {emoji} *{_escape_md(symbol)}* {pnl_pct:+.1f}% ${current:,.2f}\n"
+                    message += f"  {emoji} *{_display_name(symbol)}* {pnl_pct:+.1f}% ${current:,.2f}\n"
                 message += "\n"
             message += f"*Total Unrealized PnL: ${total_pnl:+,.2f}*"
 

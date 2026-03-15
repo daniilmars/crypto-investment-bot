@@ -231,6 +231,30 @@ stocks:
   - ZS
   - TTD
   - MELI
+  # New US (+23)
+  - TXN
+  - ADI
+  - NOW
+  - ABT
+  - SPOT
+  - SOFI
+  - RBLX
+  - APP
+  - FTNT
+  - RIVN
+  - T
+  - VZ
+  - CL
+  - MDLZ
+  - MPC
+  - VLO
+  - ECL
+  - NEM
+  - NUE
+  - EQIX
+  - O
+  - GEV
+  - VST
 
 # --- AI Pure-Play Stocks ---
 stocks_ai:
@@ -321,6 +345,32 @@ stocks_europe:
   - NESTE.HE
   - UPM.HE
   - NOKIA.HE
+  # New EU (+25)
+  - RACE.MI
+  - ADYEN.AS
+  - DSY.PA
+  - KER.PA
+  - RMS.PA
+  - STLAM.MI
+  - BBVA.MC
+  - FRE.DE
+  - DB1.DE
+  - RHM.DE
+  - SAND.ST
+  - ATCO-A.ST
+  - DANSKE.CO
+  - ORSTED.CO
+  - BATS.L
+  - PRU.L
+  - EXPN.L
+  - RKT.L
+  - WPP.L
+  - AD.AS
+  - NZYM-B.CO
+  - FLTR.L
+  - KNEBV.HE
+  - IHG.L
+  - EL.PA
 
 # --- Asian Stocks (yfinance suffix) ---
 stocks_asia:
@@ -383,3 +433,28 @@ stocks_asia:
   - D05.SI
   - O39.SI
   - U11.SI
+  # New Asia (+25)
+  - 6098.T
+  - 9999.HK
+  - 9983.T
+  - 4502.T
+  - 8058.T
+  - 8001.T
+  - 6273.T
+  - BAJFINANCE.NS
+  - LT.NS
+  - HINDUNILVR.NS
+  - SBIN.NS
+  - MQG.AX
+  - WDS.AX
+  - ALL.AX
+  - 066570.KS
+  - 028260.KS
+  - 3968.HK
+  - 2269.HK
+  - 1024.HK
+  - 3888.HK
+  - 2603.TW
+  - 4568.T
+  - 7974.T
+  - 2382.HK

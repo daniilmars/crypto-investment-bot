@@ -168,30 +168,28 @@ def _split_symbols_into_batches(
     from src.analysis.sector_limits import get_symbol_group, _ensure_loaded, _CRYPTO_GROUPS
     _ensure_loaded()
 
+    _EU_SUFFIXES = ('.L', '.DE', '.PA', '.AS', '.SW', '.MC', '.MI',
+                    '.CO', '.ST', '.HE')
+    _ASIA_SUFFIXES = ('.T', '.HK', '.KS', '.AX', '.NS', '.TW', '.SI')
+
     crypto_syms = []
     us_stock_syms = []
     eu_stock_syms = []
     asia_stock_syms = []
     other_syms = []
 
-    # EU/Asia region groups from sector_groups.yaml
-    eu_groups = frozenset(['uk', 'germany', 'france', 'netherlands_swiss',
-                           'southern', 'nordics'])
-    asia_groups = frozenset(['japan', 'hong_kong', 'korea_taiwan',
-                             'australia_india_sg'])
-
     for sym in all_symbols:
         group = get_symbol_group(sym)
-        if group is None:
-            other_syms.append(sym)
-        elif group in _CRYPTO_GROUPS:
+        if group in _CRYPTO_GROUPS:
             crypto_syms.append(sym)
-        elif group in eu_groups:
+        elif any(sym.endswith(s) for s in _EU_SUFFIXES):
             eu_stock_syms.append(sym)
-        elif group in asia_groups:
+        elif any(sym.endswith(s) for s in _ASIA_SUFFIXES):
             asia_stock_syms.append(sym)
-        else:
+        elif group is not None:
             us_stock_syms.append(sym)
+        else:
+            other_syms.append(sym)
 
     batches = []
 
