@@ -8,6 +8,7 @@
 import argparse
 import asyncio
 import os
+import signal
 from datetime import datetime, timedelta, timezone
 
 import uvicorn
@@ -174,11 +175,21 @@ async def startup_event():
     global application
     log.info("Starting application...")
 
+    # Reload auto-tuned parameters from DB (survives restarts)
+    try:
+        from src.analysis.auto_tuner import reload_tuned_params
+        await asyncio.to_thread(reload_tuned_params)
+    except Exception as e:
+        log.warning(f"Could not reload tuned params: {e}")
+
     # Restore trailing stop peaks from database (survives restarts)
     try:
         loaded = await load_trailing_stop_peaks()
-        bot_state.load_peaks(loaded)
-        log.info(f"Loaded {len(loaded)} trailing stop peaks from database.")
+        manual_peaks = {oid: peak for oid, (peak, strat) in loaded.items() if strat != 'auto'}
+        auto_peaks = {oid: peak for oid, (peak, strat) in loaded.items() if strat == 'auto'}
+        bot_state.load_peaks(manual_peaks)
+        bot_state.load_auto_peaks(auto_peaks)
+        log.info(f"Loaded {len(manual_peaks)} manual + {len(auto_peaks)} auto trailing stop peaks from database.")
     except Exception as e:
         log.warning(f"Could not load trailing stop peaks: {e}")
 
@@ -266,6 +277,12 @@ async def startup_event():
     _background_tasks.append(asyncio.create_task(db_backup_loop()))
     _background_tasks.append(asyncio.create_task(_chat_session_cleanup_loop()))
 
+    # Register SIGTERM handler for logging (Uvicorn triggers shutdown hooks)
+    def _sigterm_handler(signum, frame):
+        log.info(f"Received signal {signum} (SIGTERM) — shutdown will proceed via FastAPI hooks")
+
+    signal.signal(signal.SIGTERM, _sigterm_handler)
+
     log.info("Startup complete. Background tasks running.")
 
 
@@ -275,6 +292,10 @@ async def shutdown_event_handler():
     On shutdown, cancel background tasks and gracefully clean up.
     """
     log.info("Shutting down application...")
+
+    # Grace period: let in-flight DB writes finish before cancelling tasks
+    log.info("Waiting 2s grace period for in-flight operations...")
+    await asyncio.sleep(2)
 
     for task in _background_tasks:
         task.cancel()
@@ -291,6 +312,13 @@ async def shutdown_event_handler():
             await stop_bot(application)
         except Exception as e:
             log.error(f"Error stopping Telegram bot during shutdown: {e}", exc_info=True)
+
+    # Close DB connection pool
+    try:
+        from src.database import close_db_pool
+        close_db_pool()
+    except Exception as e:
+        log.error(f"Error closing DB pool during shutdown: {e}", exc_info=True)
 
     log.info("Shutdown complete.")
 
@@ -313,6 +341,17 @@ async def health_check():
                 break
     else:
         checks['bot_loop'] = 'running'
+
+    # Check for hung bot loop (last cycle too old)
+    last_cycle = bot_state.get_last_cycle_at()
+    if last_cycle:
+        run_interval = app_config.get('settings', {}).get('run_interval_minutes', 15)
+        stale_threshold = timedelta(minutes=run_interval * 2.5)
+        if datetime.now(timezone.utc) - last_cycle > stale_threshold:
+            checks['bot_loop'] = f'stale (last cycle: {last_cycle.isoformat()})'
+            healthy = False
+        else:
+            checks['bot_loop'] = f'ok (last cycle: {last_cycle.strftime("%H:%M:%S")})'
 
     # Check DB connectivity
     try:

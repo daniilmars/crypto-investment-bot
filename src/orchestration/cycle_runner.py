@@ -44,6 +44,7 @@ from src.notify.telegram_bot import send_telegram_alert
 from src.notify.telegram_alerts_enhanced import (
     check_realtime_alerts, send_realtime_alerts,
 )
+from src.orchestration import bot_state
 from src.state import bot_is_running
 from src.orchestration.position_monitor import monitor_position
 from src.orchestration.position_analyst import run_position_analyst
@@ -220,6 +221,18 @@ async def run_bot_cycle():
         trailing_stop_distance=trailing_stop_distance,
         stoploss_cooldown_hours=stoploss_cooldown_hours,
     )
+
+    # RISK_OFF: tighten trailing stops to accelerate exits
+    if macro_regime_result['regime'] == 'RISK_OFF':
+        risk_off_cfg = settings.get('macro_regime', {}).get('risk_off_exit_acceleration', {})
+        activation_mult = risk_off_cfg.get('trailing_activation_multiplier', 0.5)
+        distance_mult = risk_off_cfg.get('trailing_distance_multiplier', 0.7)
+        risk_cfg['trailing_stop_activation'] *= activation_mult
+        risk_cfg['trailing_stop_distance'] *= distance_mult
+        log.info(f"RISK_OFF: tightened trailing stop "
+                 f"(activation={risk_cfg['trailing_stop_activation']:.3f}, "
+                 f"distance={risk_cfg['trailing_stop_distance']:.3f})")
+
     trading_mode = _get_trading_mode()
     news_config = settings.get('news_analysis', {})
 
@@ -237,7 +250,8 @@ async def run_bot_cycle():
             limit=live_config.get('max_consecutive_losses', 3), asset_type='crypto')
         cb_tripped, cb_reason = await asyncio.to_thread(
             check_circuit_breaker,
-            cb_balance, cb_effective_pnl, cb_recent_trades, asset_type='crypto')
+            cb_balance, cb_effective_pnl, cb_recent_trades, asset_type='crypto',
+            current_prices=current_prices_dict)
         if cb_tripped:
             log.warning(f"Circuit breaker active for this cycle: {cb_reason}")
             await send_telegram_alert({
@@ -543,6 +557,10 @@ async def run_bot_cycle():
     except Exception as e:
         log.warning(f"Dashboard update failed: {e}")
 
+    # Record cycle completion for hung-task detection
+    from datetime import datetime as _dt, timezone as _tz
+    bot_state.set_last_cycle_at(_dt.now(_tz.utc))
+
 
 async def _check_pending_limit_orders(
     current_prices: dict,
@@ -730,7 +748,8 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
             limit=live_config.get('max_consecutive_losses', 3), asset_type='stock')
         stock_cb_tripped, stock_cb_reason = await asyncio.to_thread(
             check_circuit_breaker,
-            stock_cb_balance, stock_cb_effective_pnl, stock_cb_recent, asset_type='stock')
+            stock_cb_balance, stock_cb_effective_pnl, stock_cb_recent, asset_type='stock',
+            current_prices=stock_prices_dict)
         if stock_cb_tripped:
             log.warning(f"Circuit breaker active for stocks: {stock_cb_reason}")
             await send_telegram_alert({

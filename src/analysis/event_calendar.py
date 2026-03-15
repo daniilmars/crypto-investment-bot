@@ -98,7 +98,45 @@ def _load_event_dates() -> dict:
         fomc_dates = _FOMC_DATES_2026_FALLBACK
         cpi_dates = _CPI_DATES_2026_FALLBACK
 
-    _loaded_event_dates = {'fomc': fomc_dates, 'cpi': cpi_dates}
+    # Load crypto events
+    crypto_events = []
+    try:
+        crypto_raw = data.get('crypto_events', {})
+        for year_events in crypto_raw.values():
+            if isinstance(year_events, list):
+                for entry in year_events:
+                    if isinstance(entry, dict) and 'date' in entry:
+                        dt = _parse_iso_date(entry['date'])
+                        if dt:
+                            crypto_events.append({
+                                'date': dt,
+                                'name': entry.get('name', 'Crypto event'),
+                                'block_hours': entry.get('block_hours', 12),
+                                'reduce_hours': entry.get('reduce_hours', 24),
+                            })
+                    elif isinstance(entry, str):
+                        dt = _parse_iso_date(entry)
+                        if dt:
+                            crypto_events.append({
+                                'date': dt, 'name': 'Crypto event',
+                                'block_hours': 12, 'reduce_hours': 24,
+                            })
+        crypto_events.sort(key=lambda e: e['date'])
+        if crypto_events:
+            log.info(f"Loaded {len(crypto_events)} crypto events from event_dates.yaml")
+    except Exception as e:
+        log.debug(f"Could not load crypto events: {e}")
+
+    _loaded_event_dates = {'fomc': fomc_dates, 'cpi': cpi_dates, 'crypto': crypto_events}
+
+    # Warn at startup if all dates have expired
+    now = datetime.now(timezone.utc)
+    all_dates = fomc_dates + cpi_dates
+    if all_dates and now > max(all_dates):
+        log.warning("EVENT CALENDAR STALE: All FOMC/CPI dates have expired. "
+                     "Update config/event_dates.yaml for the new year. "
+                     "Event-based gating is effectively disabled.")
+
     return _loaded_event_dates
 
 
@@ -120,6 +158,10 @@ def _get_fomc_dates() -> list:
 
 def _get_cpi_dates() -> list:
     return _load_event_dates()['cpi']
+
+
+def _get_crypto_events() -> list:
+    return _load_event_dates().get('crypto', [])
 
 
 def reload_event_dates():
@@ -186,6 +228,14 @@ def check_event_gate(symbol: str, signal_type: str,
         if action != 'allow':
             return action, mult, reason
 
+    # Check crypto-specific events (crypto only)
+    if asset_type == 'crypto':
+        crypto_events = _get_crypto_events()
+        if crypto_events:
+            action, mult, reason = _check_crypto_event_gate(now, crypto_events)
+            if action != 'allow':
+                return action, mult, reason
+
     return 'allow', 1.0, ''
 
 
@@ -233,6 +283,26 @@ def _check_macro_event_gate(now: datetime, event_dates: list,
         return 'reduce', reduce_mult, (f"{event_name} in {hours_until:.0f}h "
                                         f"(reduce window: {reduce_hours}h)")
 
+    return 'allow', 1.0, ''
+
+
+def _check_crypto_event_gate(now: datetime, crypto_events: list) -> tuple:
+    """Check proximity to crypto-specific events (per-event block/reduce hours)."""
+    for event in crypto_events:
+        dt = event['date']
+        if dt <= now:
+            continue
+        hours_until = (dt - now).total_seconds() / 3600
+        block_hours = event.get('block_hours', 12)
+        reduce_hours = event.get('reduce_hours', 24)
+        name = event.get('name', 'Crypto event')
+
+        if hours_until <= block_hours:
+            return 'block', 0.0, (f"{name} in {hours_until:.0f}h "
+                                  f"(block window: {block_hours}h)")
+        elif hours_until <= reduce_hours:
+            return 'reduce', 0.5, (f"{name} in {hours_until:.0f}h "
+                                    f"(reduce window: {reduce_hours}h)")
     return 'allow', 1.0, ''
 
 
@@ -380,6 +450,15 @@ def get_upcoming_macro_events(days_ahead: int = 30) -> list:
         if now < dt <= cutoff:
             events.append({
                 'event_type': 'CPI', 'event_date': dt,
+                'hours_until': (dt - now).total_seconds() / 3600,
+            })
+
+    for ce in _get_crypto_events():
+        dt = ce['date']
+        if now < dt <= cutoff:
+            events.append({
+                'event_type': f"Crypto: {ce.get('name', 'event')}",
+                'event_date': dt,
                 'hours_until': (dt - now).total_seconds() / 3600,
             })
 

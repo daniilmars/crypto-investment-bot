@@ -57,13 +57,10 @@ def check_buy_gates(
             log.info(reason)
             return False, 0.0, reason
     except Exception:
-        pass  # Non-critical — continue with other gates
+        pending = []  # Non-critical — continue with other gates
 
     # 3. Max concurrent positions (count PENDING orders too)
-    try:
-        pending_count = len(pending) if 'pending' in dir() else 0
-    except Exception:
-        pending_count = 0
+    pending_count = len(pending)
     if len(open_positions) + pending_count >= max_positions:
         reason = (f"{prefix}Skipping BUY for {symbol}: Max concurrent positions "
                   f"({max_positions}) reached.")

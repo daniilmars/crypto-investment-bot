@@ -327,6 +327,10 @@ settings:
       btc_trend: 1.0
     risk_on_threshold: 3.0
     risk_off_threshold: -3.0
+    # Tighten trailing stops for open positions during RISK_OFF regime
+    risk_off_exit_acceleration:
+      trailing_activation_multiplier: 0.5   # 2% → 1%
+      trailing_distance_multiplier: 0.7     # 1.5% → 1.05%
 
   # -- Correlation-Aware Sector Limits --
   # Prevents over-concentration in correlated assets (e.g., 5 AI stocks = 1 bet).

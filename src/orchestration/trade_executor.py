@@ -560,15 +560,17 @@ async def _try_rotation(
             buy_kw['asset_type'] = 'stock'
         buy_result = place_order(symbol, "BUY", quantity, current_price, **buy_kw)
 
-        # Set cooldown
-        rotation_cfg = app_config.get('settings', {}).get('position_rotation', {})
-        cooldown_hours = rotation_cfg.get('rotation_cooldown_hours', 4)
-        bot_state.set_rotation_cooldown(
-            asset_type,
-            now + timedelta(hours=cooldown_hours),
-            is_auto=is_auto)
-
-        _set_cooldown(symbol, "BUY", signal_cooldown_hours, is_auto)
+        # Only set cooldown if buy succeeded
+        if buy_result.get('status') in ('FILLED', 'OPEN'):
+            rotation_cfg = app_config.get('settings', {}).get('position_rotation', {})
+            cooldown_hours = rotation_cfg.get('rotation_cooldown_hours', 4)
+            bot_state.set_rotation_cooldown(
+                asset_type,
+                now + timedelta(hours=cooldown_hours),
+                is_auto=is_auto)
+            _set_cooldown(symbol, "BUY", signal_cooldown_hours, is_auto)
+        else:
+            log.warning(f"{prefix}Rotation buy failed for {symbol}: {buy_result} — no cooldown set")
 
         # Send notification
         msg = format_rotation_message(candidate, signal)

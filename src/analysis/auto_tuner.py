@@ -35,6 +35,53 @@ SWEEP_RANGES = {
 }
 
 
+def reload_tuned_params():
+    """Reload applied (non-reverted) parameter changes from DB at startup."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cur:
+            if is_pg:
+                query = """
+                    SELECT DISTINCT ON (parameter_name) parameter_name, new_value
+                    FROM tuning_history
+                    WHERE applied = TRUE AND reverted = FALSE
+                    ORDER BY parameter_name, tuning_run_at DESC
+                """
+            else:
+                query = """
+                    SELECT th.parameter_name, th.new_value
+                    FROM tuning_history th
+                    INNER JOIN (
+                        SELECT parameter_name, MAX(tuning_run_at) AS max_run
+                        FROM tuning_history
+                        WHERE applied = 1 AND reverted = 0
+                        GROUP BY parameter_name
+                    ) latest ON th.parameter_name = latest.parameter_name
+                        AND th.tuning_run_at = latest.max_run
+                    WHERE th.applied = 1 AND th.reverted = 0
+                """
+            cur.execute(query)
+            rows = cur.fetchall()
+
+        settings = app_config.get('settings', {})
+        count = 0
+        for row in rows:
+            param = row[0] if isinstance(row, tuple) else row['parameter_name']
+            value = row[1] if isinstance(row, tuple) else row['new_value']
+            if param in settings:
+                settings[param] = float(value)
+                count += 1
+        if count:
+            log.info(f"Auto-tuner: reloaded {count} tuned parameters from DB")
+    except Exception as e:
+        log.warning(f"Could not reload tuned params: {e}")
+    finally:
+        if conn:
+            release_db_connection(conn)
+
+
 def run_auto_tune():
     """Run a full auto-tuning cycle.
 
@@ -222,11 +269,11 @@ def _evaluate_params(trades, params):
     avg_return = sum(returns) / len(returns)
     total_return = sum(returns)
 
-    # Sharpe ratio (annualized, assuming ~250 trading days)
+    # Sharpe ratio (annualized with standard 252 trading days)
     if len(returns) > 1:
         std = _std(returns)
         if std > 0:
-            sharpe = (avg_return / std) * math.sqrt(min(250, len(returns) * 7))
+            sharpe = (avg_return / std) * math.sqrt(252)
         else:
             sharpe = 0.0
     else:

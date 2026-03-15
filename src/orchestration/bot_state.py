@@ -39,8 +39,20 @@ _auto_analyst_last_run: dict = {}
 _rotation_cooldowns: dict[str, 'datetime'] = {}     # key: asset_type
 _auto_rotation_cooldowns: dict[str, 'datetime'] = {}
 
+# --- Last Cycle Timestamp (hung task detection) ---
+_last_cycle_at: datetime | None = None
+
 # --- Sell Lock (guards concurrent sell attempts) ---
 _sell_lock = asyncio.Lock()
+
+
+def set_last_cycle_at(dt: datetime):
+    global _last_cycle_at
+    _last_cycle_at = dt
+
+
+def get_last_cycle_at() -> datetime | None:
+    return _last_cycle_at
 
 
 def get_sell_lock() -> asyncio.Lock:
@@ -74,7 +86,14 @@ def get_peak(order_id: str) -> float | None:
 def auto_update_trailing_stop(order_id: str, current_price: float) -> float:
     prev_peak = _auto_trailing_stop_peaks.get(order_id, current_price)
     new_peak = max(prev_peak, current_price)
-    _auto_trailing_stop_peaks[order_id] = new_peak
+    if new_peak > prev_peak:
+        _auto_trailing_stop_peaks[order_id] = new_peak
+        try:
+            _db_save_peak(order_id, new_peak)
+        except Exception as e:
+            log.warning(f"Failed to persist auto trailing stop peak for {order_id}: {e}")
+    elif order_id not in _auto_trailing_stop_peaks:
+        _auto_trailing_stop_peaks[order_id] = new_peak
     return new_peak
 
 
@@ -207,6 +226,10 @@ def load_peaks(peaks: dict):
     _trailing_stop_peaks.update(peaks)
 
 
+def load_auto_peaks(peaks: dict):
+    _auto_trailing_stop_peaks.update(peaks)
+
+
 def load_cooldowns(cooldowns: dict):
     _stoploss_cooldowns.update(cooldowns)
 
@@ -218,6 +241,7 @@ def load_signal_cooldown_state(manual: dict, auto: dict):
 
 def clear_all():
     """Clears all state. For tests."""
+    global _last_cycle_at
     _trailing_stop_peaks.clear()
     _auto_trailing_stop_peaks.clear()
     _stoploss_cooldowns.clear()
@@ -228,3 +252,4 @@ def clear_all():
     _auto_analyst_last_run.clear()
     _rotation_cooldowns.clear()
     _auto_rotation_cooldowns.clear()
+    _last_cycle_at = None

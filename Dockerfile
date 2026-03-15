@@ -18,5 +18,8 @@ USER appuser
 # Copy the entire project context into the container
 COPY --chown=appuser:appuser . .
 
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+  CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')" || exit 1
+
 # Set up the entrypoint script
 CMD ["python3", "main.py"]
