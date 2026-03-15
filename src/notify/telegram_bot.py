@@ -568,6 +568,50 @@ async def send_market_event_alert(alert: dict):
     log.info(f"Sent market alert: {alert_type}")
 
 
+async def send_sector_review_digest(result: dict):
+    """Formats and sends the daily sector review digest."""
+    if not telegram_config.get('enabled') or not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
+        return
+    bot = Bot(token=TOKEN)
+
+    from datetime import datetime, timezone
+    date_str = datetime.now(timezone.utc).strftime('%B %d')
+
+    sectors = result.get('sectors', {})
+    theme = result.get('cross_sector_theme', '')
+    from src.analysis.sector_limits import _CRYPTO_GROUPS
+
+    crypto_lines = []
+    stock_lines = []
+    for group, data in sorted(sectors.items(), key=lambda x: abs(x[1].get('score', 0)), reverse=True):
+        score = data.get('score', 0)
+        if abs(score) < 0.2:
+            continue
+        catalyst = data.get('key_catalyst', '')
+        line = f" {score:+.2f} {group} — {_escape_md(catalyst[:60])}" if catalyst else f" {score:+.2f} {group}"
+        if group in _CRYPTO_GROUPS:
+            crypto_lines.append(line)
+        else:
+            stock_lines.append(line)
+
+    message = f"*Daily Sector Outlook* ({_escape_md(date_str)})\n\n"
+    if theme:
+        message += f"*Theme:* {_escape_md(theme)}\n\n"
+
+    if crypto_lines:
+        message += "*Crypto:*\n" + "\n".join(crypto_lines) + "\n\n"
+    if stock_lines:
+        message += "*Stocks:*\n" + "\n".join(stock_lines) + "\n\n"
+
+    if not crypto_lines and not stock_lines:
+        message += "All sectors near neutral.\n\n"
+
+    message += "*Signal adjustment:* +/-10% per conviction"
+
+    await send_telegram_message(bot, CHAT_ID, message)
+    log.info("Sent sector review digest.")
+
+
 # --- Command Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /start command."""
@@ -1719,6 +1763,49 @@ async def _clearchat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Chat session cleared.")
 
 
+@authorized
+async def backtest_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /backtest — run exit parameter sweep or signal quality analysis."""
+    await update.message.reply_text("Running backtest analysis... (this may take a minute)")
+    try:
+        import asyncio
+        from src.analysis.trade_replay import (
+            run_exit_sweep, analyze_signal_quality,
+            format_sweep_report, format_quality_report,
+        )
+
+        # Parse args: /backtest [quality|sweep|all] [auto|manual]
+        args = context.args or []
+        mode = args[0] if args else 'all'
+        strategy = args[1] if len(args) > 1 else None
+
+        parts = []
+
+        if mode in ('quality', 'all'):
+            quality = await asyncio.to_thread(analyze_signal_quality, strategy)
+            parts.append(format_quality_report(quality))
+
+        if mode in ('sweep', 'all'):
+            compact_grid = {
+                'stop_loss_pct': [0.025, 0.035, 0.05],
+                'take_profit_pct': [0.06, 0.08, 0.12],
+                'trailing_activation': [0.02, 0.03],
+                'trailing_distance': [0.012, 0.015],
+            }
+            sweep = await asyncio.to_thread(run_exit_sweep, compact_grid, strategy)
+            parts.append(format_sweep_report(sweep))
+
+        result = "\n\n".join(parts) if parts else "No analysis to run."
+
+        # Split long messages
+        for i in range(0, len(result), 4000):
+            await update.message.reply_text(f"```\n{result[i:i+4000]}\n```",
+                                            parse_mode='MarkdownV2')
+    except Exception as e:
+        log.error(f"Backtest command error: {e}", exc_info=True)
+        await update.message.reply_text(f"Backtest failed: {e}")
+
+
 async def _handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Routes free-text messages to AI chat handler."""
     from src.notify.telegram_chat import handle_chat_message, set_execute_callback
@@ -1785,6 +1872,7 @@ async def start_bot() -> Application:
             CommandHandler("close_all", close_all_cmd),
             CommandHandler("clearchat", _clearchat_cmd),
             CommandHandler("watchlist", _watchlist_cmd),
+            CommandHandler("backtest", backtest_cmd),
             CallbackQueryHandler(_dispatch_callback),
             MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_chat_message),
         ]

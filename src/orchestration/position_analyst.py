@@ -6,7 +6,9 @@ legacy position_monitor (Gemini health check) as fallback.
 
 from datetime import datetime, timedelta, timezone
 
-from src.analysis.gemini_news_analyzer import analyze_position_health, analyze_position_investment
+from src.analysis.gemini_news_analyzer import (
+    analyze_position_health, analyze_position_investment, analyze_position_quick,
+)
 from src.analysis.news_velocity import compute_news_velocity
 from src.config import app_config
 from src.database import get_position_additions, get_recent_articles
@@ -43,6 +45,18 @@ async def run_position_analyst(
 
     analyst_cfg = settings.get('position_analyst', {})
     if analyst_cfg.get('enabled', False):
+        # Run Flash analyst (frequent, cheap) — exit-only
+        flash_interval = analyst_cfg.get('quick_check_interval_minutes')
+        if flash_interval:
+            flash_result = await _run_flash_analyst(
+                position, symbol, current_price, entry_price, pnl_pct,
+                order_id, market_price_data, analyst_cfg, settings,
+                trailing_stop_activation, asset_type, is_auto,
+            )
+            if flash_result == 'exit':
+                return 'sell'
+
+        # Run Pro analyst (infrequent, deep) — on its own interval
         return await _run_investment_analyst(
             position, symbol, current_price, entry_price, pnl_pct,
             order_id, market_price_data, analyst_cfg, settings,
@@ -169,6 +183,89 @@ async def _run_investment_analyst(
 
     except Exception as e:
         log.warning(f"Position analyst error for {symbol}: {e}")
+        return None
+
+
+async def _run_flash_analyst(
+    position, symbol, current_price, entry_price, pnl_pct,
+    order_id, market_price_data, analyst_cfg, settings,
+    trailing_stop_activation, asset_type, is_auto=False,
+) -> str | None:
+    """Run the Flash analyst (exit-only, every 4h, uses gemini-2.5-flash)."""
+    now = datetime.now(timezone.utc)
+    check_interval = analyst_cfg.get('quick_check_interval_minutes', 240)
+    _get_last_run = bot_state.get_auto_flash_analyst_last_run if is_auto else bot_state.get_flash_analyst_last_run
+    _set_last_run = bot_state.set_auto_flash_analyst_last_run if is_auto else bot_state.set_flash_analyst_last_run
+    last_check = _get_last_run(order_id)
+    if last_check and (now - last_check).total_seconds() / 60 < check_interval:
+        log.debug(f"[{symbol}] Skipping Flash analyst — last run "
+                  f"{(now - last_check).total_seconds() / 60:.0f}m ago")
+        return None
+
+    min_age_hours = analyst_cfg.get('min_position_age_hours', 2)
+    entry_ts = position.get('entry_timestamp')
+    if not entry_ts:
+        return None
+
+    try:
+        entry_dt = _parse_entry_timestamp(entry_ts)
+        age_hours = (now - entry_dt).total_seconds() / 3600
+        if age_hours < min_age_hours:
+            return None
+
+        # News velocity gate (same as Pro analyst)
+        velocity = compute_news_velocity(symbol)
+        if (velocity['articles_last_4h'] == 0
+                and not velocity['breaking_detected']
+                and velocity['sentiment_trend'] == 'stable'):
+            log.debug(f"[{symbol}] Flash analyst: no news activity, default hold")
+            _set_last_run(order_id, now)
+            return 'hold'
+
+        # Gather data
+        recent_articles = await get_recent_articles(symbol, hours=4, limit=10)
+        tech_data = {
+            'rsi': market_price_data.get('rsi'),
+            'sma': market_price_data.get('sma'),
+            'regime': 'unknown',
+        }
+        ts_info = _build_trailing_stop_info(
+            order_id, pnl_pct, trailing_stop_activation, is_auto=is_auto)
+
+        # Call Flash analyst
+        result = analyze_position_quick(
+            position, current_price, recent_articles, tech_data,
+            velocity, hours_held=age_hours,
+            trailing_stop_info=ts_info,
+            strategy_type=position.get('strategy_type'),
+            trade_reason=position.get('trade_reason'),
+        )
+        _set_last_run(order_id, now)
+
+        if not result:
+            return None
+
+        action = result.get('action', 'hold').strip().lower()
+        confidence = max(0.0, min(1.0, float(result.get('confidence', 0))))
+
+        exit_threshold = analyst_cfg.get('exit_confidence_threshold', 0.8)
+        # Strategic positions require higher exit confidence
+        if position.get('strategy_type'):
+            exit_threshold = max(exit_threshold, 0.85)
+
+        if action == 'exit' and confidence >= exit_threshold:
+            reasoning = result.get('reason', 'Flash analyst exit signal')
+            await _handle_analyst_sell(
+                position, symbol, current_price, order_id,
+                confidence, f"Flash: {reasoning}",
+                asset_type, is_auto, exit_reason='flash_analyst_exit',
+            )
+            return 'exit'
+
+        return action
+
+    except Exception as e:
+        log.warning(f"Flash analyst error for {symbol}: {e}")
         return None
 
 
@@ -304,6 +401,7 @@ async def _handle_increase(
 async def _handle_analyst_sell(
     position, symbol, current_price, order_id,
     confidence, reasoning, asset_type, is_auto=False,
+    exit_reason='analyst_exit',
 ):
     """Handle a SELL recommendation from the analyst."""
     trading_strategy = 'auto' if is_auto else 'manual'
@@ -321,14 +419,16 @@ async def _handle_analyst_sell(
         if asset_type == 'stock':
             order_kw['asset_type'] = 'stock'
         place_order(symbol, "SELL", position['quantity'], current_price,
-                    existing_order_id=order_id, exit_reason='analyst_exit',
+                    existing_order_id=order_id, exit_reason=exit_reason,
                     trading_strategy=trading_strategy, **order_kw)
         if is_auto:
             bot_state.auto_clear_trailing_stop(order_id)
             bot_state.remove_auto_analyst_last_run(order_id)
+            bot_state.remove_auto_flash_analyst_last_run(order_id)
         else:
             bot_state.clear_trailing_stop(order_id)
             bot_state.remove_analyst_last_run(order_id)
+            bot_state.remove_flash_analyst_last_run(order_id)
         mode_label = 'AUTO ' if is_auto else ''
         alert = {
             "signal": "SELL", "symbol": symbol,

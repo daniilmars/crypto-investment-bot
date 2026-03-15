@@ -161,9 +161,11 @@ def _cleanup_position_state(order_id: str, is_auto: bool):
     if is_auto:
         bot_state.auto_clear_trailing_stop(order_id)
         bot_state.remove_auto_analyst_last_run(order_id)
+        bot_state.remove_auto_flash_analyst_last_run(order_id)
     else:
         bot_state.clear_trailing_stop(order_id)
         bot_state.remove_analyst_last_run(order_id)
+        bot_state.remove_flash_analyst_last_run(order_id)
 
 
 def _resolve_trade_attribution(order_id, pnl_pct, entry_price, exit_price,

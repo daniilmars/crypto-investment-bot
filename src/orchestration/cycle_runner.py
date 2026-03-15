@@ -127,10 +127,12 @@ async def run_bot_cycle():
 
     signal_mode = settings.get('signal_mode', 'scoring')
     sentiment_signal_cfg = settings.get('sentiment_signal', {})
+    sector_review_cfg = settings.get('sector_review', {})
     sentiment_config = {
         'min_gemini_confidence': sentiment_signal_cfg.get('min_gemini_confidence', 0.7),
         'rsi_buy_veto_threshold': sentiment_signal_cfg.get('rsi_buy_veto_threshold', 75),
         'rsi_sell_veto_threshold': sentiment_signal_cfg.get('rsi_sell_veto_threshold', 25),
+        'conviction_influence_pct': sector_review_cfg.get('conviction_influence_pct', 0.10),
     }
 
     paper_trading = settings.get('paper_trading', True)
@@ -399,12 +401,22 @@ async def run_bot_cycle():
                 'gemini_assessment': ga,
             }
 
+        # Inject sector conviction into per-symbol config copy
+        sym_sentiment_config = dict(sentiment_config) if sentiment_config else {}
+        from src.analysis.sector_limits import get_symbol_group
+        from src.analysis.sector_review import get_sector_conviction
+        _sym_group = get_symbol_group(symbol)
+        if _sym_group:
+            _conviction = get_sector_conviction(_sym_group)
+            if _conviction != 0.0:
+                sym_sentiment_config['sector_conviction'] = _conviction
+
         signal = generate_signal(
             symbol=symbol,
             market_data=market_price_data,
             news_sentiment_data=symbol_news_data,
             signal_mode=signal_mode,
-            sentiment_config=sentiment_config,
+            sentiment_config=sym_sentiment_config,
             rsi_overbought_threshold=rsi_overbought_threshold,
             rsi_oversold_threshold=rsi_oversold_threshold,
         )
@@ -860,6 +872,15 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
 
         stock_sentiment_config = dict(sentiment_config or {})
         stock_sentiment_config['pe_buy_veto_threshold'] = pe_sell
+
+        # Inject sector conviction for stock
+        from src.analysis.sector_limits import get_symbol_group
+        from src.analysis.sector_review import get_sector_conviction
+        _sym_group = get_symbol_group(symbol)
+        if _sym_group:
+            _conviction = get_sector_conviction(_sym_group)
+            if _conviction != 0.0:
+                stock_sentiment_config['sector_conviction'] = _conviction
 
         signal = generate_stock_signal(
             symbol=symbol,

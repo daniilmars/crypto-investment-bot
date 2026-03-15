@@ -250,6 +250,10 @@ def _generate_stock_sentiment_signal(symbol, market_data, fundamental_data=None,
     rsi_sell_veto = sentiment_config.get('rsi_sell_veto_threshold', 25)
     pe_buy_veto = sentiment_config.get('pe_buy_veto_threshold', 40)
 
+    # Sector conviction adjustment: ±conviction_influence_pct at full conviction
+    sector_conv = sentiment_config.get('sector_conviction', 0.0)
+    conviction_influence = sentiment_config.get('conviction_influence_pct', 0.10)
+
     # --- Step 1: Sentiment trigger (Gemini only) ---
     direction = None
     sentiment_reason = ""
@@ -268,7 +272,17 @@ def _generate_stock_sentiment_signal(symbol, market_data, fundamental_data=None,
                               'stale': 0.3, 'none': 0.5}.get(freshness, 0.5)
             g_confidence *= freshness_mult
 
-            if g_confidence >= min_gemini_conf and g_direction in ('bullish', 'bearish'):
+            # Direction-aware threshold: bullish sector lowers BUY threshold,
+            # raises SELL threshold (and vice versa for bearish sectors)
+            conviction_adj = sector_conv * conviction_influence
+            if g_direction == 'bullish':
+                effective_conf = max(0.35, min(0.85, min_gemini_conf - conviction_adj))
+            elif g_direction == 'bearish':
+                effective_conf = max(0.35, min(0.85, min_gemini_conf + conviction_adj))
+            else:
+                effective_conf = min_gemini_conf
+
+            if g_confidence >= effective_conf and g_direction in ('bullish', 'bearish'):
                 direction = g_direction
                 sentiment_reason = (f"Gemini {g_direction} ({g_confidence:.2f}, "
                                     f"freshness={freshness}): {g_reasoning}")

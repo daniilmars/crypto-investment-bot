@@ -35,6 +35,10 @@ _auto_signal_cooldowns: dict[str, 'datetime'] = {}
 _analyst_last_run: dict = {}
 _auto_analyst_last_run: dict = {}
 
+# --- Flash Analyst Cooldown ---
+_flash_analyst_last_run: dict = {}
+_auto_flash_analyst_last_run: dict = {}
+
 # --- Rotation Cooldown (per asset_type) ---
 _rotation_cooldowns: dict[str, 'datetime'] = {}     # key: asset_type
 _auto_rotation_cooldowns: dict[str, 'datetime'] = {}
@@ -203,6 +207,32 @@ def remove_auto_analyst_last_run(order_id: str):
     _auto_analyst_last_run.pop(order_id, None)
 
 
+# --- Flash Analyst Cooldowns ---
+
+def get_flash_analyst_last_run(order_id: str):
+    return _flash_analyst_last_run.get(order_id)
+
+
+def set_flash_analyst_last_run(order_id: str, timestamp):
+    _flash_analyst_last_run[order_id] = timestamp
+
+
+def remove_flash_analyst_last_run(order_id: str):
+    _flash_analyst_last_run.pop(order_id, None)
+
+
+def get_auto_flash_analyst_last_run(order_id: str):
+    return _auto_flash_analyst_last_run.get(order_id)
+
+
+def set_auto_flash_analyst_last_run(order_id: str, timestamp):
+    _auto_flash_analyst_last_run[order_id] = timestamp
+
+
+def remove_auto_flash_analyst_last_run(order_id: str):
+    _auto_flash_analyst_last_run.pop(order_id, None)
+
+
 # --- Rotation Cooldowns ---
 
 def get_rotation_cooldown(asset_type: str, is_auto: bool = False):
@@ -250,6 +280,8 @@ def clear_all():
     _auto_signal_cooldowns.clear()
     _analyst_last_run.clear()
     _auto_analyst_last_run.clear()
+    _flash_analyst_last_run.clear()
+    _auto_flash_analyst_last_run.clear()
     _rotation_cooldowns.clear()
     _auto_rotation_cooldowns.clear()
     _last_cycle_at = None

@@ -197,8 +197,8 @@ def test_auto_tune_with_trades(mock_fb_conn, mock_fb_release,
 def test_safety_bounds():
     """Verify that default safety bounds are reasonable."""
     from src.analysis.auto_tuner import DEFAULT_BOUNDS
-    assert DEFAULT_BOUNDS['stop_loss_percentage'] == (0.015, 0.06)
-    assert DEFAULT_BOUNDS['take_profit_percentage'] == (0.03, 0.15)
+    assert DEFAULT_BOUNDS['stop_loss_percentage'] == (0.05, 0.15)
+    assert DEFAULT_BOUNDS['take_profit_percentage'] == (0.08, 0.50)
     assert DEFAULT_BOUNDS['min_gemini_confidence'] == (0.35, 0.75)
 
 

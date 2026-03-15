@@ -40,7 +40,7 @@ def _cursor(conn):
 # --- Connection Pool (for PostgreSQL) ---
 _pg_pool = None
 
-ALLOWED_TABLES = frozenset({"market_prices", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles", "stoploss_cooldowns", "position_additions", "ipo_events", "macro_regime_history", "source_registry", "signal_attribution", "experiment_log", "tuning_history", "session_peaks", "watchlist_items", "bot_state_kv", "signal_decisions"})
+ALLOWED_TABLES = frozenset({"market_prices", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles", "stoploss_cooldowns", "position_additions", "ipo_events", "macro_regime_history", "source_registry", "signal_attribution", "experiment_log", "tuning_history", "session_peaks", "watchlist_items", "bot_state_kv", "signal_decisions", "sector_convictions"})
 
 # --- Database Connection Management ---
 
@@ -842,6 +842,42 @@ def initialize_database(db_url=None):
             log.warning(f"Could not resolve stale circuit_breaker_events: {e}")
             if is_postgres_conn:
                 conn.rollback()
+
+        # Sector Convictions (daily Gemini Pro sector review scores)
+        sector_convictions_sql = '''
+            CREATE TABLE IF NOT EXISTS sector_convictions (
+                id SERIAL PRIMARY KEY,
+                sector_group TEXT NOT NULL,
+                asset_class TEXT NOT NULL,
+                score REAL NOT NULL,
+                rationale TEXT,
+                key_catalyst TEXT,
+                momentum TEXT,
+                review_confidence REAL,
+                cross_sector_theme TEXT,
+                recorded_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )''' if is_postgres_conn else '''
+            CREATE TABLE IF NOT EXISTS sector_convictions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sector_group TEXT NOT NULL,
+                asset_class TEXT NOT NULL,
+                score REAL NOT NULL,
+                rationale TEXT,
+                key_catalyst TEXT,
+                momentum TEXT,
+                review_confidence REAL,
+                cross_sector_theme TEXT,
+                recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )'''
+        cursor.execute(sector_convictions_sql)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sector_conv_recorded "
+            "ON sector_convictions (recorded_at)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sector_conv_group "
+            "ON sector_convictions (sector_group, recorded_at)"
+        )
 
         # --- Performance indexes ---
         perf_indexes = [
@@ -2347,5 +2383,83 @@ def cancel_pending_order(order_id: str, reason: str = 'expired'):
         log.error(f"cancel_pending_order failed: {e}", exc_info=True)
         if conn:
             conn.rollback()
+    finally:
+        release_db_connection(conn)
+
+
+def save_sector_convictions(convictions: list[dict]):
+    """Batch-inserts sector conviction scores from a daily review."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        query = '''
+            INSERT INTO sector_convictions
+            (sector_group, asset_class, score, rationale, key_catalyst,
+             momentum, review_confidence, cross_sector_theme)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ''' if is_pg else '''
+            INSERT INTO sector_convictions
+            (sector_group, asset_class, score, rationale, key_catalyst,
+             momentum, review_confidence, cross_sector_theme)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        '''
+        with _cursor(conn) as cursor:
+            for c in convictions:
+                cursor.execute(query, (
+                    c.get('sector_group'),
+                    c.get('asset_class', 'crypto'),
+                    c.get('score', 0.0),
+                    c.get('rationale'),
+                    c.get('key_catalyst'),
+                    c.get('momentum'),
+                    c.get('review_confidence'),
+                    c.get('cross_sector_theme'),
+                ))
+        conn.commit()
+        log.info(f"Saved {len(convictions)} sector convictions to DB.")
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in save_sector_convictions: {e}", exc_info=True)
+        if conn:
+            conn.rollback()
+    finally:
+        release_db_connection(conn)
+
+
+@async_db
+def get_latest_sector_convictions() -> list[dict]:
+    """Returns the most recent conviction per sector group (for startup cache reload)."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        # Use DISTINCT ON (PostgreSQL) or a subquery (SQLite) to get latest per group
+        if is_pg:
+            query = '''
+                SELECT DISTINCT ON (sector_group)
+                    sector_group, asset_class, score, rationale, key_catalyst,
+                    momentum, review_confidence, cross_sector_theme, recorded_at
+                FROM sector_convictions
+                ORDER BY sector_group, recorded_at DESC
+            '''
+        else:
+            query = '''
+                SELECT sc.sector_group, sc.asset_class, sc.score, sc.rationale,
+                       sc.key_catalyst, sc.momentum, sc.review_confidence,
+                       sc.cross_sector_theme, sc.recorded_at
+                FROM sector_convictions sc
+                INNER JOIN (
+                    SELECT sector_group, MAX(recorded_at) AS max_recorded
+                    FROM sector_convictions
+                    GROUP BY sector_group
+                ) latest ON sc.sector_group = latest.sector_group
+                           AND sc.recorded_at = latest.max_recorded
+            '''
+        with _cursor(conn) as cursor:
+            cursor.execute(query)
+            return [dict(row) for row in cursor.fetchall()]
+    except (sqlite3.Error, psycopg2.Error) as e:
+        log.error(f"Database error in get_latest_sector_convictions: {e}", exc_info=True)
+        return []
     finally:
         release_db_connection(conn)

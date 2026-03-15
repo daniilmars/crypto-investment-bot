@@ -20,16 +20,16 @@ def _ph(is_pg):
 
 # Default safety bounds
 DEFAULT_BOUNDS = {
-    'stop_loss_percentage': (0.015, 0.06),
-    'take_profit_percentage': (0.03, 0.15),
+    'stop_loss_percentage': (0.05, 0.15),
+    'take_profit_percentage': (0.08, 0.50),
     'min_gemini_confidence': (0.35, 0.75),
     'signal_cooldown_hours': (2, 8),
 }
 
 # Parameter sweep ranges
 SWEEP_RANGES = {
-    'stop_loss_percentage': [0.02, 0.025, 0.03, 0.035, 0.04, 0.045, 0.05],
-    'take_profit_percentage': [0.04, 0.06, 0.08, 0.10, 0.12],
+    'stop_loss_percentage': [0.05, 0.07, 0.08, 0.10, 0.12, 0.15],
+    'take_profit_percentage': [0.10, 0.15, 0.20, 0.30, 0.50],
     'min_gemini_confidence': [0.4, 0.45, 0.5, 0.55, 0.6],
     'signal_cooldown_hours': [2, 3, 4, 6, 8],
 }

@@ -119,6 +119,30 @@ async def daily_digest_loop():
             log.error(f"Daily digest error: {e}", exc_info=True)
 
 
+async def daily_sector_review_loop():
+    """Runs daily sector review at configured hour (UTC)."""
+    sector_cfg = app_config.get('settings', {}).get('sector_review', {})
+    if not sector_cfg.get('enabled', True):
+        return
+    target_hour = sector_cfg.get('review_hour_utc', 7)
+    while True:
+        now = datetime.now(timezone.utc)
+        next_run = now.replace(hour=target_hour, minute=0, second=0, microsecond=0)
+        if next_run <= now:
+            next_run += timedelta(days=1)
+        wait_seconds = (next_run - now).total_seconds()
+        await asyncio.sleep(wait_seconds)
+        try:
+            from src.analysis.sector_review import run_sector_review
+            result = await asyncio.to_thread(run_sector_review)
+            if result and sector_cfg.get('telegram_digest', True):
+                from src.notify.telegram_bot import send_sector_review_digest
+                await send_sector_review_digest(result)
+                log.info("Daily sector review digest sent.")
+        except Exception as e:
+            log.error(f"Daily sector review error: {e}", exc_info=True)
+
+
 async def db_cleanup_loop():
     """Daily cleanup of old market_prices, signals, and news_sentiment rows."""
     while True:
@@ -260,6 +284,16 @@ async def startup_event():
     # Register signal confirmation callback
     register_execute_callback(execute_confirmed_signal)
 
+    # Load sector convictions from DB (survives container restarts)
+    try:
+        from src.database import get_latest_sector_convictions
+        from src.analysis.sector_review import load_convictions_into_cache
+        convictions = await get_latest_sector_convictions()
+        if convictions:
+            load_convictions_into_cache(convictions)
+    except Exception as e:
+        log.warning(f"Could not load sector convictions: {e}")
+
     # Load live dashboard state (persisted message ID)
     await load_dashboard_state()
 
@@ -273,6 +307,12 @@ async def startup_event():
         log.info("Daily market digest loop started.")
 
     _background_tasks.append(asyncio.create_task(daily_recap_loop()))
+
+    sector_review_cfg = app_config.get('settings', {}).get('sector_review', {})
+    if sector_review_cfg.get('enabled', True):
+        _background_tasks.append(asyncio.create_task(daily_sector_review_loop()))
+        log.info("Daily sector review loop started.")
+
     _background_tasks.append(asyncio.create_task(db_cleanup_loop()))
     _background_tasks.append(asyncio.create_task(db_backup_loop()))
     _background_tasks.append(asyncio.create_task(_chat_session_cleanup_loop()))

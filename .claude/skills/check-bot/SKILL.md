@@ -24,7 +24,7 @@ Check the performance of the deployed crypto-investment-bot on GCE. Run all chec
 
 4. **Latest cycle logs** — SSH into the VM and get the last 30 minutes of bot logs:
    ```
-   gcloud compute ssh crypto-bot-eu --zone=europe-west3-a --tunnel-through-iap -- "sudo docker logs cryptobot --since 30m 2>&1 | tail -200"
+   gcloud compute ssh crypto-bot-eu --zone=europe-west3-a --tunnel-through-iap -- "sudo docker logs crypto-bot --since 30m 2>&1 | tail -200"
    ```
 
 ## Summary Format

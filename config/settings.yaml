@@ -108,8 +108,8 @@ settings:
   # Optimized via SL/TP sweep on 23-day dataset (Jan 12 – Feb 5, 2026).
   # SL=3.5%/TP=8%: +30.6% return, 55.7% win rate, Sharpe 2.15.
   trade_risk_percentage: 0.05
-  stop_loss_percentage: 0.035
-  take_profit_percentage: 0.08
+  stop_loss_percentage: 0.10
+  take_profit_percentage: 0.50
   min_trade_notional: 5.00
   max_concurrent_positions: 5
 
@@ -125,12 +125,12 @@ settings:
   dynamic_risk:
     enabled: true
     atr_period: 14
-    sl_atr_multiplier: 1.5   # SL = ATR% × 1.5
-    tp_atr_multiplier: 3.0   # TP = ATR% × 3.0
-    sl_floor: 0.02           # min 2%
-    sl_ceiling: 0.07         # max 7%
-    tp_floor: 0.04           # min 4%
-    tp_ceiling: 0.15         # max 15%
+    sl_atr_multiplier: 2.0   # SL = ATR% × 2.0
+    tp_atr_multiplier: 5.0   # TP = ATR% × 5.0
+    sl_floor: 0.07           # min 7%
+    sl_ceiling: 0.15         # max 15%
+    tp_floor: 0.10           # min 10%
+    tp_ceiling: 0.50         # max 50%
 
   # -- Limit Orders with Pullback Entry --
   # For normal-confidence signals, place a limit buy below current price.
@@ -143,8 +143,8 @@ settings:
 
   # -- Trailing Stop Settings --
   trailing_stop_enabled: true
-  trailing_stop_activation: 0.02    # activate after 2% gain
-  trailing_stop_distance: 0.015     # trail 1.5% from peak
+  trailing_stop_activation: 0.05    # activate after 5% gain
+  trailing_stop_distance: 0.02      # trail 2% from peak
 
   # -- Regular Status Update Settings --
   regular_status_update:
@@ -245,7 +245,8 @@ settings:
   position_analyst:
     enabled: true
     min_position_age_hours: 2
-    check_interval_minutes: 1440  # once per day (was 30min, saves ~$2.35/day)
+    quick_check_interval_minutes: 240  # Flash analyst every 4h (exit-only)
+    check_interval_minutes: 1440  # Pro analyst once per day
     exit_confidence_threshold: 0.8
     increase_confidence_threshold: 0.75
     max_position_multiplier: 3.0
@@ -332,6 +333,16 @@ settings:
       trailing_activation_multiplier: 0.5   # 2% → 1%
       trailing_distance_multiplier: 0.7     # 1.5% → 1.05%
 
+  # -- Daily Sector Review --
+  # Gemini Pro sector conviction scores, modulates signal thresholds.
+  # Cost: ~$0.78/mo (1 Gemini 2.5 Pro call/day).
+  sector_review:
+    enabled: true
+    review_hour_utc: 7
+    conviction_influence_pct: 0.10     # max threshold adjustment (+-10%)
+    min_articles_for_review: 3         # skip sector if fewer articles
+    telegram_digest: true
+
   # -- Correlation-Aware Sector Limits --
   # Prevents over-concentration in correlated assets (e.g., 5 AI stocks = 1 bet).
   sector_limits:
@@ -412,10 +423,10 @@ settings:
       auto_revert_days: 7
       auto_revert_degradation_pct: 0.10
       # Safety bounds
-      sl_min: 0.015
-      sl_max: 0.06
-      tp_min: 0.03
-      tp_max: 0.15
+      sl_min: 0.05
+      sl_max: 0.15
+      tp_min: 0.08
+      tp_max: 0.50
       confidence_min: 0.35
       confidence_max: 0.75
 

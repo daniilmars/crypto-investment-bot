@@ -763,9 +763,10 @@ def analyze_position_investment(
         else:
             risk_params = (
                 "**Bot Risk Parameters:**\n"
-                "- Stop-loss: -3.5% (auto-closes position)\n"
-                "- Take-profit: +8% (auto-closes position)\n"
-                "- Trailing stop: activates at +2%, trails 1.5% from peak\n"
+                "- Catastrophic stop-loss: ~10% (emergency safety net only)\n"
+                "- AI exit checks: every 4 hours (evaluates whether to hold or exit)\n"
+                "- Trailing stop: activates at +5%, trails 2% from peak\n"
+                "- No fixed take-profit — you decide when gains are sufficient\n"
             )
             sell_step = (
                 "STEP 3 — SELL EVALUATION:\n"
@@ -847,6 +848,123 @@ def analyze_position_investment(
         return None
     except Exception as e:
         log.error(f"Gemini position investment analysis failed: {e}")
+        return None
+
+
+def analyze_position_quick(
+    position: dict,
+    current_price: float,
+    recent_articles: list,
+    technical_data: dict,
+    news_velocity: dict,
+    hours_held: float = None,
+    trailing_stop_info: dict = None,
+    strategy_type: str = None,
+    trade_reason: str = None,
+) -> dict | None:
+    """Fast exit-only check using Flash model — "Is there a reason to EXIT now?"
+
+    Runs every 4 hours between deeper Pro analyst reviews. Binary hold/exit only.
+
+    Returns:
+        dict with action ("hold"|"exit"), confidence (0.0-1.0), reason — or None on failure.
+    """
+    project_id = os.environ.get('GCP_PROJECT_ID')
+    location = os.environ.get('VERTEX_AI_LOCATION') or os.environ.get('GCP_LOCATION', 'europe-west4')
+
+    if not project_id:
+        log.warning("GCP_PROJECT_ID not set — skipping Flash position check.")
+        return None
+
+    symbol = position.get('symbol', 'UNKNOWN')
+    entry_price = position.get('entry_price', 0)
+    pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+
+    try:
+        vertexai.init(project=project_id, location=location)
+        model = GenerativeModel('gemini-2.5-flash')
+
+        # Format recent articles (last 10, 4h window)
+        if recent_articles:
+            article_lines = []
+            for i, art in enumerate(recent_articles[:10], 1):
+                source = art.get('source', '?')
+                score = art.get('gemini_score') or art.get('vader_score')
+                score_str = f" [{score:+.2f}]" if score is not None else ""
+                article_lines.append(f"{i}. [{source}]{score_str} {art.get('title', '')}")
+            articles_text = "\n".join(article_lines)
+        else:
+            articles_text = "No recent articles."
+
+        # Trailing stop context
+        trailing_context = ""
+        if trailing_stop_info:
+            peak = trailing_stop_info.get('peak_price')
+            active = trailing_stop_info.get('trailing_active', False)
+            if peak:
+                trailing_context = (
+                    f"- Trailing stop: {'ACTIVE' if active else 'inactive'}, "
+                    f"peak ${peak:,.2f}\n"
+                )
+
+        hours_context = f"- Held: {hours_held:.1f}h\n" if hours_held is not None else ""
+
+        # Strategic position modifier
+        if strategy_type and trade_reason:
+            strategy_instruction = (
+                f"\nThis is a STRATEGIC {strategy_type.upper()} position.\n"
+                f"Original thesis: {trade_reason}\n"
+                f"Only recommend EXIT if the thesis is broken by a concrete event. "
+                f"Price dips alone are NOT exit signals for strategic positions.\n"
+            )
+        else:
+            strategy_instruction = ""
+
+        # Velocity summary
+        velocity_summary = (
+            f"- News: {news_velocity.get('articles_last_4h', 0)} articles (4h), "
+            f"sentiment trend: {news_velocity.get('sentiment_trend', 'stable')}, "
+            f"velocity: {news_velocity.get('velocity_status', 'normal')}"
+        )
+        if news_velocity.get('breaking_detected'):
+            velocity_summary += " [BREAKING NEWS DETECTED]"
+
+        prompt = (
+            f"Quick exit check for {symbol}. Is there a concrete reason to EXIT now?\n\n"
+            f"- Entry: ${entry_price:,.2f}, Current: ${current_price:,.2f}, PnL: {pnl_pct:+.2f}%\n"
+            f"{hours_context}"
+            f"{trailing_context}"
+            f"- RSI: {technical_data.get('rsi', 'N/A')}\n"
+            f"{velocity_summary}\n"
+            f"{strategy_instruction}\n"
+            f"**Articles (last 4h):**\n{articles_text}\n\n"
+            "EXIT only if: concrete adverse catalyst (hack, regulatory ban, thesis-breaking news), "
+            "OR multiple converging risks. No news or mixed signals = HOLD.\n\n"
+            'Respond ONLY with JSON: {"action": "hold"|"exit", "confidence": 0.0, "reason": "..."}\n'
+            "- action: 'hold' or 'exit'\n"
+            "- confidence: float 0.0-1.0\n"
+            "- reason: one concise sentence"
+        )
+
+        response = _call_with_retry(model.generate_content, prompt)
+        text = response.text.strip()
+        result = _parse_gemini_json(text)
+        _validate_gemini_response(result, ['action', 'confidence', 'reason'], 'analyze_position_quick')
+
+        action = result.get('action', 'hold').strip().lower()
+        if action not in ('hold', 'exit'):
+            log.warning(f"[{symbol}] Flash analyst invalid action: {action!r}, defaulting to hold")
+            result['action'] = 'hold'
+
+        log.info(f"Flash analyst for {symbol}: {result.get('action')} "
+                 f"(confidence={result.get('confidence')})")
+        return result
+
+    except json.JSONDecodeError as e:
+        log.error(f"Failed to parse Flash analyst response as JSON: {e}")
+        return None
+    except Exception as e:
+        log.error(f"Flash analyst failed for {symbol}: {e}")
         return None
 
 
