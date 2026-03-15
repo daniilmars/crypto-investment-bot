@@ -124,12 +124,23 @@ async def _run_investment_analyst(
         if not result:
             return None
 
-        rec = result.get('recommendation', 'hold')
-        confidence = result.get('confidence', 0)
+        rec = result.get('recommendation', 'hold').strip().lower()
+        confidence = max(0.0, min(1.0, float(result.get('confidence', 0))))
         reasoning = result.get('reasoning', '')
         risk_level = result.get('risk_level', 'green')
 
+        # Validate recommendation enum
+        if rec not in ('hold', 'increase', 'sell'):
+            log.warning(f"[{symbol}] Invalid analyst recommendation: {rec!r}, defaulting to hold")
+            rec = 'hold'
+
         signal_cooldown_hours = app_config.get('settings', {}).get('signal_cooldown_hours', 4)
+
+        # Strategic positions require higher exit confidence
+        strategy_type = position.get('strategy_type')
+        exit_threshold = analyst_cfg.get('exit_confidence_threshold', 0.8)
+        if strategy_type:
+            exit_threshold = max(exit_threshold, 0.85)
 
         if rec == 'increase' and confidence >= analyst_cfg.get('increase_confidence_threshold', 0.75):
             if await check_signal_cooldown(symbol, "INCREASE", signal_cooldown_hours, is_auto=is_auto):
@@ -142,7 +153,7 @@ async def _run_investment_analyst(
                 _set_cd(symbol, "INCREASE",
                         datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours))
 
-        elif rec == 'sell' and confidence >= analyst_cfg.get('exit_confidence_threshold', 0.8):
+        elif rec == 'sell' and confidence >= exit_threshold:
             await _handle_analyst_sell(
                 position, symbol, current_price, order_id,
                 confidence, reasoning, asset_type, is_auto)
@@ -249,7 +260,15 @@ async def _handle_increase(
     new_total_value = original_value + add_value
     current_mult = new_total_value / estimated_original if estimated_original > 0 else 999
     if current_mult > max_mult:
-        log.info(f"[{symbol}] INCREASE blocked: would exceed {max_mult}x cap")
+        log.info(f"[{symbol}] INCREASE blocked: would exceed {max_mult}x cap "
+                 f"({current_mult:.1f}x → max {max_mult:.1f}x)")
+        if not is_auto:
+            await send_telegram_alert({
+                'signal': 'INFO', 'symbol': symbol,
+                'current_price': current_price,
+                'reason': f"Analyst recommended INCREASE but position at "
+                          f"{current_mult:.1f}x (max {max_mult:.1f}x). {reasoning}",
+            })
         return
 
     trading_strategy = 'auto' if is_auto else 'manual'
@@ -258,6 +277,13 @@ async def _handle_increase(
     if add_value > available:
         log.info(f"[{symbol}] INCREASE blocked: need ${add_value:.2f} "
                  f"but only ${available:.2f} available")
+        if not is_auto:
+            await send_telegram_alert({
+                'signal': 'INFO', 'symbol': symbol,
+                'current_price': current_price,
+                'reason': f"Analyst recommended INCREASE (+${add_value:.0f}) "
+                          f"but only ${available:.0f} available.",
+            })
         return
 
     if not is_auto and is_confirmation_required("INCREASE"):

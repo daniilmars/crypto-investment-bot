@@ -665,7 +665,7 @@ def analyze_position_investment(
 
     try:
         vertexai.init(project=project_id, location=location)
-        model = GenerativeModel('gemini-2.5-flash-lite')
+        model = GenerativeModel('gemini-2.5-pro')
 
         # Format articles for prompt
         if recent_articles:
