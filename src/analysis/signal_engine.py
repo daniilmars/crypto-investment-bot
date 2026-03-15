@@ -163,14 +163,17 @@ def _generate_scoring_signal(symbol, market_data,
     reason = f"Price: ${current_price:,.2f}, SMA: ${sma:,.2f}, RSI: {rsi:.2f}{news_reason}{macd_reason}{bollinger_reason}{volume_reason}{orderbook_reason}. Buy Score: {buy_score}, Sell Score: {sell_score}."
 
     if buy_score >= signal_threshold and buy_score > sell_score:
+        # Remap strength: threshold → 0.5, max(7) → 1.0 (compatible with quality gate)
+        strength = 0.5 + 0.5 * (buy_score - signal_threshold) / (7 - signal_threshold)
         log.info(f"[{symbol}] BUY signal generated. {reason}")
         return {"signal": "BUY", "symbol": symbol, "reason": reason, "current_price": current_price,
-                "signal_strength": buy_score / 7.0}
+                "signal_strength": strength}
 
     if sell_score >= signal_threshold and sell_score > buy_score:
+        strength = 0.5 + 0.5 * (sell_score - signal_threshold) / (7 - signal_threshold)
         log.info(f"[{symbol}] SELL signal generated. {reason}")
         return {"signal": "SELL", "symbol": symbol, "reason": reason, "current_price": current_price,
-                "signal_strength": sell_score / 7.0}
+                "signal_strength": strength}
 
     log.debug(f"[{symbol}] HOLD: No strong signal detected. {reason}")
     return {"signal": "HOLD", "symbol": symbol, "reason": "No strong signal detected. " + reason}

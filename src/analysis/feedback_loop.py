@@ -194,8 +194,9 @@ def _calculate_reliability_score(source):
     # Relevance proxy: articles that led to signals / total articles
     relevance = total_signals / total_articles if total_articles > 10 else 0.5
 
-    # Uniqueness proxy: we don't track dedup per-source yet, use a flat 0.5
-    uniqueness = 0.5
+    # Uniqueness: query actual dedup data from scraped_articles
+    source_name = source.get('source_name', '')
+    uniqueness = _calculate_source_uniqueness(source_name)
 
     # Signal contribution: profitable ratio
     signal_contribution = profitable_ratio if total_signals >= 5 else 0.5
@@ -203,6 +204,58 @@ def _calculate_reliability_score(source):
     score = (0.3 * availability + 0.2 * relevance +
              0.2 * uniqueness + 0.3 * signal_contribution)
     return round(min(1.0, max(0.0, score)), 3)
+
+
+def _calculate_source_uniqueness(source_name):
+    """Calculate uniqueness score for a source based on title_hash deduplication.
+
+    Returns 1.0 - (duplicated / total). Falls back to 0.5 if <10 articles.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        ph = _ph(is_pg)
+
+        if is_pg:
+            date_filter = "scraped_at >= NOW() - INTERVAL '30 days'"
+        else:
+            date_filter = "scraped_at >= datetime('now', '-30 days')"
+
+        with _cursor(conn) as cur:
+            # Total articles from this source in last 30 days
+            cur.execute(
+                f"SELECT COUNT(*) AS cnt FROM scraped_articles "
+                f"WHERE source = {ph} AND {date_filter}", (source_name,))
+            row = cur.fetchone()
+            total = int(row[0] if isinstance(row, (list, tuple)) else row['cnt'])
+
+            if total < 10:
+                return 0.5
+
+            # Count articles whose title_hash also appears from another source
+            if is_pg:
+                dup_date_filter = "a.scraped_at >= NOW() - INTERVAL '30 days'"
+            else:
+                dup_date_filter = "a.scraped_at >= datetime('now', '-30 days')"
+
+            cur.execute(
+                f"SELECT COUNT(*) AS cnt FROM scraped_articles a "
+                f"WHERE a.source = {ph} AND {dup_date_filter} "
+                f"AND EXISTS ("
+                f"  SELECT 1 FROM scraped_articles b "
+                f"  WHERE b.title_hash = a.title_hash AND b.source != a.source"
+                f")", (source_name,))
+            dup_row = cur.fetchone()
+            duplicated = int(dup_row[0] if isinstance(dup_row, (list, tuple)) else dup_row['cnt'])
+
+        return round(1.0 - (duplicated / total), 3)
+    except Exception as e:
+        log.debug(f"Source uniqueness query failed for {source_name}: {e}")
+        return 0.5
+    finally:
+        if conn:
+            release_db_connection(conn)
 
 
 def _log_experiment(experiment_type, description, old_value=None, new_value=None,

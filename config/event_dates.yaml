@@ -14,6 +14,17 @@ fomc:
     - "2026-12-16T19:00Z"
   2027: []  # fill when Fed publishes (Oct 2026)
 
+# Crypto-specific events (halving, protocol upgrades, regulatory deadlines).
+# Each entry: datetime + block_hours + reduce_hours.
+# Add events as they are announced.
+crypto_events:
+  2026: []
+  # Example entry format:
+  # - date: "2026-09-15T00:00Z"
+  #   name: "Ethereum Pectra upgrade"
+  #   block_hours: 12
+  #   reduce_hours: 24
+
 cpi:
   2026:
     - "2026-01-14T13:30Z"

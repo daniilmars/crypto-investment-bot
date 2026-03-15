@@ -14,6 +14,7 @@ from src.analysis.event_calendar import (
     _get_next_event,
     _check_earnings_gate,
     _check_macro_event_gate,
+    _check_crypto_event_gate,
     _parse_earnings_date,
     FOMC_DATES_2026,
     CPI_DATES_2026,
@@ -266,6 +267,104 @@ class TestEventWarnings:
             warnings = get_event_warnings_for_positions(positions)
             aapl_warnings = [w for w in warnings if w['symbol'] == 'AAPL']
             assert len(aapl_warnings) == 0
+
+
+class TestCryptoEventGate:
+    """Tests for crypto-specific event gating."""
+
+    def test_block_within_crypto_event(self):
+        """Crypto event within block window → block."""
+        now = datetime(2026, 9, 14, 18, 0, tzinfo=timezone.utc)
+        events = [{
+            'date': datetime(2026, 9, 15, 0, 0, tzinfo=timezone.utc),
+            'name': 'ETH Pectra upgrade',
+            'block_hours': 12,
+            'reduce_hours': 24,
+        }]
+        action, mult, reason = _check_crypto_event_gate(now, events)
+        assert action == 'block'
+        assert 'ETH Pectra upgrade' in reason
+
+    def test_reduce_within_crypto_event(self):
+        """Crypto event within reduce window → reduce."""
+        now = datetime(2026, 9, 14, 8, 0, tzinfo=timezone.utc)
+        events = [{
+            'date': datetime(2026, 9, 15, 0, 0, tzinfo=timezone.utc),
+            'name': 'ETH Pectra upgrade',
+            'block_hours': 12,
+            'reduce_hours': 24,
+        }]
+        action, mult, reason = _check_crypto_event_gate(now, events)
+        assert action == 'reduce'
+        assert mult == 0.5
+
+    def test_allow_beyond_crypto_event(self):
+        """Crypto event far away → allow."""
+        now = datetime(2026, 9, 1, 0, 0, tzinfo=timezone.utc)
+        events = [{
+            'date': datetime(2026, 9, 15, 0, 0, tzinfo=timezone.utc),
+            'name': 'ETH Pectra upgrade',
+            'block_hours': 12,
+            'reduce_hours': 24,
+        }]
+        action, mult, _ = _check_crypto_event_gate(now, events)
+        assert action == 'allow'
+
+    def test_empty_events_allow(self):
+        """No crypto events → allow."""
+        now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+        action, mult, _ = _check_crypto_event_gate(now, [])
+        assert action == 'allow'
+
+    def test_past_events_ignored(self):
+        """Past crypto events are skipped."""
+        now = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        events = [{
+            'date': datetime(2026, 9, 15, 0, 0, tzinfo=timezone.utc),
+            'name': 'Past event',
+            'block_hours': 12,
+            'reduce_hours': 24,
+        }]
+        action, mult, _ = _check_crypto_event_gate(now, events)
+        assert action == 'allow'
+
+    def test_crypto_gate_wired_into_check_event_gate(self):
+        """Crypto events are checked for crypto asset_type."""
+        crypto_events = [{
+            'date': datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+            'name': 'Test upgrade',
+            'block_hours': 12,
+            'reduce_hours': 24,
+        }]
+        with patch('src.analysis.event_calendar._get_crypto_events',
+                   return_value=crypto_events):
+            with patch('src.analysis.event_calendar.datetime') as mock_dt:
+                mock_dt.now.return_value = datetime(2026, 6, 1, 6, 0,
+                                                     tzinfo=timezone.utc)
+                mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+                action, _, reason = check_event_gate('BTC', 'BUY',
+                                                      asset_type='crypto')
+                assert action == 'block'
+                assert 'Test upgrade' in reason
+
+    def test_crypto_events_in_upcoming(self):
+        """Crypto events appear in get_upcoming_macro_events."""
+        crypto_events = [{
+            'date': datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+            'name': 'Test upgrade',
+            'block_hours': 12,
+            'reduce_hours': 24,
+        }]
+        with patch('src.analysis.event_calendar._get_crypto_events',
+                   return_value=crypto_events):
+            with patch('src.analysis.event_calendar.datetime') as mock_dt:
+                mock_dt.now.return_value = datetime(2026, 5, 15, 0, 0,
+                                                     tzinfo=timezone.utc)
+                mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+                events = get_upcoming_macro_events(days_ahead=30)
+                crypto = [e for e in events if 'Crypto' in e['event_type']]
+                assert len(crypto) == 1
+                assert 'Test upgrade' in crypto[0]['event_type']
 
 
 class TestFOMCAndCPIDates:

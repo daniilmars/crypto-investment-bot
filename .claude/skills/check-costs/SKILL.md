@@ -9,89 +9,111 @@ Assess the running costs of the deployed crypto-investment-bot. Gather real data
 
 Run steps 1-3 in parallel:
 
-1. **GCP billing — actual spend this month:**
-   ```
-   gcloud billing accounts list --format="value(name)" 2>/dev/null | head -1
-   ```
-   Then with the billing account:
-   ```
-   gcloud billing projects describe $(gcloud config get-value project 2>/dev/null) --format="json" 2>/dev/null
-   ```
-   And get the BigQuery billing export or cost breakdown:
+1. **GCP VM details:**
    ```
    gcloud compute instances describe crypto-bot-eu --zone=europe-west3-a --format="json(machineType,scheduling.preemptible,disks[].diskSizeGb)" 2>/dev/null
    ```
 
 2. **Gemini API usage from bot logs (last 24h):**
+   IMPORTANT: The Docker container name is `crypto-bot` (NOT `cryptobot`).
+   Run a single SSH command to gather all metrics at once:
    ```
-   gcloud compute ssh crypto-bot-eu --zone=europe-west3-a --tunnel-through-iap -- "sudo docker logs cryptobot --since 24h 2>&1 | grep -c 'Gemini'" 2>/dev/null
-   ```
-   And count specific call types:
-   ```
-   gcloud compute ssh crypto-bot-eu --zone=europe-west3-a --tunnel-through-iap -- "sudo docker logs cryptobot --since 24h 2>&1 | grep -cE 'article scoring complete|Gemini (grounded|cache hit|news analysis complete|position analyst)'" 2>/dev/null
+   gcloud compute ssh crypto-bot-eu --zone=europe-west3-a --tunnel-through-iap -- "
+   echo '=== CYCLES ==='
+   sudo docker logs crypto-bot --since 24h 2>&1 | grep -c 'Cycle complete'
+   echo '=== ARTICLE SCORING ==='
+   sudo docker logs crypto-bot --since 24h 2>&1 | grep -c 'article scoring complete'
+   echo '=== NEWS ANALYSIS (grounded) ==='
+   sudo docker logs crypto-bot --since 24h 2>&1 | grep -c 'grounded news analysis complete'
+   echo '=== NEWS ANALYSIS (fallback) ==='
+   sudo docker logs crypto-bot --since 24h 2>&1 | grep -c 'Gemini news analysis complete'
+   echo '=== POSITION ANALYST ==='
+   sudo docker logs crypto-bot --since 24h 2>&1 | grep -ci 'position analyst'
+   echo '=== CACHE HITS ==='
+   sudo docker logs crypto-bot --since 24h 2>&1 | grep 'score cache' | head -3
+   echo '=== GROUNDED SETTING ==='
+   sudo docker exec crypto-bot grep use_grounded config/settings.yaml
+   echo '=== UPTIME ==='
+   sudo docker inspect crypto-bot --format='{{.State.StartedAt}}' 2>/dev/null
+   " 2>/dev/null
    ```
 
 3. **Config-based estimation** — read the local config to calculate theoretical costs:
    - Read `config/settings.yaml` for: `run_interval_minutes`, `use_grounded_search`, `position_analyst.check_interval_minutes`, `cache_ttl_minutes`
-   - Read `config/watch_list.yaml` for symbol counts
-   - Count RSS feeds in `src/collectors/news_data.py`
+   - Read `config/watch_list.yaml` for symbol counts (crypto, US stocks, EU stocks, Asia stocks)
 
 ## Cost Model
 
 Use these rates for estimation:
 
 ### GCE VM
-| Instance | Region | Monthly (sustained) |
-|----------|--------|---------------------|
-| e2-micro | europe-west3 | ~$7.60 |
-| Persistent disk (10GB) | europe-west3 | ~$0.40 |
-| Network egress | — | ~$0.50 |
-| **Subtotal** | | **~$8.50/mo** |
+The VM is **PREEMPTIBLE** — use preemptible pricing, not standard.
 
-### Gemini API (Vertex AI)
-| Model | Input | Output | Notes |
-|-------|-------|--------|-------|
-| gemini-2.5-flash | $0.15/1M tokens | $0.60/1M tokens | Article scoring |
-| gemini-2.5-flash-lite | $0.075/1M tokens | $0.30/1M tokens | News assessment, position analyst |
-| Grounded search | $35/1000 queries | — | Only if `use_grounded_search: true` |
+| Instance | Region | Monthly (preemptible) | Monthly (standard) |
+|----------|--------|-----------------------|---------------------|
+| e2-micro | europe-west3 | ~$1.83 | ~$7.60 |
+| Persistent disk (30GB) | europe-west3 | ~$1.20 | ~$1.20 |
+| Network egress | — | ~$0.50 | ~$0.50 |
+| **Subtotal** | | **~$3.53/mo** | ~$9.30/mo |
 
-Estimate per-call token usage:
-- Article scoring batch (50 articles): ~2000 input tokens, ~500 output tokens → ~$0.0006/call
-- News impact assessment (all symbols): ~5000 input tokens, ~1000 output tokens → ~$0.0007/call
-- Position analyst (per position): ~3000 input tokens, ~500 output tokens → ~$0.0004/call
-- Grounded search (if enabled): $0.035/call
+### Gemini API — Two SDK Paths
+
+CRITICAL: The bot uses TWO different SDKs with different pricing:
+
+| Path | SDK | Model | Pricing |
+|------|-----|-------|---------|
+| Grounded search (`analyze_news_with_search`) | `google.genai` (Gemini API) | gemini-2.5-flash-lite | **FREE** within 1,500 calls/day |
+| Fallback news analysis (`analyze_news_impact`) | `vertexai` (Vertex AI) | gemini-2.5-flash-lite | $0.075/$0.30 per 1M tokens |
+| Article scoring (`score_articles_batch`) | `vertexai` (Vertex AI) | gemini-2.5-flash | $0.15/$0.60 per 1M tokens |
+| Position analyst | `vertexai` (Vertex AI) | gemini-2.5-pro | $1.25/$5.00 per 1M tokens |
+
+**Grounded search is FREE** — it uses the `google-genai` SDK with `GoogleSearch()` tool.
+The free tier allows 1,500 grounded queries/day. The bot batches ~349 symbols into
+~14 groups of 25, using ~840 calls/day at 60 cycles/day (well within 1,500 limit).
+
+DO NOT report grounded search as costing $35/1000 — that is the Vertex AI grounding price,
+not the google-genai SDK free tier price.
+
+### Per-call token cost estimates (Vertex AI path only)
+- Article scoring batch (~2 articles avg due to cache): ~800 input, ~200 output → ~$0.00024/call
+- Fallback news assessment (all symbols batched): ~5000 input, ~1000 output → ~$0.000675/call
+- Position analyst (per position): ~3000 input, ~500 output → ~$0.006/call (gemini-2.5-pro is expensive)
 
 ### Free Services
 - Binance API: $0
 - Alpha Vantage (free tier): $0
-- RSS feeds: $0
+- RSS feeds (113 feeds): $0
 - yfinance: $0
+- Google Search grounding (via google-genai SDK): $0 within 1,500/day
 
 ## Calculation
 
 ```
-cycles_per_day = 1440 / run_interval_minutes  (e.g., 96 for 15-min)
+# Extrapolate from log sample to 24h
+sample_hours = hours since container started (from docker inspect)
+cycles_per_day = (cycles_in_sample / sample_hours) * 24
 
-# Article scoring: ~1 batch call per cycle (50 articles), halved by cache
-scoring_calls = cycles_per_day / 2
-scoring_cost = scoring_calls * $0.0006
+# Article scoring (Vertex AI, paid): only new articles scored, ~99.5% cache hit rate
+scoring_calls_per_day = (scoring_calls_in_sample / sample_hours) * 24
+scoring_cost = scoring_calls_per_day * $0.00024
 
-# News assessment: 1 call per cycle (batches all symbols)
-assessment_calls = cycles_per_day / 2  (cache reduces)
-assessment_cost = assessment_calls * $0.0007
+# News analysis — check which path is active on deployed VM:
+if deployed use_grounded_search == true:
+    # Grounded search via google-genai SDK = FREE
+    news_cost = $0.00
+else:
+    # Fallback via Vertex AI = PAID
+    # Flag this as suboptimal — free path exists!
+    news_calls_per_day = (fallback_calls_in_sample / sample_hours) * 24
+    news_cost = news_calls_per_day * $0.000675
 
-# Grounded search (if enabled): 1 call per cycle
-grounded_calls = cycles_per_day / 2 if use_grounded_search else 0
-grounded_cost = grounded_calls * $0.035
+# Position analyst (Vertex AI, paid): 1x/day at check_interval_minutes=1440
+analyst_cost = 1 * $0.006  # ~$0.18/mo
 
-# Position analyst: depends on check_interval and open positions
-analyst_calls = (1440 / check_interval_minutes) * avg_open_positions
-analyst_cost = analyst_calls * $0.0004
-
-daily_gemini = scoring_cost + assessment_cost + grounded_cost + analyst_cost
+daily_gemini = scoring_cost + news_cost + analyst_cost
 monthly_gemini = daily_gemini * 30
 
-total_monthly = $8.50 (VM) + monthly_gemini
+total_monthly = $3.53 (VM) + monthly_gemini
 ```
 
 ## Summary Format
@@ -103,30 +125,44 @@ MONTHLY COST ESTIMATE
 =====================
 
 GCE Infrastructure
-  VM (e2-micro, Frankfurt)      $7.60
-  Disk + network                $0.90
-  ─────────────────────────────────
-  Subtotal                      $8.50
+  VM (e2-micro, Frankfurt, PREEMPTIBLE)   $1.83
+  Disk (30GB) + network                   $1.70
+  ─────────────────────────────────────────────
+  Subtotal                                $3.53
 
-Gemini API (Vertex AI)
-  Article scoring     X calls/day   $Y.YY/mo
-  News assessment     X calls/day   $Y.YY/mo
-  Grounded search     X calls/day   $Y.YY/mo   [or "disabled"]
-  Position analyst    X calls/day   $Y.YY/mo
-  ─────────────────────────────────
-  Subtotal                          $Z.ZZ/mo
+Gemini API
+  Article scoring       X calls/day   $Y.YY/mo   (gemini-2.5-flash, Vertex AI)
+  News analysis          —            $0.00/mo    (grounded search, google-genai FREE tier)
+   or: News analysis    X calls/day   $Y.YY/mo   (⚠ FALLBACK path — enable grounded search!)
+  Position analyst      ~1 call/day   $0.18/mo   (gemini-2.5-pro, Vertex AI)
+  ─────────────────────────────────────────────
+  Subtotal                            $Z.ZZ/mo
 
-Other APIs                          $0.00
-  ─────────────────────────────────
+  Free tier budget: ~840/1,500 calls/day used (56%)
 
-TOTAL                              $XX.XX/mo  (~$X.XX/day)
+Other APIs                            $0.00
+  ─────────────────────────────────────────────
+
+TOTAL                                $XX.XX/mo   (~$X.XX/day)
 
 Config that affects cost:
-  - Cycle interval: 15 min (96 cycles/day)
-  - Gemini cache TTL: 30 min
-  - Grounded search: enabled/disabled
-  - Position analyst: every 1440 min
-  - Watch list: N crypto + M stock symbols
+  - Cycle interval: 15 min (~60 actual cycles/day)
+  - Grounded search: enabled/DISABLED (⚠ if disabled, flag it)
+  - Article scoring cache hit rate: ~99.5%
+  - Position analyst: every 1440 min (1x/day)
+  - Watch list: N crypto + M US + P EU + Q Asia symbols
 ```
 
-If actual GCP billing data is available, show it alongside the estimate for comparison.
+## Important Checks
+
+1. **Grounded search disabled?** If the deployed config has `use_grounded_search: false`,
+   prominently flag this: the bot is paying for the Vertex AI fallback path when the
+   grounded search path is FREE. Recommend enabling it.
+
+2. **Preemptible?** Verify `scheduling.preemptible: true`. If it changed to standard,
+   the VM cost jumps from $1.83 to $7.60/mo.
+
+3. **Local vs deployed config divergence:** Compare `use_grounded_search` between
+   `config/settings.yaml` (local) and deployed container. They may differ.
+
+4. **Container name:** Always use `crypto-bot` (with hyphen), NOT `cryptobot`.

@@ -114,7 +114,11 @@ class TestStartupLoadsPeaks:
         import main
 
         bot_state._trailing_stop_peaks.clear()
-        mock_load.return_value = {'order_a': 60000.0, 'order_b': 3500.0}
+        bot_state._auto_trailing_stop_peaks.clear()
+        mock_load.return_value = {
+            'order_a': (60000.0, 'manual'),
+            'order_b': (3500.0, 'auto'),
+        }
         mock_start_bot.return_value = MagicMock()
 
         # Patch background task creation to prevent actual loops
@@ -123,7 +127,8 @@ class TestStartupLoadsPeaks:
                 mock_os.environ.get.return_value = None
                 asyncio.run(main.startup_event())
 
-        assert bot_state._trailing_stop_peaks == {'order_a': 60000.0, 'order_b': 3500.0}
+        assert bot_state._trailing_stop_peaks == {'order_a': 60000.0}
+        assert bot_state._auto_trailing_stop_peaks == {'order_b': 3500.0}
         mock_load.assert_called_once()
 
     @patch('main.start_bot', new_callable=AsyncMock)

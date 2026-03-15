@@ -14,16 +14,18 @@ def _get_live_config():
     return app_config.get('settings', {}).get('live_trading', {})
 
 
-def check_circuit_breaker(balance, daily_pnl, recent_trades, asset_type='crypto'):
+def check_circuit_breaker(balance, daily_pnl, recent_trades, asset_type='crypto',
+                          current_prices=None):
     """
     Checks all circuit breaker conditions for a specific asset type.
 
     Args:
         balance: Current USDT balance (float).
-        daily_pnl: Sum of today's closed-trade PnL (float).
+        daily_pnl: Sum of today's closed-trade PnL (float), should include unrealized.
         recent_trades: List of recent closed trades (dicts with 'pnl' key),
                        ordered newest-first.
         asset_type: 'crypto' or 'stock' — isolates circuit breaker per asset class.
+        current_prices: {symbol: float} — current market prices for unrealized PnL.
 
     Returns:
         (is_tripped, reason): Tuple of (bool, str). If tripped, reason explains why.
@@ -60,12 +62,17 @@ def check_circuit_breaker(balance, daily_pnl, recent_trades, asset_type='crypto'
         record_circuit_breaker_event('daily_loss', reason, asset_type=asset_type)
         return True, reason
 
-    # 4. Max drawdown from peak
+    # 4. Max drawdown from peak (include unrealized PnL in effective balance)
     max_drawdown_pct = config.get('max_drawdown_pct', 0.25)
     peak_balance = _get_peak_balance(initial_capital, asset_type=asset_type)
     drawdown_threshold = peak_balance * (1 - max_drawdown_pct)
-    if balance <= drawdown_threshold:
-        reason = (f"Balance ${balance:.2f} hit max drawdown {max_drawdown_pct*100:.0f}% "
+    unrealized = 0.0
+    if current_prices:
+        unrealized = get_unrealized_pnl(current_prices, asset_type=asset_type)
+    effective_balance = balance + unrealized
+    if effective_balance <= drawdown_threshold:
+        reason = (f"Effective balance ${effective_balance:.2f} (realized ${balance:.2f} + "
+                  f"unrealized ${unrealized:.2f}) hit max drawdown {max_drawdown_pct*100:.0f}% "
                   f"from peak ${peak_balance:.2f} (threshold ${drawdown_threshold:.2f})")
         record_circuit_breaker_event('max_drawdown', reason, asset_type=asset_type)
         return True, reason

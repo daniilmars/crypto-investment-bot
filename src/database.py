@@ -69,13 +69,14 @@ def _get_pg_pool():
     if _pg_pool is not None:
         return _pg_pool
 
+    pool_max = int(os.environ.get('DB_POOL_MAX', '20'))
     dsn, kwargs = _get_pg_dsn()
     if dsn:
-        _pg_pool = psycopg2.pool.ThreadedConnectionPool(1, 10, dsn)
-        log.info("Created PostgreSQL threaded connection pool using DSN.")
+        _pg_pool = psycopg2.pool.ThreadedConnectionPool(1, pool_max, dsn)
+        log.info(f"Created PostgreSQL threaded connection pool using DSN (max={pool_max}).")
     elif kwargs:
-        _pg_pool = psycopg2.pool.ThreadedConnectionPool(1, 10, **kwargs)
-        log.info("Created PostgreSQL threaded connection pool using Cloud SQL socket.")
+        _pg_pool = psycopg2.pool.ThreadedConnectionPool(1, pool_max, **kwargs)
+        log.info(f"Created PostgreSQL threaded connection pool using Cloud SQL socket (max={pool_max}).")
     return _pg_pool
 
 
@@ -99,9 +100,19 @@ def get_db_connection(db_url=None):
     pool = _get_pg_pool()
     if pool:
         try:
+            # Check pool saturation before acquiring
+            pool_max = int(os.environ.get('DB_POOL_MAX', '20'))
+            used = pool_max - len(getattr(pool, '_pool', []))
+            if pool_max > 0 and used / pool_max > 0.8:
+                log.warning(f"DB pool saturation high: ~{used}/{pool_max} connections in use")
             conn = pool.getconn()
             log.debug("Acquired connection from pool.")
             return conn
+        except psycopg2.pool.PoolError as e:
+            log.error(f"DB connection pool exhausted: {e}. "
+                      f"Increase DB_POOL_MAX (current: {os.environ.get('DB_POOL_MAX', '20')}).",
+                      exc_info=True)
+            raise
         except psycopg2.OperationalError as e:
             log.error(f"Could not get connection from pool: {e}", exc_info=True)
             raise
@@ -114,6 +125,18 @@ def get_db_connection(db_url=None):
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def close_db_pool():
+    """Closes all connections in the PostgreSQL pool. Call during shutdown."""
+    global _pg_pool
+    if _pg_pool is not None:
+        try:
+            _pg_pool.closeall()
+            log.info("PostgreSQL connection pool closed.")
+        except Exception as e:
+            log.warning(f"Error closing DB pool: {e}")
+        _pg_pool = None
 
 
 def release_db_connection(conn):
@@ -1481,10 +1504,10 @@ def load_trailing_stop_peaks() -> dict:
         conn = get_db_connection()
         with _cursor(conn) as cursor:
             cursor.execute(
-                "SELECT order_id, trailing_stop_peak FROM trades "
+                "SELECT order_id, trailing_stop_peak, trading_strategy FROM trades "
                 "WHERE status = 'OPEN' AND trailing_stop_peak IS NOT NULL"
             )
-            return {row[0]: row[1] for row in cursor.fetchall()}
+            return {row[0]: (row[1], row[2]) for row in cursor.fetchall()}
     except (sqlite3.Error, psycopg2.Error) as e:
         log.error(f"Database error in load_trailing_stop_peaks: {e}", exc_info=True)
         return {}

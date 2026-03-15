@@ -230,7 +230,8 @@ def _paper_place_order(symbol, side, quantity, price, order_type="MARKET", exist
             else:
                 pnl = Decimal("0")
 
-            # Deduct simulated trading fees (buy + sell sides)
+            # Deduct simulated round-trip fees (entry fill + exit fill),
+            # matching live Binance behavior where both sides are charged
             fee_pct = Decimal(str(app_config.get('settings', {}).get('simulated_fee_pct', 0.001)))
             simulated_fees = d_price * d_qty * fee_pct + d_entry * d_qty * fee_pct
             pnl -= simulated_fees
@@ -307,21 +308,60 @@ def _live_place_order(symbol, side, quantity, price, order_type="MARKET", existi
 
             if not oco_result:
                 log.warning(f"OCO bracket failed for {symbol} after BUY — "
-                            f"position has NO server-side SL/TP protection!")
-                try:
-                    from src.notify.telegram_bot import send_telegram_alert
-                    import asyncio
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        asyncio.ensure_future(send_telegram_alert({
-                            'signal': 'WARNING', 'symbol': symbol,
-                            'current_price': fill_price or price,
-                            'reason': ('OCO bracket order failed after BUY fill. '
-                                       'Position lacks server-side SL/TP — '
-                                       'relying on bot-side trailing stop only.'),
-                        }))
-                except Exception as e:
-                    log.debug(f"OCO failure alert send failed: {e}")
+                            f"attempting emergency market close")
+                emergency = _emergency_market_close(
+                    api_symbol, fill_qty,
+                    reason="OCO+fallback both failed after BUY")
+
+                if emergency:
+                    # Emergency close succeeded — update DB to CLOSED
+                    _close_live_trade(order_id, emergency['fill_price'] or (fill_price or price),
+                                     fees, emergency['fill_price'], emergency['fill_qty'],
+                                     exit_reason="emergency_oco_failure")
+                    try:
+                        from src.notify.telegram_bot import send_telegram_alert
+                        import asyncio
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            asyncio.ensure_future(send_telegram_alert({
+                                'signal': 'WARNING', 'symbol': symbol,
+                                'current_price': emergency.get('fill_price') or (fill_price or price),
+                                'reason': ('OCO bracket + fallback SL both failed after BUY. '
+                                           'Position was EMERGENCY CLOSED at market price.'),
+                            }))
+                    except Exception as e:
+                        log.debug(f"Emergency close alert send failed: {e}")
+                    return {
+                        "order_id": order_id, "exchange_order_id": exchange_order_id,
+                        "symbol": symbol, "side": "BUY", "quantity": fill_qty,
+                        "price": fill_price or price, "fees": fees,
+                        "status": "EMERGENCY_CLOSED", "trading_mode": trading_mode,
+                    }
+                else:
+                    # Emergency close also failed — position is truly naked
+                    log.critical(f"NAKED POSITION: {symbol} qty={fill_qty} — "
+                                 f"OCO, fallback SL, and emergency close ALL failed")
+                    try:
+                        from src.notify.telegram_bot import send_telegram_alert
+                        import asyncio
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            asyncio.ensure_future(send_telegram_alert({
+                                'signal': 'CRITICAL', 'symbol': symbol,
+                                'current_price': fill_price or price,
+                                'reason': ('ALL protection failed after BUY (OCO, fallback SL, '
+                                           'emergency close). Position is UNPROTECTED — '
+                                           'manual intervention required!'),
+                            }))
+                    except Exception as e:
+                        log.debug(f"Naked position alert send failed: {e}")
+                    return {
+                        "order_id": order_id, "exchange_order_id": exchange_order_id,
+                        "symbol": symbol, "side": "BUY", "quantity": fill_qty,
+                        "price": fill_price or price, "fees": fees,
+                        "status": "FILLED", "trading_mode": trading_mode,
+                        "unprotected": True,
+                    }
 
             result = {
                 "order_id": order_id, "exchange_order_id": exchange_order_id,
@@ -637,6 +677,39 @@ def _place_fallback_stop_loss(symbol, entry_price, quantity):
         return None
 
 
+def _emergency_market_close(symbol, quantity, reason=""):
+    """Emergency market sell when OCO+fallback both fail. Better to close at ~breakeven than hold naked."""
+    client = _get_binance_client()
+    if not client:
+        log.critical(f"EMERGENCY CLOSE FAILED for {symbol}: no Binance client")
+        return None
+
+    # Round quantity to symbol precision
+    sym_info = _get_symbol_info(symbol)
+    if sym_info:
+        lot_filter = sym_info.get('filters', {}).get('LOT_SIZE', {})
+        step = float(lot_filter.get('stepSize', 0))
+        if step > 0:
+            quantity = _round_to_step_size(quantity, step)
+
+    try:
+        log.warning(f"EMERGENCY MARKET SELL for {symbol}: qty={quantity}, reason={reason}")
+        order = client.order_market_sell(symbol=symbol, quantity=quantity)
+        fill_price = _extract_fill_price(order)
+        fill_qty = float(order.get('executedQty', quantity))
+        log.warning(f"Emergency close completed for {symbol}: "
+                    f"filled {fill_qty} at ${fill_price}")
+        return {
+            "order_id": order.get('orderId'),
+            "fill_price": fill_price,
+            "fill_qty": fill_qty,
+            "emergency": True,
+        }
+    except Exception as e:
+        log.critical(f"EMERGENCY CLOSE FAILED for {symbol}: {e}", exc_info=True)
+        return None
+
+
 def _cancel_open_oco_orders(symbol):
     """Cancels all open OCO orders for a symbol before placing a manual sell."""
     client = _get_binance_client()
@@ -735,10 +808,7 @@ def _live_add_to_position(parent_order_id, symbol, add_quantity, add_price,
         return {"status": "FAILED", "message": "Binance client not available"}
 
     try:
-        # Cancel existing OCO before adding
-        _cancel_open_oco_orders(api_symbol)
-
-        # Place market buy
+        # Step 1: Place market BUY first (old OCO still protects existing position)
         sym_info = _get_symbol_info(api_symbol)
         adjusted_qty = _validate_order_quantity(sym_info, add_quantity, add_price)
         if adjusted_qty is None:
@@ -747,6 +817,9 @@ def _live_add_to_position(parent_order_id, symbol, add_quantity, add_price,
         order = client.order_market_buy(symbol=api_symbol, quantity=adjusted_qty)
         fill_price = _extract_fill_price(order) or add_price
         fill_qty = float(order.get('executedQty', adjusted_qty))
+
+        # Step 2: Cancel old OCO (after BUY succeeds)
+        _cancel_open_oco_orders(api_symbol)
 
         # Get existing position to compute new avg
         conn = get_db_connection()
@@ -773,8 +846,29 @@ def _live_add_to_position(parent_order_id, symbol, add_quantity, add_price,
         update_trade_position(parent_order_id, new_avg, new_total)
         save_position_addition(parent_order_id, fill_price, fill_qty, reason)
 
-        # Place new OCO at updated avg price
-        _place_oco_bracket(api_symbol, new_avg, new_total)
+        # Step 3: Place new OCO via retry path (not bare _place_oco_bracket)
+        oco_result = _place_oco_with_retry(api_symbol, new_avg, new_total)
+
+        if not oco_result:
+            # OCO failed — entire position is naked, emergency close all
+            log.warning(f"New OCO failed after add-to-position for {symbol} — "
+                        f"emergency closing entire position ({new_total})")
+            emergency = _emergency_market_close(
+                api_symbol, new_total,
+                reason="OCO failed after add-to-position, closing entire position")
+            if emergency:
+                _close_live_trade(parent_order_id,
+                                  emergency['fill_price'] or fill_price,
+                                  0, emergency['fill_price'], emergency['fill_qty'],
+                                  exit_reason="emergency_oco_failure")
+                return {
+                    "status": "EMERGENCY_CLOSED",
+                    "order_id": parent_order_id,
+                    "symbol": symbol,
+                    "message": "OCO failed after position increase — emergency closed",
+                }
+            else:
+                log.critical(f"NAKED POSITION after add-to-position: {symbol} qty={new_total}")
 
         log.info(f"Live position increase for {symbol}: +{fill_qty} at ${fill_price:,.2f} "
                  f"→ avg ${new_avg:,.2f}, total {new_total}")

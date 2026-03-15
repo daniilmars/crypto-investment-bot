@@ -228,15 +228,15 @@ class TestTrailingStopPersistence:
         mock_cursor.__exit__ = MagicMock(return_value=False)
 
         mock_cursor.fetchall.return_value = [
-            ('order_1', 50500.0),
-            ('order_2', 3200.0),
+            ('order_1', 50500.0, 'manual'),
+            ('order_2', 3200.0, 'auto'),
         ]
 
         from src.database import load_trailing_stop_peaks
 
         result = load_trailing_stop_peaks.sync()
 
-        assert result == {'order_1': 50500.0, 'order_2': 3200.0}
+        assert result == {'order_1': (50500.0, 'manual'), 'order_2': (3200.0, 'auto')}
         # Verify the query filters for OPEN and NOT NULL
         query = mock_cursor.execute.call_args[0][0]
         assert "status = 'OPEN'" in query
