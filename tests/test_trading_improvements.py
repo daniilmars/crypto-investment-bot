@@ -536,9 +536,10 @@ class TestArticleScoresPassthrough:
 
     @patch.dict('os.environ', {'GCP_PROJECT_ID': 'test-project'})
     @patch('src.analysis.gemini_news_analyzer._call_with_retry')
+    @patch('src.analysis.gemini_news_analyzer.GenerativeModel')
     @patch('src.analysis.gemini_news_analyzer.vertexai')
     def test_analyze_news_impact_injects_scores_into_prompt(
-            self, mock_vertexai, mock_call):
+            self, mock_vertexai, mock_model, mock_call):
         """Scored articles should appear in the Gemini prompt."""
         from src.analysis.gemini_news_analyzer import analyze_news_impact
 
