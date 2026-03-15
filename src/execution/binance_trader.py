@@ -132,22 +132,23 @@ def _validate_order_quantity(symbol_info, quantity, price):
 
 # --- Order Placement ---
 
-def place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual", strategy_type=None, trade_reason=None, exit_reason=None):
+def place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual", strategy_type=None, trade_reason=None, exit_reason=None, dynamic_sl_pct=None, dynamic_tp_pct=None):
     """
     Places an order — dispatches to paper or live based on config.
     """
     if price <= 0:
         return {"status": "FAILED", "message": "Invalid price"}
+    kw = dict(asset_type=asset_type, trading_strategy=trading_strategy, strategy_type=strategy_type, trade_reason=trade_reason, exit_reason=exit_reason, dynamic_sl_pct=dynamic_sl_pct, dynamic_tp_pct=dynamic_tp_pct)
     # Stocks always use paper path — Binance live API is crypto-only
     if asset_type == 'stock':
-        return _paper_place_order(symbol, side, quantity, price, order_type, existing_order_id, asset_type=asset_type, trading_strategy=trading_strategy, strategy_type=strategy_type, trade_reason=trade_reason, exit_reason=exit_reason)
+        return _paper_place_order(symbol, side, quantity, price, order_type, existing_order_id, **kw)
     if _is_live_trading() and trading_strategy != 'auto':
-        return _live_place_order(symbol, side, quantity, price, order_type, existing_order_id, asset_type=asset_type, trading_strategy=trading_strategy, strategy_type=strategy_type, trade_reason=trade_reason, exit_reason=exit_reason)
+        return _live_place_order(symbol, side, quantity, price, order_type, existing_order_id, **kw)
     else:
-        return _paper_place_order(symbol, side, quantity, price, order_type, existing_order_id, asset_type=asset_type, trading_strategy=trading_strategy, strategy_type=strategy_type, trade_reason=trade_reason, exit_reason=exit_reason)
+        return _paper_place_order(symbol, side, quantity, price, order_type, existing_order_id, **kw)
 
 
-def _paper_place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual", strategy_type=None, trade_reason=None, exit_reason=None):
+def _paper_place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual", strategy_type=None, trade_reason=None, exit_reason=None, dynamic_sl_pct=None, dynamic_tp_pct=None):
     """Simulates placing an order for paper trading. Records the trade in the database."""
     conn = None
     cursor = None
@@ -157,20 +158,48 @@ def _paper_place_order(symbol, side, quantity, price, order_type="MARKET", exist
         cursor = conn.cursor()
 
         if side == "BUY":
-            # Apply simulated slippage: BUY fills higher than requested
+            # LIMIT orders → create PENDING row (no slippage, no fill yet)
+            if order_type == "LIMIT":
+                prefix = "AUTO" if trading_strategy == "auto" else "PAPER"
+                order_id = f"{prefix}_{symbol}_LIMIT_{int(time.time() * 1000)}"
+
+                # Compute expiry
+                limit_cfg = app_config.get('settings', {}).get('limit_orders', {})
+                ttl_cycles = limit_cfg.get('ttl_cycles', 8)
+                run_interval = app_config.get('settings', {}).get('run_interval_minutes', 15)
+                from datetime import datetime, timedelta, timezone
+                expires_at = datetime.now(timezone.utc) + timedelta(minutes=ttl_cycles * run_interval)
+
+                ph = '%s' if is_postgres_conn else '?'
+                query = (f'INSERT INTO trades (symbol, order_id, side, entry_price, quantity, status, '
+                         f'trading_mode, asset_type, trading_strategy, strategy_type, trade_reason, '
+                         f'order_type, limit_price, limit_expires_at, dynamic_sl_pct, dynamic_tp_pct) '
+                         f'VALUES ({", ".join([ph]*16)})')
+                cursor.execute(query, (
+                    symbol, order_id, side, price, quantity, "PENDING", "paper",
+                    asset_type, trading_strategy, strategy_type, trade_reason,
+                    "LIMIT", price, expires_at, dynamic_sl_pct, dynamic_tp_pct))
+                conn.commit()
+                log.info(f"Limit order recorded: {order_id} (limit=${price:.4f}, expires={expires_at})")
+                return {"order_id": order_id, "symbol": symbol, "side": side,
+                        "quantity": quantity, "price": price, "status": "PENDING",
+                        "order_type": "LIMIT"}
+
+            # MARKET orders: apply simulated slippage
             slippage_pct = app_config.get('settings', {}).get('simulated_slippage_pct', 0.001)
             fill_price = price * (1 + slippage_pct)
             log.info(f"Simulating BUY order for {quantity} {symbol} at {price} (Type: {order_type})")
             log.info(f"Paper fill with {slippage_pct*100:.2f}% slippage: requested ${price:.4f} → filled ${fill_price:.4f}")
             prefix = "AUTO" if trading_strategy == "auto" else "PAPER"
             order_id = f"{prefix}_{symbol}_BUY_{int(time.time() * 1000)}"
-            query = ('INSERT INTO trades (symbol, order_id, side, entry_price, quantity, status, trading_mode, asset_type, trading_strategy, strategy_type, trade_reason) '
-                     'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)') if is_postgres_conn else \
-                    ('INSERT INTO trades (symbol, order_id, side, entry_price, quantity, status, trading_mode, asset_type, trading_strategy, strategy_type, trade_reason) '
-                     'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-            cursor.execute(query, (symbol, order_id, side, fill_price, quantity, "OPEN", "paper", asset_type, trading_strategy, strategy_type, trade_reason))
+            query = ('INSERT INTO trades (symbol, order_id, side, entry_price, quantity, status, trading_mode, asset_type, trading_strategy, strategy_type, trade_reason, dynamic_sl_pct, dynamic_tp_pct) '
+                     'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)') if is_postgres_conn else \
+                    ('INSERT INTO trades (symbol, order_id, side, entry_price, quantity, status, trading_mode, asset_type, trading_strategy, strategy_type, trade_reason, dynamic_sl_pct, dynamic_tp_pct) '
+                     'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            cursor.execute(query, (symbol, order_id, side, fill_price, quantity, "OPEN", "paper", asset_type, trading_strategy, strategy_type, trade_reason, dynamic_sl_pct, dynamic_tp_pct))
             conn.commit()
-            log.info(f"Paper trade recorded: Order ID {order_id}" + (f" [strategic: {strategy_type}]" if strategy_type else ""))
+            log.info(f"Paper trade recorded: Order ID {order_id}" + (f" [strategic: {strategy_type}]" if strategy_type else "")
+                     + (f" [SL={dynamic_sl_pct:.2%}, TP={dynamic_tp_pct:.2%}]" if dynamic_sl_pct else ""))
             return {"order_id": order_id, "symbol": symbol, "side": side, "quantity": quantity, "price": fill_price, "status": "FILLED"}
 
         elif side == "SELL" and existing_order_id:
@@ -231,7 +260,7 @@ def _paper_place_order(symbol, side, quantity, price, order_type="MARKET", exist
         release_db_connection(conn)
 
 
-def _live_place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual", strategy_type=None, trade_reason=None, exit_reason=None):
+def _live_place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual", strategy_type=None, trade_reason=None, exit_reason=None, dynamic_sl_pct=None, dynamic_tp_pct=None):
     """Places a real order on Binance (testnet or live)."""
     from binance.exceptions import BinanceAPIException
 
@@ -273,7 +302,8 @@ def _live_place_order(symbol, side, quantity, price, order_type="MARKET", existi
                                strategy_type=strategy_type, trade_reason=trade_reason)
 
             # Place OCO bracket for stop-loss and take-profit
-            oco_result = _place_oco_with_retry(api_symbol, fill_price or price, fill_qty)
+            oco_result = _place_oco_with_retry(api_symbol, fill_price or price, fill_qty,
+                                                sl_pct=dynamic_sl_pct, tp_pct=dynamic_tp_pct)
 
             if not oco_result:
                 log.warning(f"OCO bracket failed for {symbol} after BUY — "
@@ -477,18 +507,22 @@ def _is_retryable_binance_error(exc) -> bool:
     return any(s in msg for s in ('500', '503', 'timeout', 'connection', 'rate limit'))
 
 
-def _place_oco_bracket(symbol, entry_price, quantity):
+def _place_oco_bracket(symbol, entry_price, quantity, sl_pct=None, tp_pct=None):
     """
     Places an OCO (One-Cancels-Other) order with stop-loss and take-profit
     after a BUY fill. Runs server-side on Binance for protection during bot downtime.
+
+    sl_pct/tp_pct: per-position dynamic values (from ATR). Falls back to config.
     """
     client = _get_binance_client()
     if not client:
         return None
 
     live_config = app_config.get('settings', {}).get('live_trading', {})
-    sl_pct = live_config.get('stop_loss_percentage', 0.03)
-    tp_pct = live_config.get('take_profit_percentage', 0.06)
+    if sl_pct is None:
+        sl_pct = live_config.get('stop_loss_percentage', 0.03)
+    if tp_pct is None:
+        tp_pct = live_config.get('take_profit_percentage', 0.06)
 
     stop_price = round(entry_price * (1 - sl_pct), 8)
     stop_limit_price = round(stop_price * 0.998, 8)  # slightly below stop for limit fill
@@ -529,14 +563,15 @@ def _place_oco_bracket(symbol, entry_price, quantity):
     }
 
 
-def _place_oco_with_retry(symbol, entry_price, quantity):
+def _place_oco_with_retry(symbol, entry_price, quantity, sl_pct=None, tp_pct=None):
     """Retry OCO bracket placement with exponential backoff.
 
     Falls back to plain stop-loss if all retries fail.
     """
     for attempt in range(1, _OCO_MAX_RETRIES + 1):
         try:
-            return _place_oco_bracket(symbol, entry_price, quantity)
+            return _place_oco_bracket(symbol, entry_price, quantity,
+                                       sl_pct=sl_pct, tp_pct=tp_pct)
         except Exception as exc:
             if not _is_retryable_binance_error(exc) or attempt == _OCO_MAX_RETRIES:
                 log.error(f"OCO bracket failed (attempt {attempt}/{_OCO_MAX_RETRIES}): {exc}")

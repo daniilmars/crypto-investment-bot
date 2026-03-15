@@ -4,18 +4,22 @@ Relocated from main.py to reduce file size. No logic changes.
 """
 
 import asyncio
+import time
 
 import pandas as pd
 
 from src.analysis.signal_engine import generate_signal
 from src.analysis.stock_signal_engine import generate_stock_signal
-from src.analysis.technical_indicators import calculate_rsi, calculate_sma
+from src.analysis.technical_indicators import (
+    calculate_atr, calculate_rsi, calculate_sma,
+)
+from src.analysis.dynamic_risk import compute_dynamic_sl_tp
 from src.collectors.alpha_vantage_data import (get_company_overview,
                                                get_daily_prices,
                                                get_stock_price,
                                                get_batch_stock_prices,
                                                get_batch_daily_prices)
-from src.collectors.binance_data import get_current_price, get_all_prices
+from src.collectors.binance_data import get_current_price, get_all_prices, get_klines
 from src.config import app_config
 from src.analysis.macro_regime import get_macro_regime
 from src.analysis.event_calendar import (get_event_warnings_for_positions,
@@ -48,6 +52,38 @@ from src.orchestration.news_pipeline import (
     collect_and_analyze_news, run_proactive_market_alerts,
 )
 from src.analysis.signal_attribution import record_signal_attribution
+
+# --- Daily kline cache (Plan 2: Daily SMA + Plan 1: ATR) ---
+_daily_kline_cache: dict[str, list[dict]] = {}
+_daily_kline_cache_ts: float = 0
+
+
+async def _fetch_daily_klines_batch(
+    symbols: list[str], cache_minutes: int = 60
+) -> dict[str, list[dict]]:
+    """Fetch daily klines for all crypto symbols. Cache for `cache_minutes`."""
+    global _daily_kline_cache, _daily_kline_cache_ts
+
+    now = time.time()
+    if _daily_kline_cache and (now - _daily_kline_cache_ts) < cache_minutes * 60:
+        log.debug("Using cached daily klines (still fresh).")
+        return _daily_kline_cache
+
+    result: dict[str, list[dict]] = {}
+    for sym in symbols:
+        api_sym = sym if sym.endswith("USDT") else f"{sym}USDT"
+        try:
+            klines = await asyncio.to_thread(get_klines, api_sym, '1d', 50)
+            if klines:
+                result[sym] = klines
+        except Exception as e:
+            log.warning(f"Failed to fetch daily klines for {sym}: {e}")
+
+    _daily_kline_cache = result
+    _daily_kline_cache_ts = now
+    log.info(f"Fetched daily klines for {len(result)}/{len(symbols)} crypto symbols.")
+    return result
+
 
 # Reference to the Telegram application — set by main.py at startup
 _application = None
@@ -209,6 +245,29 @@ async def run_bot_cycle():
                 "reason": f"Circuit breaker (crypto): {cb_reason}. Skipping all crypto trading this cycle."
             })
 
+    # --- Fetch daily klines for crypto (SMA trend filter + ATR dynamic risk) ---
+    trend_cfg = settings.get('trend_filter', {})
+    use_daily_klines = trend_cfg.get('use_daily_klines', True)
+    daily_sma_period = trend_cfg.get('daily_sma_period', sma_period)
+    kline_cache_min = trend_cfg.get('kline_cache_minutes', 60)
+
+    daily_klines_batch: dict[str, list[dict]] = {}
+    if use_daily_klines:
+        daily_klines_batch = await _fetch_daily_klines_batch(
+            watch_list, cache_minutes=kline_cache_min)
+
+    # --- Dynamic risk config ---
+    dyn_risk_cfg = settings.get('dynamic_risk', {})
+    dyn_risk_enabled = dyn_risk_cfg.get('enabled', False)
+    atr_period = dyn_risk_cfg.get('atr_period', 14)
+
+    # --- Check pending limit orders ---
+    limit_cfg = settings.get('limit_orders', {})
+    if limit_cfg.get('enabled', False):
+        await _check_pending_limit_orders(
+            current_prices_dict, settings,
+            risk_cfg=risk_cfg, trading_mode=trading_mode)
+
     # Process each symbol in the watch list
     for symbol in watch_list:
         signal = None
@@ -236,8 +295,14 @@ async def run_bot_cycle():
         if paper_trading or is_live:
             for position in _cached_crypto_positions:
                 if position['symbol'] == symbol and position['status'] == 'OPEN':
+                    # Use per-position dynamic SL/TP if stored, else global
+                    pos_risk = dict(risk_cfg)
+                    if position.get('dynamic_sl_pct') is not None:
+                        pos_risk['stop_loss_pct'] = position['dynamic_sl_pct']
+                    if position.get('dynamic_tp_pct') is not None:
+                        pos_risk['take_profit_pct'] = position['dynamic_tp_pct']
                     result = await monitor_position(
-                        position, current_price, **risk_cfg,
+                        position, current_price, **pos_risk,
                         mode_label=trading_mode.upper())
                     if result != 'none':
                         _cached_crypto_positions = await asyncio.to_thread(
@@ -249,17 +314,48 @@ async def run_bot_cycle():
             log.info("Bot is paused. Skipping new signal generation and trading.")
             continue
 
-        # 2. Compute technical indicators (SMA/RSI)
+        # 2. Compute technical indicators (SMA from daily klines, RSI from snapshots)
         log.info(f"Analyzing data for {symbol}...")
 
-        price_limit = max(sma_period, rsi_period, 26) + 1
-        historical_prices = await get_historical_prices(symbol, price_limit)
-
         market_price_data = {'current_price': current_price, 'sma': None, 'rsi': None}
-        if len(historical_prices) >= sma_period:
-            price_series = pd.Series(historical_prices)
-            market_price_data['sma'] = price_series.rolling(window=sma_period).mean().iloc[-1]
-        market_price_data['rsi'] = calculate_rsi(historical_prices, period=rsi_period)
+
+        # Daily SMA from klines (trend filter) — falls back to 15-min snapshots
+        daily_klines = daily_klines_batch.get(symbol)
+        if daily_klines and len(daily_klines) >= daily_sma_period:
+            daily_closes = [k['close'] for k in daily_klines]
+            market_price_data['sma'] = calculate_sma(daily_closes, period=daily_sma_period)
+        else:
+            # Fallback: 15-min snapshot SMA (old behavior)
+            price_limit = max(sma_period, rsi_period, 26) + 1
+            fallback_prices = await get_historical_prices(symbol, price_limit)
+            if len(fallback_prices) >= sma_period:
+                price_series = pd.Series(fallback_prices)
+                market_price_data['sma'] = price_series.rolling(window=sma_period).mean().iloc[-1]
+
+        # RSI from 15-min snapshots (momentum/timing — fast data is fine)
+        rsi_prices = await get_historical_prices(symbol, rsi_period + 1)
+        market_price_data['rsi'] = calculate_rsi(rsi_prices, period=rsi_period)
+
+        # ATR from daily klines → dynamic SL/TP
+        symbol_dynamic_sl = None
+        symbol_dynamic_tp = None
+        if dyn_risk_enabled and daily_klines and len(daily_klines) >= atr_period + 1:
+            highs = [k['high'] for k in daily_klines]
+            lows = [k['low'] for k in daily_klines]
+            closes = [k['close'] for k in daily_klines]
+            atr_val = calculate_atr(highs, lows, closes, period=atr_period)
+            atr_pct = atr_val / current_price if atr_val and current_price else None
+            symbol_dynamic_sl, symbol_dynamic_tp = compute_dynamic_sl_tp(
+                atr_pct, stop_loss_percentage, take_profit_percentage,
+                sl_atr_mult=dyn_risk_cfg.get('sl_atr_multiplier', 1.5),
+                tp_atr_mult=dyn_risk_cfg.get('tp_atr_multiplier', 3.0),
+                sl_floor=dyn_risk_cfg.get('sl_floor', 0.02),
+                sl_ceiling=dyn_risk_cfg.get('sl_ceiling', 0.07),
+                tp_floor=dyn_risk_cfg.get('tp_floor', 0.04),
+                tp_ceiling=dyn_risk_cfg.get('tp_ceiling', 0.15),
+            )
+            log.info(f"Dynamic risk for {symbol}: SL={symbol_dynamic_sl:.2%}, TP={symbol_dynamic_tp:.2%} (ATR%={atr_pct:.4f})")
+
         log.info(f"Technical Indicators for {symbol}: SMA={market_price_data['sma']}, RSI={market_price_data['rsi']}")
 
         # --- Position Analyst (tri-state: HOLD / INCREASE / SELL) ---
@@ -338,14 +434,21 @@ async def run_bot_cycle():
                 symbol, signal, current_price, _cached_crypto_positions, current_balance,
                 effective_risk_pct, signal_cooldown_hours, active_max_positions,
                 suppress_buys, macro_multiplier, label=trading_mode,
-                current_prices=current_prices_dict)
+                current_prices=current_prices_dict,
+                dynamic_sl_pct=symbol_dynamic_sl,
+                dynamic_tp_pct=symbol_dynamic_tp)
 
         # --- Auto-Trading Shadow Bot: Position Monitoring ---
         if auto_enabled:
             for position in _cached_auto_positions:
                 if position['symbol'] == symbol and position['status'] == 'OPEN':
+                    auto_pos_risk = dict(risk_cfg)
+                    if position.get('dynamic_sl_pct') is not None:
+                        auto_pos_risk['stop_loss_pct'] = position['dynamic_sl_pct']
+                    if position.get('dynamic_tp_pct') is not None:
+                        auto_pos_risk['take_profit_pct'] = position['dynamic_tp_pct']
                     result = await monitor_position(
-                        position, current_price, **risk_cfg,
+                        position, current_price, **auto_pos_risk,
                         trading_strategy='auto', mode_label='AUTO')
                     if result != 'none':
                         _cached_auto_positions = await asyncio.to_thread(
@@ -372,7 +475,9 @@ async def run_bot_cycle():
                 effective_risk_pct, signal_cooldown_hours, auto_max,
                 suppress_buys, macro_multiplier,
                 trading_strategy='auto', label='AUTO', is_auto=True,
-                current_prices=current_prices_dict)
+                current_prices=current_prices_dict,
+                dynamic_sl_pct=symbol_dynamic_sl,
+                dynamic_tp_pct=symbol_dynamic_tp)
 
     # --- Event warnings for open positions ---
     try:
@@ -437,6 +542,67 @@ async def run_bot_cycle():
             await update_live_dashboard(_application, cycle_data)
     except Exception as e:
         log.warning(f"Dashboard update failed: {e}")
+
+
+async def _check_pending_limit_orders(
+    current_prices: dict,
+    settings: dict,
+    *,
+    risk_cfg: dict,
+    trading_mode: str,
+):
+    """Check all PENDING limit orders — fill if price reached, expire if TTL elapsed."""
+    from src.database import get_pending_orders, fill_pending_order, cancel_pending_order
+    from datetime import datetime, timezone
+
+    for strategy in ('manual', 'auto'):
+        pending = get_pending_orders(asset_type='crypto', trading_strategy=strategy)
+        for order in pending:
+            symbol = order['symbol']
+            limit_price = order.get('limit_price')
+            expires_at = order.get('limit_expires_at')
+
+            current_price = current_prices.get(symbol)
+            if not current_price or not limit_price:
+                continue
+
+            # Check expiry
+            now = datetime.now(timezone.utc)
+            if expires_at:
+                # Handle both string and datetime objects
+                if isinstance(expires_at, str):
+                    from datetime import datetime as dt
+                    try:
+                        expires_at = dt.fromisoformat(expires_at.replace('Z', '+00:00'))
+                    except (ValueError, AttributeError):
+                        expires_at = None
+                if expires_at and now >= expires_at:
+                    cancel_pending_order(order['order_id'], reason='expired')
+                    log.info(f"Limit order {order['order_id']} for {symbol} expired (TTL elapsed).")
+                    continue
+
+            # Check if price hit the limit
+            if current_price <= limit_price:
+                fill_pending_order(order['order_id'], current_price)
+                log.info(f"Limit order {order['order_id']} filled: {symbol} at ${current_price:.4f} "
+                         f"(limit was ${limit_price:.4f})")
+
+                # Place OCO bracket if live trading
+                if _is_live_trading() and strategy != 'auto':
+                    from src.execution.binance_trader import _place_oco_with_retry
+                    sl_pct = order.get('dynamic_sl_pct')
+                    tp_pct = order.get('dynamic_tp_pct')
+                    _place_oco_with_retry(
+                        symbol if symbol.endswith("USDT") else f"{symbol}USDT",
+                        current_price, order.get('quantity', 0),
+                        sl_pct=sl_pct, tp_pct=tp_pct)
+
+                await send_telegram_alert({
+                    'signal': 'BUY', 'symbol': symbol,
+                    'current_price': current_price,
+                    'reason': f"Limit order filled at ${current_price:.4f} "
+                              f"(pullback from ${limit_price / (1 - settings.get('limit_orders', {}).get('pullback_pct', 0.005)):.4f})",
+                })
 
 
 async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,

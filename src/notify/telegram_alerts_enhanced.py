@@ -33,7 +33,8 @@ def check_realtime_alerts(macro_regime_result: dict) -> list[str]:
     alerts = []
     current_regime = macro_regime_result.get('regime', '')
     indicators = macro_regime_result.get('indicators', {})
-    current_vix = indicators.get('vix')
+    raw_vix = indicators.get('vix')
+    current_vix = raw_vix.get('current') if isinstance(raw_vix, dict) else raw_vix
 
     # Regime change detection
     if cfg.get('regime_change_alert', True) and _last_regime is not None:

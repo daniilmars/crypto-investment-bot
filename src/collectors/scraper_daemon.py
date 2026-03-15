@@ -375,7 +375,8 @@ class ScraperDaemon:
             return 0
 
         # Queue important articles for deep enrichment
-        important = [a for a in new_articles if a.get('category', '') in {'regulatory', 'kol', 'ipo'}]
+        important = [a for a in new_articles if a.get('category', '') in {
+            'regulatory', 'kol', 'ipo', 'press_release', 'ai', 'ai_research'}]
         if important:
             with self._lock:
                 self._pending_enrichment.extend(important)

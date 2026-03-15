@@ -30,9 +30,11 @@ def test_initialize_database_creates_tables(mock_get_db_connection, mock_release
     # + 1 ALTER TABLE (scraped_articles category) + 1 ALTER TABLE (scraped_articles gemini_score)
     # + 1 ALTER TABLE (trades trading_strategy) + 1 ALTER TABLE (trades exit_reason)
     # + 1 ALTER TABLE (trades strategy_type) + 1 ALTER TABLE (trades trade_reason)
+    # + 2 ALTER TABLE (trades dynamic_sl_pct, dynamic_tp_pct)
+    # + 3 ALTER TABLE (trades order_type, limit_price, limit_expires_at)
     # + 1 ALTER TABLE (cb_events asset_type)
-    # + 1 UPDATE (resolve stale cb_events) + 6 performance indexes = 49
-    assert mock_cursor.execute.call_count == 49
+    # + 1 UPDATE (resolve stale cb_events) + 6 performance indexes = 54
+    assert mock_cursor.execute.call_count == 54
 
     # Check the SQL statements (case-insensitive and ignoring whitespace)
     executed_queries = [' '.join(call[0][0].split()) for call in mock_cursor.execute.call_args_list]

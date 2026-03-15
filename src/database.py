@@ -762,6 +762,34 @@ def initialize_database(db_url=None):
             if is_postgres_conn:
                 conn.rollback()
 
+        # --- Migrate trades table: add dynamic_sl_pct / dynamic_tp_pct (ATR-based risk) ---
+        for col in ('dynamic_sl_pct', 'dynamic_tp_pct'):
+            try:
+                cursor.execute(f"ALTER TABLE trades ADD COLUMN {col} REAL")
+                log.info(f"Added column '{col}' to trades table.")
+            except (sqlite3.OperationalError, psycopg2.errors.DuplicateColumn):
+                if is_postgres_conn:
+                    conn.rollback()
+            except Exception as e:
+                log.warning(f"Could not add column '{col}' to trades: {e}")
+                if is_postgres_conn:
+                    conn.rollback()
+
+        # --- Migrate trades table: add limit order columns (pullback entry) ---
+        for col, col_type in [('order_type', "TEXT DEFAULT 'MARKET'"),
+                               ('limit_price', 'REAL'),
+                               ('limit_expires_at', 'TIMESTAMP')]:
+            try:
+                cursor.execute(f"ALTER TABLE trades ADD COLUMN {col} {col_type}")
+                log.info(f"Added column '{col}' to trades table.")
+            except (sqlite3.OperationalError, psycopg2.errors.DuplicateColumn):
+                if is_postgres_conn:
+                    conn.rollback()
+            except Exception as e:
+                log.warning(f"Could not add column '{col}' to trades: {e}")
+                if is_postgres_conn:
+                    conn.rollback()
+
         # --- Migrate circuit_breaker_events: add asset_type column ---
         try:
             cursor.execute("ALTER TABLE circuit_breaker_events ADD COLUMN asset_type TEXT DEFAULT 'crypto'")
@@ -2228,3 +2256,73 @@ def cleanup_old_rows(days: int = 30) -> dict:
     finally:
         release_db_connection(conn)
     return deleted
+
+
+# ---------------------------------------------------------------------------
+# Pending (limit) order queries
+# ---------------------------------------------------------------------------
+
+def get_pending_orders(asset_type: str = 'crypto',
+                       trading_strategy: str = 'manual') -> list:
+    """Fetch all PENDING limit orders."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        ph = '%s' if is_pg else '?'
+        with _cursor(conn) as cursor:
+            q = (f"SELECT order_id, symbol, entry_price, quantity, limit_price, "
+                 f"limit_expires_at, asset_type, trading_strategy, "
+                 f"dynamic_sl_pct, dynamic_tp_pct, strategy_type, trade_reason "
+                 f"FROM trades WHERE status = {ph} AND asset_type = {ph} "
+                 f"AND trading_strategy = {ph}")
+            cursor.execute(q, ('PENDING', asset_type, trading_strategy))
+            cols = [d[0] for d in cursor.description]
+            return [dict(zip(cols, row)) for row in cursor.fetchall()]
+    except Exception as e:
+        log.error(f"get_pending_orders failed: {e}", exc_info=True)
+        return []
+    finally:
+        release_db_connection(conn)
+
+
+def fill_pending_order(order_id: str, fill_price: float):
+    """Transition a PENDING order to OPEN (limit filled)."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        ph = '%s' if is_pg else '?'
+        with _cursor(conn) as cursor:
+            q = (f"UPDATE trades SET status = 'OPEN', entry_price = {ph} "
+                 f"WHERE order_id = {ph} AND status = 'PENDING'")
+            cursor.execute(q, (fill_price, order_id))
+        conn.commit()
+        log.info(f"Limit order {order_id} filled at ${fill_price:.4f}")
+    except Exception as e:
+        log.error(f"fill_pending_order failed: {e}", exc_info=True)
+        if conn:
+            conn.rollback()
+    finally:
+        release_db_connection(conn)
+
+
+def cancel_pending_order(order_id: str, reason: str = 'expired'):
+    """Cancel a PENDING order (expired or manually cancelled)."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        ph = '%s' if is_pg else '?'
+        with _cursor(conn) as cursor:
+            q = (f"UPDATE trades SET status = 'CANCELLED', "
+                 f"exit_reason = {ph} WHERE order_id = {ph} AND status = 'PENDING'")
+            cursor.execute(q, (reason, order_id))
+        conn.commit()
+        log.info(f"Pending order {order_id} cancelled: {reason}")
+    except Exception as e:
+        log.error(f"cancel_pending_order failed: {e}", exc_info=True)
+        if conn:
+            conn.rollback()
+    finally:
+        release_db_connection(conn)

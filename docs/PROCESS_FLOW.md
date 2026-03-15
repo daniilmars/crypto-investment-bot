@@ -51,26 +51,29 @@ Circuit Breaker (live trading only)
 ```
 collect_and_analyze_news()
     │
-    ├─ RSS Feed Collection (~80 feeds from source registry)
+    ├─ RSS Feed Collection (~28 feeds)
     │   ├─ Tier 1 (Premium): regulatory (Fed, SEC), crypto (CoinDesk)
-    │   ├─ Tier 2 (Standard): financial (Reuters, Bloomberg)
-    │   └─ Tier 3 (Trial): sector, KOL, Asia-Pacific
+    │   ├─ Tier 2 (Standard): financial (Reuters, AP)
+    │   └─ Tier 3 (Trial): sector, KOL, Google News
     │
-    ├─ Web Scraping (12 scrapers: CoinDesk, Reuters, CNBC, etc.)
+    ├─ Web Scraping (6 scrapers: CoinDesk, CoinTelegraph, Decrypt, CNBC, AP, TechCrunch)
     │
-    ├─ Deduplication (SHA-256 title hash)
+    ├─ Deduplication (exact title + normalized fuzzy prefix matching)
+    │   └─ Catches wire story reprints across sources
     │
     ├─ Symbol Matching (word-boundary regex per ticker)
     │   └─ e.g., "Solana" matches SOL, but "solution" does not
     │
-    ├─ Sentiment Scoring (per article)
-    │   ├─ VADER (free, instant) → score -1.0 to +1.0
-    │   └─ Gemini 2.0 Flash (batches of 50) → score -1.0 to +1.0
+    ├─ Sentiment Scoring (per article, Gemini-only)
+    │   └─ Gemini 2.5 Flash (batches of 50) → score -1.0 to +1.0
+    │   └─ Fallback: if Vertex AI down → scoring mode (legacy indicators)
     │
     ├─ Per-Symbol Aggregation
-    │   └─ avg_sentiment, volatility, positive/negative ratios
+    │   ├─ avg_sentiment, volatility, positive/negative ratios
+    │   └─ top_scored_articles (|score| > 0.3, sorted by impact)
     │
     └─ Gemini Investment Assessment (per symbol with news)
+        ├─ Receives per-article scores to weigh individual catalysts
         └─ Output: direction (bullish/bearish/neutral), confidence (0-1)
 ```
 
@@ -88,10 +91,12 @@ FOR EACH symbol in watch_list:
 │                           │   AND drawdown from peak ≥ 1.5%
 │                           │   → SELL, resolve attribution, cleanup
 │                           │
-│                           ├─ Stop-Loss: loss ≥ 3.5%
-│                           │   → SELL, set 6h cooldown, resolve attribution
+│                           ├─ Stop-Loss: per-position dynamic SL (ATR-based)
+│                           │   or fixed 3.5% fallback
+│                           │   → SELL, set 24h cooldown, resolve attribution
 │                           │
-│                           ├─ Take-Profit: gain ≥ 8%
+│                           ├─ Take-Profit: per-position dynamic TP (ATR-based)
+│                           │   or fixed 8% fallback
 │                           │   → SELL, resolve attribution
 │                           │
 │                           └─ None triggered → continue
@@ -113,14 +118,15 @@ FOR EACH symbol in watch_list:
 │                           │
 │                           ▼
 │                       Calculate Technicals
-│                           │  SMA (20-period), RSI (14-period)
+│                           │  SMA (20-period daily klines), RSI (14-period 15min)
+│                           │  ATR (14-period daily) → dynamic SL/TP
 │                           │
 │                           ▼
 │                       ┌─ signal_mode = "sentiment" (primary)
 │                       │   │
 │                       │   ├─ Step 1: Sentiment Trigger
 │                       │   │   ├─ Gemini confidence ≥ 0.5 → bullish/bearish
-│                       │   │   └─ Fallback: VADER ≥ 0.3 → bullish
+│                       │   │   └─ No Gemini data → fall back to scoring mode
 │                       │   │   └─ No trigger → HOLD
 │                       │   │
 │                       │   ├─ Step 2: SMA Trend Filter
@@ -146,8 +152,11 @@ FOR EACH symbol in watch_list:
 │                     ├─ Macro regime: RISK_OFF & suppress → BLOCKED
 │                     ├─ Stoploss cooldown active? → BLOCKED
 │                     ├─ Signal cooldown active? → BLOCKED
-│                     ├─ Max positions reached? → BLOCKED
+│                     ├─ Pending limit order exists? → BLOCKED
+│                     ├─ Max positions reached? (OPEN + PENDING) → BLOCKED
 │                     ├─ Sector limit breached? → BLOCKED
+│                     ├─ Asset class limit? (crypto: 4, stock: 6) → BLOCKED
+│                     ├─ Concentration scaling (crypto) → reduce size
 │                     ├─ Event calendar block? → BLOCKED or reduce size
 │                     └─ ALL CLEAR
 │                         │
@@ -156,17 +165,19 @@ FOR EACH symbol in watch_list:
 │                         │  qty = (balance × risk% × macro_mult × kelly) / price
 │                         │
 │                         ▼
-│                     ┌─ Confirmation Required?
-│                     │   │
+│                     ┌─ Limit Order Decision
+│                     │   ├─ signal_strength ≥ 0.8 → market order (immediate)
+│                     │   └─ signal_strength < 0.8 → limit order (0.5% pullback, 2h TTL)
+│                     │
+│                     ┌─ Confirmation Required? (manual mode only)
 │                     │   ├─ YES → Send Telegram inline buttons
 │                     │   │         [✅ Execute]  [❌ Skip]
 │                     │   │         (timeout: 30 min)
-│                     │   │
 │                     │   └─ NO → Immediate Execution
 │                     │
 │                     └─ place_order(symbol, "BUY", qty, price)
-│                         ├─ Paper: simulate in DB
-│                         └─ Live: Binance API + OCO brackets for SL/TP
+│                         ├─ Paper: simulate in DB (with dynamic SL/TP from ATR)
+│                         └─ Live: Binance API + OCO brackets (per-position SL/TP)
 │
 └─ Signal = SELL ──► Find open position → execute_sell (same confirmation flow)
 ```
@@ -254,7 +265,7 @@ run_auto_tune()
 ```
 Market Data (Binance, Alpha Vantage, yfinance)
          +
-News (80 RSS feeds + 12 web scrapers)
+News (~28 RSS feeds + 6 web scrapers)
          │
          ▼
     Gemini Analysis → direction + confidence

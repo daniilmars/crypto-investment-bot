@@ -3,12 +3,19 @@ import os
 import random
 import re
 import time
+import warnings
 
 import vertexai
-from vertexai.generative_models import GenerativeModel
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore", message=".*deprecated.*June 24, 2026.*")
+    from vertexai.generative_models import GenerativeModel
 
 from src.config import app_config
 from src.logger import log
+
+# TODO(2026-06): Migrate from vertexai SDK to google.genai SDK before June 2026 deadline.
+# analyze_news_with_search() already uses google.genai; score_articles_batch() and
+# analyze_news_impact() still use the legacy vertexai SDK.
 
 # --- JSON parsing helpers ---
 
@@ -107,24 +114,47 @@ def _score_single_batch(model, articles: list) -> list | None:
     articles_text = "\n".join(numbered_lines)
 
     prompt = (
-        "You are a trading desk analyst scoring news articles for a short-term "
-        "trading bot (3.5% stop-loss, 8% take-profit, 15-minute cycles).\n\n"
-        "Score each article from -1.0 (very bearish) to +1.0 (very bullish).\n\n"
-        "SCORING RULES:\n"
-        "- Only ACTIONABLE news that can move prices within 24h deserves |score| > 0.3\n"
-        "- Concrete events (ETF ruling, hack, earnings, regulatory action, "
-        "major partnership, Fed decision) → high magnitude (0.5-1.0)\n"
-        "- Recycled narratives, opinion pieces, 'experts predict', "
-        "price predictions, vague 'could/may/might' → near 0.0\n"
-        "- Press releases and corporate fluff → near 0.0\n"
-        "- If the same story appears multiple times, only the first matters → "
-        "duplicates get 0.0\n"
-        "- Consider source: Reuters/Bloomberg/SEC filings > CoinDesk/CoinTelegraph > blogs/KOLs\n"
-        "- Earnings beats/misses: score by MAGNITUDE of surprise, not just direction\n"
-        "- Macro news (CPI, FOMC, tariffs): score based on deviation from consensus\n\n"
+        "You are a senior prop trading desk analyst. Your job is NOT sentiment analysis — "
+        "it is to evaluate each article the way a professional trader would: "
+        "identify actionable catalysts, assess what is already priced in, "
+        "and determine if there is a real trade here.\n\n"
+        "For each article, output a score from -1.0 to +1.0 representing TRADE SIGNAL "
+        "STRENGTH, not sentiment.\n\n"
+        "HOW A PRO TRADER READS NEWS:\n"
+        "1. WHAT'S THE CATALYST? — Is this a concrete event (regulatory ruling, hack, "
+        "earnings surprise, Fed decision, major deal) or just commentary/opinion? "
+        "No catalyst = 0.0, regardless of how 'bullish' the tone is.\n"
+        "2. IS IT PRICED IN? — If every outlet has been covering this for days, "
+        "the market already moved. Score near 0.0. Only SURPRISE or FRESH information "
+        "deserves a high score.\n"
+        "3. WHAT'S THE TRADE? — Would you actually put money on this? "
+        "A +0.7 score means 'I would enter a position right now based on this.' "
+        "Reserve high scores for news where you'd bet your own capital.\n"
+        "4. SECOND-ORDER EFFECTS — An AI chip export ban isn't just about NVDA. "
+        "Think about who benefits, who gets hurt, supply chain effects.\n"
+        "5. CONTRARIAN CHECK — When everyone is bearish on something, that's often "
+        "the bottom. Extreme consensus = lower magnitude, not higher.\n\n"
+        "SCORE CALIBRATION:\n"
+        "- |score| 0.7-1.0: I WOULD TRADE THIS NOW — concrete catalyst, surprise factor, "
+        "clear direction. Examples: unexpected ETF approval, exchange hack, "
+        "earnings beat/miss >15%, surprise Fed move, major protocol exploit.\n"
+        "- |score| 0.4-0.6: WORTH WATCHING — real catalyst but partially priced in, "
+        "or catalyst is concrete but expected move is modest. Examples: earnings in-line "
+        "with whisper numbers, anticipated partnership announcement, scheduled upgrade.\n"
+        "- |score| 0.1-0.3: NOISE WITH A KERNEL — minor news, low surprise value, "
+        "or real event but too small to move price >2%.\n"
+        "- 0.0: NO TRADE — opinion pieces, price predictions, recycled narratives, "
+        "'experts say', vague rumors, corporate PR, articles ABOUT price movement "
+        "rather than CAUSING it, duplicate stories. This should be the MOST COMMON score.\n\n"
+        "ANTI-PATTERNS (always score 0.0):\n"
+        "- 'X could reach $Y' / 'analyst predicts' / 'why I'm bullish on'\n"
+        "- Articles that describe price action without explaining what caused it\n"
+        "- Rehashed narratives with a new date ('BTC halving will...')\n"
+        "- Press releases without market-moving substance\n"
+        "- Same story from multiple sources — only the first occurrence matters\n\n"
         f"Articles:\n{articles_text}\n\n"
         "Respond ONLY with a JSON array of numbers in the same order:\n"
-        f"[0.6, -0.3, 0.0, ...]"
+        f"[0.7, -0.4, 0.0, ...]"
     )
 
     try:
@@ -163,7 +193,7 @@ def _score_single_batch(model, articles: list) -> list | None:
 
 
 def score_articles_batch(articles: list, batch_size: int = 50) -> dict:
-    """Scores a list of articles using Gemini 2.0 Flash in batches.
+    """Scores a list of articles using Gemini 2.5 Flash in batches.
 
     Args:
         articles: list of dicts with 'title', 'description', 'title_hash' keys.
@@ -185,7 +215,7 @@ def score_articles_batch(articles: list, batch_size: int = 50) -> dict:
 
     try:
         vertexai.init(project=project_id, location=location)
-        model = GenerativeModel('gemini-2.5-flash-lite')
+        model = GenerativeModel('gemini-2.5-flash')
     except Exception as e:
         log.error(f"Failed to initialize Gemini for article scoring: {e}")
         return {}
@@ -213,7 +243,8 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
                              cache_ttl_minutes: int = 30,
                              headlines_by_symbol: dict = None,
                              archived_articles_by_symbol: dict = None,
-                             news_stats_by_symbol: dict = None) -> dict | None:
+                             news_stats_by_symbol: dict = None,
+                             scored_articles_by_symbol: dict = None) -> dict | None:
     """
     Uses Gemini with Google Search grounding + our RSS/scraper headlines
     to produce a comprehensive news assessment per symbol.
@@ -297,6 +328,20 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
                     f"positive/negative: {stats.get('positive_ratio', 0):.0%}/"
                     f"{stats.get('negative_ratio', 0):.0%}")
 
+            # Add per-article Gemini scores (high-impact articles pre-scored)
+            if scored_articles_by_symbol and sym in scored_articles_by_symbol:
+                scored = scored_articles_by_symbol[sym]
+                if scored:
+                    score_lines = [
+                        f"- [{a['score']:+.2f}] {a['title']}"
+                        for a in scored[:8]
+                    ]
+                    section += (
+                        "\nPre-scored articles (individual Gemini scores, "
+                        "sorted by impact — use these to weigh catalysts):\n"
+                        + "\n".join(score_lines)
+                    )
+
             symbol_sections.append(section)
 
         collected_context = "\n\n".join(symbol_sections)
@@ -354,7 +399,11 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
             ),
         )
 
-        text = response.text.strip()
+        text = response.text.strip() if response.text else ''
+        if not text:
+            log.warning(f"Gemini grounded search returned empty response for "
+                        f"{len(symbols)} symbols: {symbols[:5]}...")
+            return None
         result = _parse_gemini_json(text)
         _validate_gemini_response(result, ['symbol_assessments', 'market_mood'],
                                   'analyze_news_with_search')
@@ -377,7 +426,8 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
 
 def analyze_news_impact(headlines_by_symbol: dict, current_prices: dict,
                         archived_articles_by_symbol: dict = None,
-                        news_stats_by_symbol: dict = None) -> dict | None:
+                        news_stats_by_symbol: dict = None,
+                        scored_articles_by_symbol: dict = None) -> dict | None:
     """
     Uses Vertex AI Gemini to analyze news headlines and assess market impact per symbol.
 
@@ -389,6 +439,9 @@ def analyze_news_impact(headlines_by_symbol: dict, current_prices: dict,
         news_stats_by_symbol: {symbol: {'sentiment_volatility': float, 'positive_ratio': float,
             'negative_ratio': float, 'news_volume': int}}
             Optional pre-computed news statistics per symbol.
+        scored_articles_by_symbol: {symbol: [{'title': str, 'score': float}, ...]}
+            Optional per-article Gemini scores (|score| > 0.3, sorted by abs score).
+            Injected into the prompt so symbol-level assessment can weigh individual catalysts.
 
     Returns:
         dict with 'symbol_assessments' and 'market_mood', or None on failure.
@@ -443,6 +496,20 @@ def analyze_news_impact(headlines_by_symbol: dict, current_prices: dict,
                         f"\n- Sentiment volatility: {stats.get('sentiment_volatility', 0):.3f}"
                     )
 
+            # Add per-article Gemini scores (high-impact articles pre-scored)
+            if scored_articles_by_symbol:
+                scored = scored_articles_by_symbol.get(symbol, [])
+                if scored:
+                    score_lines = [
+                        f"- [{a['score']:+.2f}] {a['title']}"
+                        for a in scored[:8]
+                    ]
+                    section += (
+                        "\n\nPre-scored articles (individual Gemini scores, "
+                        "sorted by impact — use these to weigh catalysts):\n"
+                        + "\n".join(score_lines)
+                    )
+
             symbol_sections.append(section)
 
         headlines_text = "\n\n".join(symbol_sections)
@@ -481,6 +548,9 @@ def analyze_news_impact(headlines_by_symbol: dict, current_prices: dict,
             "articles without body text (headline-only = low trust)\n"
             "- If ONLY Tier 3 sources report something, cap confidence at 0.4\n\n"
             "STEP 3 — CONSENSUS vs DIVERGENCE:\n"
+            "- If pre-scored articles are provided, use their individual scores to gauge consensus.\n"
+            "  A single +0.9 article with several -0.3 articles = divergence, not bullish.\n"
+            "  Multiple articles above +0.5 = strong consensus.\n"
             "- Headlines all agree → confidence boost\n"
             "- Headlines conflict → cap confidence at 0.5 max, set sentiment_divergence=true\n"
             "- Single source with no corroboration → treat with skepticism\n\n"

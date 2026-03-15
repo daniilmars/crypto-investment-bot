@@ -562,22 +562,56 @@ def _is_likely_english(text):
     return non_ascii / len(text) < 0.15
 
 
+def _normalize_title_for_dedup(title: str) -> str:
+    """Normalize a title for fuzzy dedup.
+
+    Strips common prefixes/suffixes, removes source tags, collapses whitespace,
+    and extracts the first N significant words to catch wire story reprints.
+    """
+    import re
+    t = title.lower().strip()
+    # Remove common source prefixes: "Reuters: ...", "AP: ...", "CNBC: ..."
+    t = re.sub(r'^(?:reuters|ap|bloomberg|cnbc|cnn|bbc)\s*[:—–-]\s*', '', t)
+    # Remove trailing source tags: "... - Reuters", "... | CNBC"
+    t = re.sub(r'\s*[-|–—]\s*(?:reuters|ap|bloomberg|cnbc|yahoo finance|marketwatch|google news)\s*$', '', t)
+    # Collapse whitespace and punctuation
+    t = re.sub(r'[^\w\s]', ' ', t)
+    t = re.sub(r'\s+', ' ', t).strip()
+    # Take first 8 significant words (catches same story with different endings)
+    words = t.split()[:8]
+    return ' '.join(words)
+
+
 def _deduplicate_articles(articles):
-    """Removes near-duplicate and non-English headlines."""
-    seen = set()
+    """Removes near-duplicate and non-English headlines.
+
+    Uses normalized title prefixes to catch wire story reprints
+    (e.g., Reuters original + CNBC reprint + Google News summary).
+    """
+    seen_exact = set()
+    seen_normalized = set()
     unique = []
     for article in articles:
         title = article.get('title', '').strip()
         if not title:
             continue
-        key = title.lower()
-        if key in seen:
+        # Exact dedup (fast path)
+        key_exact = title.lower()
+        if key_exact in seen_exact:
             continue
         if not _is_likely_english(title):
             continue
-        seen.add(key)
+        # Fuzzy dedup (catches reprints with slightly different titles)
+        key_norm = _normalize_title_for_dedup(title)
+        if key_norm in seen_normalized:
+            continue
+        seen_exact.add(key_exact)
+        seen_normalized.add(key_norm)
         unique.append(article)
-    log.info(f"Deduplicated {len(articles)} articles to {len(unique)} unique articles.")
+    deduped = len(articles) - len(unique)
+    if deduped > 0:
+        log.info(f"Deduplicated {len(articles)} articles to {len(unique)} "
+                 f"({deduped} duplicates removed, {len(seen_normalized)} unique normalized titles).")
     return unique
 
 
@@ -666,15 +700,19 @@ def _score_with_gemini(articles_with_hashes: list) -> dict:
     return merged
 
 
+_UNKNOWN_TIMESTAMP_WEIGHT = 0.3
+
+
 def _compute_freshness_weight(published_at_str, half_life_hours=6):
     """Compute exponential decay weight based on article age.
 
     weight = exp(-age_hours * ln(2) / half_life)
     0h → 1.0, 6h → 0.5, 12h → 0.25, 24h → 0.06 (with default half_life=6).
-    Articles with unparseable timestamps get weight 1.0 (fail-safe).
+    Articles with missing/unparseable timestamps get reduced weight (0.3)
+    to avoid stale articles inflating sentiment.
     """
     if not published_at_str or half_life_hours <= 0:
-        return 1.0
+        return _UNKNOWN_TIMESTAMP_WEIGHT
     try:
         from email.utils import parsedate_to_datetime
         pub_dt = parsedate_to_datetime(published_at_str)
@@ -682,10 +720,12 @@ def _compute_freshness_weight(published_at_str, half_life_hours=6):
             pub_dt = pub_dt.replace(tzinfo=timezone.utc)
         age_hours = (datetime.now(timezone.utc) - pub_dt).total_seconds() / 3600.0
         if age_hours < 0:
-            return 1.0
+            # Future timestamp — likely timezone error; treat with suspicion
+            return 0.5
         return math.exp(-age_hours * math.log(2) / half_life_hours)
     except Exception:
-        return 1.0
+        log.debug(f"Unparseable article timestamp: {published_at_str!r}")
+        return _UNKNOWN_TIMESTAMP_WEIGHT
 
 
 def collect_news_sentiment(symbols):
@@ -832,6 +872,11 @@ def collect_news_sentiment(symbols):
         negative_count = sum(1 for s in scores if s < -0.05)
         total = len(scores)
 
+        # Top-scored articles (|score| > 0.3) for downstream Gemini prompt
+        top_scored = sorted(
+            [a for a in articles if abs(a['score']) > 0.3],
+            key=lambda a: abs(a['score']), reverse=True)[:10]
+
         per_symbol[symbol] = {
             'avg_sentiment_score': avg_score,
             'news_volume': total,
@@ -839,6 +884,14 @@ def collect_news_sentiment(symbols):
             'positive_buzz_ratio': positive_count / total,
             'negative_buzz_ratio': negative_count / total,
             'headlines': [a['title'] for a in articles[:10]],
+            'articles': [
+                {'title': a['title'], 'score': a['score']}
+                for a in articles
+            ],
+            'top_scored_articles': [
+                {'title': a['title'], 'score': a['score']}
+                for a in top_scored
+            ],
         }
 
         db_rows.append({

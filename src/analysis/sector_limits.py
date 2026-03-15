@@ -111,6 +111,11 @@ def check_sector_limit(symbol: str, open_positions: list,
 
     _ensure_loaded()
 
+    # --- Asset class limit (cross-group concentration check) ---
+    ac_result = _check_asset_class_limit(symbol, open_positions)
+    if not ac_result[0]:
+        return ac_result
+
     group = get_symbol_group(symbol)
     if group is None:
         # Ungrouped symbol — use default limit
@@ -137,6 +142,96 @@ def check_sector_limit(symbol: str, open_positions: list,
                        f"{group_count}/{limit} positions open")
 
     return True, ""
+
+
+def _check_asset_class_limit(symbol: str, open_positions: list) -> tuple:
+    """Check cross-group asset class concentration limit.
+
+    Returns (allowed: bool, reason: str).
+    """
+    if not _sector_config:
+        return True, ""
+
+    ac_limits = _sector_config.get('asset_class_limits', {})
+    if not ac_limits:
+        return True, ""
+
+    # Determine asset class of the symbol being checked
+    # Crypto groups are the first 9, but we use a simpler heuristic:
+    # if the symbol has an asset_type from positions, use that;
+    # otherwise infer from sector group names
+    asset_class = _infer_asset_class(symbol)
+    if not asset_class:
+        return True, ""
+
+    ac_cfg = ac_limits.get(asset_class, {})
+    max_pos = ac_cfg.get('max_positions')
+    if max_pos is None:
+        return True, ""
+
+    # Count open positions in same asset class
+    class_count = sum(
+        1 for p in open_positions
+        if p.get('status') == 'OPEN' and _infer_asset_class(p.get('symbol', '')) == asset_class
+    )
+
+    if class_count >= max_pos:
+        return False, (f"Asset class '{asset_class}' at limit: "
+                       f"{class_count}/{max_pos} positions open")
+
+    return True, ""
+
+
+# Crypto sector group names (used to infer asset class from group)
+_CRYPTO_GROUPS = frozenset([
+    'l1_major', 'l1_legacy', 'defi', 'l2_scaling',
+    'ai_data', 'gaming', 'meme', 'infra', 'privacy',
+])
+
+
+def _infer_asset_class(symbol: str) -> str | None:
+    """Infer asset class ('crypto' or 'stock') from the symbol's sector group."""
+    group = get_symbol_group(symbol)
+    if group is None:
+        return None
+    if group in _CRYPTO_GROUPS:
+        return 'crypto'
+    return 'stock'
+
+
+def get_asset_class_concentration(symbol: str, open_positions: list) -> float:
+    """Returns a position size multiplier (0.0 to 1.0) based on concentration.
+
+    When concentration_scaling is enabled for the asset class, returns a
+    reduced multiplier as the number of positions approaches the limit.
+    """
+    _ensure_loaded()
+    if not _sector_config:
+        return 1.0
+
+    ac_limits = _sector_config.get('asset_class_limits', {})
+    asset_class = _infer_asset_class(symbol)
+    if not asset_class:
+        return 1.0
+
+    ac_cfg = ac_limits.get(asset_class, {})
+    if not ac_cfg.get('concentration_scaling', False):
+        return 1.0
+
+    max_pos = ac_cfg.get('max_positions')
+    if not max_pos or max_pos <= 1:
+        return 1.0
+
+    class_count = sum(
+        1 for p in open_positions
+        if p.get('status') == 'OPEN' and _infer_asset_class(p.get('symbol', '')) == asset_class
+    )
+
+    # Linear scale-down: at 0 positions → 1.0, at max-1 → 1/max
+    # Example with max=4: 0→1.0, 1→0.75, 2→0.50, 3→0.25
+    remaining_slots = max_pos - class_count
+    multiplier = remaining_slots / max_pos
+    return max(0.1, multiplier)  # Floor at 10% to avoid near-zero positions
 
 
 def get_sector_exposure_summary(open_positions: list) -> dict:

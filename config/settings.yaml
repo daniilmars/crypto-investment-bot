@@ -113,6 +113,34 @@ settings:
   min_trade_notional: 5.00
   max_concurrent_positions: 5
 
+  # -- Daily SMA Trend Filter --
+  # Use daily klines (not 15-min snapshots) for SMA trend filter on crypto.
+  trend_filter:
+    use_daily_klines: true
+    daily_sma_period: 20
+    kline_cache_minutes: 60
+
+  # -- ATR-Based Dynamic SL/TP --
+  # Per-symbol SL/TP computed from ATR. Falls back to fixed values when disabled.
+  dynamic_risk:
+    enabled: true
+    atr_period: 14
+    sl_atr_multiplier: 1.5   # SL = ATR% × 1.5
+    tp_atr_multiplier: 3.0   # TP = ATR% × 3.0
+    sl_floor: 0.02           # min 2%
+    sl_ceiling: 0.07         # max 7%
+    tp_floor: 0.04           # min 4%
+    tp_ceiling: 0.15         # max 15%
+
+  # -- Limit Orders with Pullback Entry --
+  # For normal-confidence signals, place a limit buy below current price.
+  limit_orders:
+    enabled: true
+    pullback_pct: 0.005           # 0.5% below current price
+    ttl_cycles: 8                 # expire after 8 cycles (2h at 15-min intervals)
+    market_order_threshold: 0.8   # high-confidence → market order
+    max_pending_orders: 3
+
   # -- Trailing Stop Settings --
   trailing_stop_enabled: true
   trailing_stop_activation: 0.02    # activate after 2% gain
@@ -137,8 +165,10 @@ settings:
       enabled: true
     # Use Gemini 2.0 Flash for per-article sentiment scoring (replaces VADER, DB-cached)
     use_gemini_scoring: true
-    # Cache Gemini responses to halve API calls (~96/day -> ~48/day)
-    cache_ttl_minutes: 30
+    # Cache Gemini grounded search per batch (15 min = fresh every cycle)
+    # With per-sector batches: ~6 batches × 96 cycles = ~576 calls/day
+    # (well within 1,500/day free tier)
+    cache_ttl_minutes: 15
     # Freshness decay half-life: articles older than this (hours) get half weight
     freshness_half_life_hours: 6
     # Volume spike: trigger Gemini if current_volume > previous_volume * multiplier

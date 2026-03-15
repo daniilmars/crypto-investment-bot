@@ -12,7 +12,7 @@ Gate chain:
 from datetime import datetime, timezone
 
 from src.analysis.event_calendar import check_event_gate
-from src.analysis.sector_limits import check_sector_limit
+from src.analysis.sector_limits import check_sector_limit, get_asset_class_concentration
 from src.database import clear_stoploss_cooldown
 from src.logger import log
 from src.orchestration import bot_state
@@ -41,14 +41,30 @@ def check_buy_gates(
         return False, 0.0, reason
 
     # 2. Duplicate position (use .get for status — Alpaca positions may lack it)
+    #    Also block if there's a PENDING limit order for the same symbol
     if any(p['symbol'] == symbol and p.get('status', 'OPEN') == 'OPEN'
            for p in open_positions):
         reason = f"{prefix}Skipping BUY for {symbol}: Position already open."
         log.info(reason)
         return False, 0.0, reason
 
-    # 3. Max concurrent positions
-    if len(open_positions) >= max_positions:
+    try:
+        from src.database import get_pending_orders
+        strategy = 'auto' if label == 'AUTO' else 'manual'
+        pending = get_pending_orders(asset_type=asset_type, trading_strategy=strategy)
+        if any(p['symbol'] == symbol for p in pending):
+            reason = f"{prefix}Skipping BUY for {symbol}: Pending limit order exists."
+            log.info(reason)
+            return False, 0.0, reason
+    except Exception:
+        pass  # Non-critical — continue with other gates
+
+    # 3. Max concurrent positions (count PENDING orders too)
+    try:
+        pending_count = len(pending) if 'pending' in dir() else 0
+    except Exception:
+        pending_count = 0
+    if len(open_positions) + pending_count >= max_positions:
         reason = (f"{prefix}Skipping BUY for {symbol}: Max concurrent positions "
                   f"({max_positions}) reached.")
         log.info(reason)
@@ -71,10 +87,16 @@ def check_buy_gates(
         log.info(reason)
         return False, 0.0, reason
 
+    # 6. Concentration scaling (reduce size as asset class fills up)
+    conc_mult = get_asset_class_concentration(symbol, open_positions)
+
     # Calculate final size multiplier
-    size_mult = macro_multiplier * (ev_mult if ev_action == 'reduce' else 1.0)
+    size_mult = macro_multiplier * (ev_mult if ev_action == 'reduce' else 1.0) * conc_mult
     if ev_action == 'reduce':
         log.info(f"{prefix}Reducing BUY for {symbol}: {ev_reason} (mult={ev_mult})")
+    if conc_mult < 1.0:
+        log.info(f"{prefix}Concentration scaling for {symbol}: {conc_mult:.2f}x "
+                 f"(asset class filling up)")
 
     return True, size_mult, ''
 

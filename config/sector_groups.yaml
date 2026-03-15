@@ -6,6 +6,19 @@
 
 default_max_positions_per_group: 2
 
+# Cross-group asset class limits — caps TOTAL positions per asset class
+# regardless of how many individual sector groups allow them.
+# Prevents 2+2+2+2 = 8 correlated crypto longs.
+asset_class_limits:
+  crypto:
+    max_positions: 4
+    # Reduce new position size as concentration grows (linear scale-down)
+    # At 3/4 crypto positions, new BUY gets 50% size; at 2/4 gets 75%
+    concentration_scaling: true
+  stock:
+    max_positions: 6
+    concentration_scaling: false
+
 groups:
   # --- Crypto ---
   l1_major:

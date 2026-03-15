@@ -15,6 +15,26 @@ def generate_signal(symbol, market_data, news_sentiment_data=None,
                           rsi_buy_veto_threshold, rsi_sell_veto_threshold.
     """
     if signal_mode == "sentiment":
+        # Check if Gemini data is actually available; if not, fall back
+        # to scoring mode so we don't silently HOLD everything when
+        # Vertex AI is down.
+        has_gemini = (news_sentiment_data
+                      and news_sentiment_data.get('gemini_assessment')
+                      and news_sentiment_data['gemini_assessment'].get('confidence') is not None)
+        if not has_gemini:
+            log.info(f"[{symbol}] No Gemini assessment available — "
+                     f"falling back to scoring mode.")
+            return _generate_scoring_signal(
+                symbol=symbol,
+                market_data=market_data,
+                rsi_overbought_threshold=rsi_overbought_threshold,
+                rsi_oversold_threshold=rsi_oversold_threshold,
+                historical_prices=historical_prices,
+                news_sentiment_data=news_sentiment_data,
+                volume_data=volume_data,
+                order_book_data=order_book_data,
+                signal_threshold=signal_threshold,
+            )
         return _generate_sentiment_signal(
             symbol=symbol,
             market_data=market_data,

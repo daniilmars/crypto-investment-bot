@@ -52,6 +52,8 @@ async def process_trade_signal(
     is_auto: bool = False,
     pdt_status: dict | None = None,
     current_prices: dict | None = None,
+    dynamic_sl_pct: float | None = None,
+    dynamic_tp_pct: float | None = None,
 ) -> dict | None:
     """Unified signal processing pipeline: cooldowns → gates → execute.
 
@@ -113,7 +115,9 @@ async def process_trade_signal(
                 symbol, signal, current_price, balance,
                 risk_pct, size_mult,
                 asset_type=asset_type, trading_strategy=trading_strategy,
-                broker=broker, label=label)
+                broker=broker, label=label,
+                dynamic_sl_pct=dynamic_sl_pct,
+                dynamic_tp_pct=dynamic_tp_pct)
             _set_cooldown(symbol, "BUY", signal_cooldown_hours, is_auto)
             return result
         else:
@@ -227,6 +231,33 @@ async def execute_confirmed_signal(signal: dict) -> dict:
     return order_result or {}
 
 
+def _should_use_limit_order(signal: dict, config: dict) -> tuple[bool, float]:
+    """Decide whether to use a limit order based on signal strength.
+
+    Returns (use_limit, pullback_pct).
+    """
+    limit_cfg = config.get('settings', {}).get('limit_orders', {})
+    if not limit_cfg.get('enabled', False):
+        return (False, 0.0)
+
+    threshold = limit_cfg.get('market_order_threshold', 0.8)
+    signal_strength = signal.get('signal_strength', 0)
+
+    # High-confidence signals get immediate market orders
+    if signal_strength >= threshold:
+        return (False, 0.0)
+
+    # Check max pending orders
+    from src.database import get_pending_orders
+    pending = get_pending_orders(asset_type=signal.get('asset_type', 'crypto'))
+    max_pending = limit_cfg.get('max_pending_orders', 3)
+    if len(pending) >= max_pending:
+        return (False, 0.0)
+
+    pullback = limit_cfg.get('pullback_pct', 0.005)
+    return (True, pullback)
+
+
 async def execute_buy(
     symbol: str,
     signal: dict,
@@ -239,6 +270,8 @@ async def execute_buy(
     trading_strategy: str = 'manual',
     broker: str | None = None,
     label: str = '',
+    dynamic_sl_pct: float | None = None,
+    dynamic_tp_pct: float | None = None,
 ):
     """Calculate quantity and execute a BUY signal (or send for confirmation).
 
@@ -265,12 +298,32 @@ async def execute_buy(
             log.warning(f"{prefix}Skipping BUY for {symbol}: notional ${quantity * current_price:.2f} below ${_min_notional:.2f} minimum.")
             return None
 
+    # --- Limit order decision (crypto only, not for stocks/alpaca) ---
+    use_limit = False
+    pullback_pct = 0.0
+    if asset_type == 'crypto' and broker is None:
+        use_limit, pullback_pct = _should_use_limit_order(signal, app_config)
+
+    # Build dynamic risk kwargs
+    dyn_kw = {}
+    if dynamic_sl_pct is not None:
+        dyn_kw['dynamic_sl_pct'] = dynamic_sl_pct
+    if dynamic_tp_pct is not None:
+        dyn_kw['dynamic_tp_pct'] = dynamic_tp_pct
+
     if is_auto:
         log.info(f"{prefix}Executing BUY {quantity:.6f} {symbol} "
                  f"(size_mult={size_mult:.2f})")
         order_kw = {'trading_strategy': 'auto'}
         if asset_type == 'stock':
             order_kw['asset_type'] = 'stock'
+        order_kw.update(dyn_kw)
+
+        if use_limit:
+            return _place_limit_buy(
+                symbol, quantity, current_price, pullback_pct,
+                asset_type=asset_type, **order_kw)
+
         return place_order(symbol, "BUY", quantity, current_price, **order_kw)
 
     # Manual trading
@@ -298,16 +351,60 @@ async def execute_buy(
         await send_signal_for_confirmation(signal)
         return None
     else:
+        if use_limit:
+            log.info(f"{prefix}Placing limit BUY {quantity:.6f} {symbol} "
+                     f"({pullback_pct:.1%} pullback).")
+            order_kw = {}
+            if asset_type == 'stock':
+                order_kw['asset_type'] = 'stock'
+            order_kw.update(dyn_kw)
+            result = _place_limit_buy(
+                symbol, quantity, current_price, pullback_pct,
+                asset_type=asset_type, **order_kw)
+            if result:
+                signal['order_result'] = result
+                signal['order_type'] = 'LIMIT'
+            await send_telegram_alert(signal)
+            return result
+
         log.info(f"{prefix}Executing trade: BUY {quantity:.6f} {symbol} "
                  f"(risk={risk_pct:.4f}, size_mult={size_mult:.2f}).")
         order_kw = {}
         if asset_type == 'stock':
             order_kw['asset_type'] = 'stock'
+        order_kw.update(dyn_kw)
         order_result = place_order(symbol, "BUY", quantity, current_price, **order_kw)
         if order_result.get('status') == 'FILLED':
             signal['order_result'] = order_result
         await send_telegram_alert(signal)
         return order_result
+
+
+def _place_limit_buy(
+    symbol: str,
+    quantity: float,
+    current_price: float,
+    pullback_pct: float,
+    *,
+    asset_type: str = 'crypto',
+    trading_strategy: str = 'manual',
+    dynamic_sl_pct: float | None = None,
+    dynamic_tp_pct: float | None = None,
+) -> dict | None:
+    """Place a PENDING limit buy order in the DB."""
+    limit_price = current_price * (1 - pullback_pct)
+
+    result = place_order(
+        symbol, "BUY", quantity, limit_price,
+        order_type="LIMIT",
+        asset_type=asset_type,
+        trading_strategy=trading_strategy,
+        dynamic_sl_pct=dynamic_sl_pct,
+        dynamic_tp_pct=dynamic_tp_pct,
+    )
+    log.info(f"Limit BUY placed for {symbol}: limit=${limit_price:.4f}, "
+             f"pullback={pullback_pct:.1%}")
+    return result
 
 
 async def execute_sell(

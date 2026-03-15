@@ -42,12 +42,16 @@ async def collect_and_analyze_news(
     headlines_by_symbol = {}
     archived_articles_by_symbol = {}
     news_stats_by_symbol = {}
+    scored_articles_by_symbol = {}
     symbols_with_news = [sym for sym in all_symbols if sym in news_per_symbol]
 
     if symbols_with_news:
         for sym in symbols_with_news:
             sym_data = news_per_symbol.get(sym, {})
             headlines_by_symbol[sym] = sym_data.get('headlines', [])
+            top_scored = sym_data.get('top_scored_articles', [])
+            if top_scored:
+                scored_articles_by_symbol[sym] = top_scored
 
         for sym in symbols_with_news:
             try:
@@ -61,16 +65,35 @@ async def collect_and_analyze_news(
             symbols_with_news, news_per_symbol)
 
     # Step 3: Get Gemini assessment — try grounded search first (free tier)
+    # Batch by asset class for focused prompts (1,500 free calls/day budget).
     if use_grounded_search:
-        cache_ttl = news_config.get('cache_ttl_minutes', 30)
-        gemini_assessments = await asyncio.to_thread(
-            analyze_news_with_search,
-            all_symbols, current_prices_dict,
-            cache_ttl_minutes=cache_ttl,
-            headlines_by_symbol=headlines_by_symbol or None,
-            archived_articles_by_symbol=archived_articles_by_symbol or None,
-            news_stats_by_symbol=news_stats_by_symbol or None,
-        )
+        cache_ttl = news_config.get('cache_ttl_minutes', 15)
+        batches = _split_symbols_into_batches(all_symbols, settings)
+
+        # Limit concurrency to avoid Gemini rate limits
+        sem = asyncio.Semaphore(4)
+
+        async def _call_batch(batch):
+            async with sem:
+                return await asyncio.to_thread(
+                    analyze_news_with_search,
+                    batch, current_prices_dict,
+                    cache_ttl_minutes=cache_ttl,
+                    headlines_by_symbol={s: headlines_by_symbol[s]
+                                         for s in batch if s in headlines_by_symbol} or None,
+                    archived_articles_by_symbol={s: archived_articles_by_symbol[s]
+                                                 for s in batch if s in archived_articles_by_symbol} or None,
+                    news_stats_by_symbol={s: news_stats_by_symbol[s]
+                                          for s in batch if s in news_stats_by_symbol} or None,
+                    scored_articles_by_symbol={s: scored_articles_by_symbol[s]
+                                               for s in batch if s in scored_articles_by_symbol} or None,
+                )
+
+        batch_results = await asyncio.gather(
+            *[_call_batch(b) for b in batches])
+
+        # Merge batch results into single gemini_assessments dict
+        gemini_assessments = _merge_batch_results(batch_results)
         if gemini_assessments is None:
             log.info("Grounded search unavailable — falling back to "
                      "analyze_news_impact.")
@@ -89,6 +112,7 @@ async def collect_and_analyze_news(
             headlines_by_symbol, current_prices_for_news,
             archived_articles_by_symbol=archived_articles_by_symbol or None,
             news_stats_by_symbol=news_stats_by_symbol or None,
+            scored_articles_by_symbol=scored_articles_by_symbol or None,
         )
 
     # Send news alerts for triggered symbols (regardless of assessment path)
@@ -130,6 +154,89 @@ async def run_proactive_market_alerts(
             await send_market_event_alert(alert)
     except Exception as e:
         log.warning(f"Market alerts failed: {e}")
+
+
+def _split_symbols_into_batches(
+    all_symbols: list, settings: dict
+) -> list[list[str]]:
+    """Split symbols into focused batches for grounded search.
+
+    Groups: crypto (by sector), US stocks, EU stocks, Asia stocks.
+    Each batch gets its own grounded search call for better prompt focus.
+    Roughly 4-8 batches → 384-768 calls/day (well within 1,500 free tier).
+    """
+    from src.analysis.sector_limits import get_symbol_group, _ensure_loaded, _CRYPTO_GROUPS
+    _ensure_loaded()
+
+    crypto_syms = []
+    us_stock_syms = []
+    eu_stock_syms = []
+    asia_stock_syms = []
+    other_syms = []
+
+    # EU/Asia region groups from sector_groups.yaml
+    eu_groups = frozenset(['uk', 'germany', 'france', 'netherlands_swiss',
+                           'southern', 'nordics'])
+    asia_groups = frozenset(['japan', 'hong_kong', 'korea_taiwan',
+                             'australia_india_sg'])
+
+    for sym in all_symbols:
+        group = get_symbol_group(sym)
+        if group is None:
+            other_syms.append(sym)
+        elif group in _CRYPTO_GROUPS:
+            crypto_syms.append(sym)
+        elif group in eu_groups:
+            eu_stock_syms.append(sym)
+        elif group in asia_groups:
+            asia_stock_syms.append(sym)
+        else:
+            us_stock_syms.append(sym)
+
+    batches = []
+
+    # Max symbols per batch — keeps Gemini responses reliable JSON
+    # 25 per batch × ~14 batches × 96 cycles = ~1,344 calls/day (within 1,500 free)
+    max_batch = 25
+
+    for sym_list in [crypto_syms, us_stock_syms, eu_stock_syms,
+                     asia_stock_syms, other_syms]:
+        for i in range(0, len(sym_list), max_batch):
+            chunk = sym_list[i:i + max_batch]
+            if chunk:
+                batches.append(chunk)
+
+    log.info(f"Split {len(all_symbols)} symbols into {len(batches)} "
+             f"grounded search batches: {[len(b) for b in batches]}")
+    return batches
+
+
+def _merge_batch_results(batch_results: list) -> dict | None:
+    """Merge multiple grounded search results into a single assessment dict."""
+    merged_assessments = {}
+    market_moods = []
+    cross_themes = []
+
+    for result in batch_results:
+        if result is None:
+            continue
+        sa = result.get('symbol_assessments', {})
+        merged_assessments.update(sa)
+        mood = result.get('market_mood')
+        if mood:
+            market_moods.append(mood)
+        theme = result.get('cross_asset_theme')
+        if theme:
+            cross_themes.append(theme)
+
+    if not merged_assessments:
+        return None
+
+    return {
+        'symbol_assessments': merged_assessments,
+        'market_mood': '; '.join(market_moods) if market_moods else 'mixed',
+        'cross_asset_theme': '; '.join(cross_themes) if cross_themes else None,
+    }
 
 
 def _build_news_stats(symbols_with_news: list, news_per_symbol: dict) -> dict:
