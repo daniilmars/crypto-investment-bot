@@ -304,27 +304,20 @@ async def execute_buy(
     if asset_type == 'crypto' and broker is None:
         use_limit, pullback_pct = _should_use_limit_order(signal, app_config)
 
-    # Build dynamic risk kwargs
-    dyn_kw = {}
-    if dynamic_sl_pct is not None:
-        dyn_kw['dynamic_sl_pct'] = dynamic_sl_pct
-    if dynamic_tp_pct is not None:
-        dyn_kw['dynamic_tp_pct'] = dynamic_tp_pct
-
     if is_auto:
         log.info(f"{prefix}Executing BUY {quantity:.6f} {symbol} "
                  f"(size_mult={size_mult:.2f})")
-        order_kw = {'trading_strategy': 'auto'}
-        if asset_type == 'stock':
-            order_kw['asset_type'] = 'stock'
-        order_kw.update(dyn_kw)
 
         if use_limit:
             return _place_limit_buy(
                 symbol, quantity, current_price, pullback_pct,
-                asset_type=asset_type, **order_kw)
+                asset_type=asset_type, trading_strategy='auto',
+                dynamic_sl_pct=dynamic_sl_pct, dynamic_tp_pct=dynamic_tp_pct)
 
-        return place_order(symbol, "BUY", quantity, current_price, **order_kw)
+        return place_order(symbol, "BUY", quantity, current_price,
+                           asset_type=asset_type, trading_strategy='auto',
+                           dynamic_sl_pct=dynamic_sl_pct,
+                           dynamic_tp_pct=dynamic_tp_pct)
 
     # Manual trading
     signal['quantity'] = quantity
@@ -354,13 +347,10 @@ async def execute_buy(
         if use_limit:
             log.info(f"{prefix}Placing limit BUY {quantity:.6f} {symbol} "
                      f"({pullback_pct:.1%} pullback).")
-            order_kw = {}
-            if asset_type == 'stock':
-                order_kw['asset_type'] = 'stock'
-            order_kw.update(dyn_kw)
             result = _place_limit_buy(
                 symbol, quantity, current_price, pullback_pct,
-                asset_type=asset_type, **order_kw)
+                asset_type=asset_type,
+                dynamic_sl_pct=dynamic_sl_pct, dynamic_tp_pct=dynamic_tp_pct)
             if result:
                 signal['order_result'] = result
                 signal['order_type'] = 'LIMIT'
@@ -369,11 +359,10 @@ async def execute_buy(
 
         log.info(f"{prefix}Executing trade: BUY {quantity:.6f} {symbol} "
                  f"(risk={risk_pct:.4f}, size_mult={size_mult:.2f}).")
-        order_kw = {}
-        if asset_type == 'stock':
-            order_kw['asset_type'] = 'stock'
-        order_kw.update(dyn_kw)
-        order_result = place_order(symbol, "BUY", quantity, current_price, **order_kw)
+        order_result = place_order(symbol, "BUY", quantity, current_price,
+                                   asset_type=asset_type,
+                                   dynamic_sl_pct=dynamic_sl_pct,
+                                   dynamic_tp_pct=dynamic_tp_pct)
         if order_result.get('status') == 'FILLED':
             signal['order_result'] = order_result
         await send_telegram_alert(signal)
