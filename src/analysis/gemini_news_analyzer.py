@@ -430,20 +430,30 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
             "- Include ALL requested symbols. When in doubt, score LOWER."
         )
 
-        response = _call_with_retry(
-            client.models.generate_content,
-            model="gemini-2.5-flash-lite",
-            contents=prompt,
-            config=GenerateContentConfig(
-                tools=[Tool(google_search=GoogleSearch())],
-                temperature=0.2,
-            ),
-        )
-
-        text = response.text.strip() if response.text else ''
+        _EMPTY_RETRIES = 5
+        text = ''
+        for attempt in range(_EMPTY_RETRIES):
+            response = _call_with_retry(
+                client.models.generate_content,
+                model="gemini-2.5-flash-lite",
+                contents=prompt,
+                config=GenerateContentConfig(
+                    tools=[Tool(google_search=GoogleSearch())],
+                    temperature=0.2,
+                ),
+            )
+            text = response.text.strip() if response.text else ''
+            if text:
+                break
+            log.warning(f"Gemini grounded search returned empty response "
+                        f"(attempt {attempt + 1}/{_EMPTY_RETRIES}) "
+                        f"for {len(symbols)} symbols")
+            if attempt < _EMPTY_RETRIES - 1:
+                time.sleep(3 * (attempt + 1))
         if not text:
-            log.warning(f"Gemini grounded search returned empty response for "
-                        f"{len(symbols)} symbols: {symbols[:5]}...")
+            log.error(f"Gemini grounded search returned empty after "
+                      f"{_EMPTY_RETRIES} attempts for "
+                      f"{len(symbols)} symbols: {symbols[:5]}...")
             return None
         result = _parse_gemini_json(text)
         _validate_gemini_response(result, ['symbol_assessments', 'market_mood'],
