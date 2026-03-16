@@ -7,7 +7,6 @@ These scores modulate signal engine thresholds: bullish sectors get easier
 BUY triggers, bearish sectors get harder ones.
 """
 
-import json
 import os
 import statistics
 import warnings
@@ -33,7 +32,6 @@ def run_sector_review() -> dict | None:
         return None
 
     try:
-        from src.analysis.sector_limits import _CRYPTO_GROUPS
         sector_groups = _load_all_sector_groups()
         if not sector_groups:
             log.warning("No sector groups loaded — skipping sector review.")

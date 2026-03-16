@@ -14,15 +14,14 @@ Usage:
 
 import itertools
 import statistics
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from src.database import (
-    get_all_trades, get_price_history_for_trade, get_db_connection,
+    get_price_history_for_trade, get_db_connection,
     release_db_connection, _cursor,
 )
 from src.logger import log
 
-import pandas as pd
 import psycopg2
 
 
