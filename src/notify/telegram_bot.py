@@ -256,8 +256,10 @@ async def _handle_signal_callback(update: Update, context: ContextTypes.DEFAULT_
             message += f"💵 *Quantity:* {_fmt_qty(quantity, asset_type)} {symbol}\n"
         if order_result:
             oco = order_result.get('oco')
-            if oco:
+            if oco and 'take_profit' in oco:
                 message += f"🎯 *TP:* ${oco['take_profit']:,.2f} | *SL:* ${oco['stop_loss']:,.2f}\n"
+            elif oco and 'stop_loss' in oco:
+                message += f"🛡️ *SL:* ${oco['stop_loss']:,.2f} (fallback — no TP bracket)\n"
             pnl = order_result.get('pnl')
             if pnl is not None:
                 message += f"*PnL:* ${pnl:,.2f}\n"
@@ -381,9 +383,11 @@ async def send_telegram_alert(signal: dict):
         if pnl is not None:
             message += f"\n*PnL:* ${pnl:,.2f}"
         oco = order_result.get('oco')
-        if oco:
+        if oco and 'take_profit' in oco:
             message += (f"\n*OCO Bracket:* TP=${oco['take_profit']:,.2f} / "
                         f"SL=${oco['stop_loss']:,.2f}")
+        elif oco and 'stop_loss' in oco:
+            message += f"\n*Fallback SL:* ${oco['stop_loss']:,.2f}"
 
     await send_telegram_message(bot, CHAT_ID, message)
 

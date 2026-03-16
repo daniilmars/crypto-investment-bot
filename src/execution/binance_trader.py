@@ -590,10 +590,12 @@ def _place_oco_bracket(symbol, entry_price, quantity, sl_pct=None, tp_pct=None):
         symbol=symbol,
         side='SELL',
         quantity=quantity,
-        price=str(take_profit_price),
-        stopPrice=str(stop_price),
-        stopLimitPrice=str(stop_limit_price),
-        stopLimitTimeInForce='GTC',
+        aboveType='LIMIT_MAKER',
+        abovePrice=str(take_profit_price),
+        belowType='STOP_LOSS_LIMIT',
+        belowPrice=str(stop_limit_price),
+        belowStopPrice=str(stop_price),
+        belowTimeInForce='GTC',
     )
     log.info(f"OCO bracket placed: orderListId={oco.get('orderListId')}")
     return {

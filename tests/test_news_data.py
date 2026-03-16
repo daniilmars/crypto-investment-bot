@@ -16,7 +16,7 @@ class TestRSSFeedConfig:
     """Validates the RSS_FEEDS list structure and category distribution."""
 
     def test_total_feed_count(self):
-        assert len(RSS_FEEDS) == 113
+        assert len(RSS_FEEDS) == 95
 
     def test_all_feeds_have_required_keys(self):
         for feed in RSS_FEEDS:
@@ -39,7 +39,7 @@ class TestRSSFeedConfig:
 
     def test_original_feeds_preserved(self):
         categories = {f['category'] for f in RSS_FEEDS}
-        for expected in ('financial', 'crypto', 'tech', 'wire', 'european'):
+        for expected in ('financial', 'crypto', 'tech', 'european'):
             assert expected in categories, f"Missing original category: {expected}"
 
     def test_no_duplicate_urls(self):
@@ -48,7 +48,7 @@ class TestRSSFeedConfig:
 
     def test_regulatory_feed_count(self):
         reg_feeds = [f for f in RSS_FEEDS if f['category'] == 'regulatory']
-        assert len(reg_feeds) == 17
+        assert len(reg_feeds) == 11
 
     def test_sector_feed_count(self):
         sector_feeds = [f for f in RSS_FEEDS if f['category'] == 'sector']
@@ -56,7 +56,7 @@ class TestRSSFeedConfig:
 
     def test_kol_feed_count(self):
         kol_feeds = [f for f in RSS_FEEDS if f['category'] == 'kol']
-        assert len(kol_feeds) == 4
+        assert len(kol_feeds) == 3
 
     def test_ipo_feed_count(self):
         ipo_feeds = [f for f in RSS_FEEDS if f['category'] == 'ipo']
@@ -64,15 +64,15 @@ class TestRSSFeedConfig:
 
     def test_asia_feed_count(self):
         asia_feeds = [f for f in RSS_FEEDS if f['category'] == 'asia']
-        assert len(asia_feeds) == 18
+        assert len(asia_feeds) == 11
 
     def test_european_feed_count(self):
         eu_feeds = [f for f in RSS_FEEDS if f['category'] == 'european']
-        assert len(eu_feeds) == 8
+        assert len(eu_feeds) == 6
 
     def test_all_categories_present(self):
         categories = {f['category'] for f in RSS_FEEDS}
-        expected = {'financial', 'european', 'crypto', 'tech', 'wire',
+        expected = {'financial', 'european', 'crypto', 'tech',
                     'press_release', 'google_news', 'regulatory', 'sector', 'kol', 'ipo', 'asia',
                     'ai', 'ai_research'}
         assert categories == expected

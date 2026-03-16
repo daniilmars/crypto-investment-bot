@@ -223,7 +223,6 @@ RSS_FEEDS = [
     {'url': 'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10001147', 'category': 'financial'},
     {'url': 'https://www.ft.com/rss/home', 'category': 'financial'},
     {'url': 'https://feeds.a.dj.com/rss/RSSMarketsMain.xml', 'category': 'financial'},
-    {'url': 'https://www.handelsblatt.com/contentexport/feed/', 'category': 'european'},
     {'url': 'https://www.faz.net/rss/aktuell/finanzen/', 'category': 'european'},
     {'url': 'https://feeds.bbci.co.uk/news/business/rss.xml', 'category': 'european'},
     {'url': 'https://www.cityam.com/feed/', 'category': 'european'},
@@ -232,7 +231,6 @@ RSS_FEEDS = [
     {'url': 'https://www.theblock.co/rss.xml', 'category': 'crypto'},
     {'url': 'https://feeds.arstechnica.com/arstechnica/technology-lab', 'category': 'tech'},
     {'url': 'https://www.wired.com/feed/category/business/latest/rss', 'category': 'tech'},
-    {'url': 'https://apnews.com/business.rss', 'category': 'wire'},
     {'url': 'https://feeds.marketwatch.com/marketwatch/topstories/', 'category': 'financial'},
     # Press release wire feeds (origin point of corporate news)
     {'url': 'https://www.globenewswire.com/RssFeed/subjectcode/01-MNA/feedTitle/GlobeNewsWire%20-%20Mergers%20and%20Acquisitions', 'category': 'press_release'},
@@ -267,7 +265,6 @@ RSS_FEEDS = [
     # Layer C — KOL / Key person feeds
     {'url': 'https://decrypt.co/feed', 'category': 'kol'},
     {'url': 'https://blockworks.co/feed', 'category': 'kol'},
-    {'url': 'https://rekt.news/feed/', 'category': 'kol'},
     {'url': 'https://bitcoinmagazine.com/feed', 'category': 'kol'},
     # Layer E — Asia-Pacific market feeds (English-language)
     {'url': 'https://asia.nikkei.com/rss/feed/nar', 'category': 'asia'},
@@ -295,20 +292,15 @@ RSS_FEEDS = [
     # Layer H — AI research & corporate blogs
     {'url': 'https://blog.research.google/feeds/posts/default?alt=rss', 'category': 'ai_research'},
     {'url': 'https://openai.com/blog/rss.xml', 'category': 'ai_research'},
-    {'url': 'https://ai.meta.com/blog/rss/', 'category': 'ai_research'},
     {'url': 'https://blogs.nvidia.com/feed/', 'category': 'ai_research'},
     # ── EU Market Feeds ──
     # UK / LSE
     {'url': 'https://www.investegate.co.uk/Rss.aspx?type=0', 'category': 'european'},
-    # Germany
-    {'url': 'https://www.dw.com/en/business/s-1431/rss.xml', 'category': 'european'},
     # EU general
     {'url': 'https://euobserver.com/rss', 'category': 'european'},
     {'url': 'https://www.swissinfo.ch/eng/business/rss', 'category': 'european'},
     # EU regulatory
-    {'url': 'https://www.ecb.europa.eu/rss/pressconf.html', 'category': 'regulatory'},
     {'url': 'https://www.bankofengland.co.uk/rss/news', 'category': 'regulatory'},
-    {'url': 'https://ec.europa.eu/eurostat/web/main/news/euro-indicators/rss', 'category': 'regulatory'},
     {'url': 'https://www.bankofengland.co.uk/rss/speeches', 'category': 'regulatory'},
     # Google News — EU sectors
     {'url': 'https://news.google.com/rss/search?q=HSBC+%22BP+stock%22+Shell+AstraZeneca+Unilever+%22Rio+Tinto%22+Barclays+FTSE+when:1d&hl=en-GB&gl=GB&ceid=GB:en', 'category': 'google_news'},
@@ -320,25 +312,14 @@ RSS_FEEDS = [
     # ── Asia-Pacific Market Feeds ──
     # Korea
     {'url': 'http://www.koreaherald.com/rss/020200030000.xml', 'category': 'asia'},
-    {'url': 'https://en.yna.co.kr/RSS/economy.xml', 'category': 'asia'},
     {'url': 'https://www.kedglobal.com/rss/', 'category': 'asia'},
-    # Taiwan
-    {'url': 'https://focustaiwan.tw/RSS/aECO', 'category': 'asia'},
-    {'url': 'https://www.taipeitimes.com/xml/biz.rss', 'category': 'asia'},
     # India
     {'url': 'https://www.livemint.com/rss/markets', 'category': 'asia'},
-    {'url': 'https://www.business-standard.com/rss/markets-106.rss', 'category': 'asia'},
     {'url': 'https://www.moneycontrol.com/rss/marketreports.xml', 'category': 'asia'},
     # Broader APAC
-    {'url': 'https://www.cnbc.com/id/104568957/device/rss/rss.html', 'category': 'asia'},
-    {'url': 'http://www.chinadaily.com.cn/rss/business_rss.xml', 'category': 'asia'},
-    {'url': 'https://www3.nhk.or.jp/nhkworld/en/news/tags/200/list/rss.xml', 'category': 'asia'},
     {'url': 'https://stockhead.com.au/feed/', 'category': 'asia'},
     # Asia regulatory
-    {'url': 'https://www.hkma.gov.hk/eng/news-and-media/press-releases/rss/', 'category': 'regulatory'},
     {'url': 'https://rbi.org.in/scripts/RSS_Feeds.aspx', 'category': 'regulatory'},
-    {'url': 'https://www.rba.gov.au/rss/rss-cb-media-releases.xml', 'category': 'regulatory'},
-    {'url': 'https://www.jpx.co.jp/english/news/rss/index.xml', 'category': 'regulatory'},
     # Google News — Asia sectors
     {'url': 'https://news.google.com/rss/search?q=Toyota+Sony+SoftBank+Keyence+Hitachi+%22Tokyo+Electron%22+Honda+Nikkei+when:1d&hl=en&gl=JP&ceid=JP:en', 'category': 'google_news'},
     {'url': 'https://news.google.com/rss/search?q=Samsung+%22SK+Hynix%22+%22LG+Energy%22+Hyundai+KOSPI+when:1d&hl=en&gl=KR&ceid=KR:en', 'category': 'google_news'},
@@ -353,7 +334,6 @@ RSS_FEEDS = [
     # ── Global / Cross-Region Feeds ──
     {'url': 'https://www.investing.com/rss/news_301.rss', 'category': 'financial'},
     {'url': 'https://www.investing.com/rss/news_285.rss', 'category': 'financial'},
-    {'url': 'https://www.bls.gov/feed/bls_latest.rss', 'category': 'regulatory'},
     {'url': 'https://seekingalpha.com/market_currents.xml', 'category': 'financial'},
 ]
 

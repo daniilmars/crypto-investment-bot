@@ -449,10 +449,10 @@ class TestOCOBracketDynamicSLTP:
                                       sl_pct=0.05, tp_pct=0.10)
 
         assert result is not None
-        # Verify the SL/TP prices used dynamic values
+        # Verify the SL/TP prices used dynamic values (new above/below API)
         call_kw = mock_client.create_oco_order.call_args
-        sl_price = float(call_kw.kwargs.get('stopPrice', call_kw[1].get('stopPrice', 0)))
-        tp_price = float(call_kw.kwargs.get('price', call_kw[1].get('price', 0)))
+        sl_price = float(call_kw.kwargs.get('belowStopPrice', call_kw[1].get('belowStopPrice', 0)))
+        tp_price = float(call_kw.kwargs.get('abovePrice', call_kw[1].get('abovePrice', 0)))
         # SL = 50000 * (1 - 0.05) = 47500
         assert abs(sl_price - 47500.0) < 1.0
         # TP = 50000 * (1 + 0.10) = 55000
@@ -477,7 +477,7 @@ class TestOCOBracketDynamicSLTP:
         _place_oco_bracket('BTCUSDT', 50000.0, 0.1)  # No sl_pct/tp_pct
 
         call_kw = mock_client.create_oco_order.call_args
-        sl_price = float(call_kw.kwargs.get('stopPrice', call_kw[1].get('stopPrice', 0)))
+        sl_price = float(call_kw.kwargs.get('belowStopPrice', call_kw[1].get('belowStopPrice', 0)))
         # SL = 50000 * (1 - 0.03) = 48500
         assert abs(sl_price - 48500.0) < 1.0
 

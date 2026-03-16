@@ -29,6 +29,59 @@ class TestIsRetryableBinanceError:
         assert _is_retryable_binance_error(Exception("Invalid quantity")) is False
 
 
+class TestOCOBracketAPIParams:
+    """Tests that _place_oco_bracket passes correct above/below params to Binance API."""
+
+    @patch('src.execution.binance_trader._get_symbol_info', return_value=None)
+    @patch('src.execution.binance_trader._get_binance_client')
+    @patch('src.execution.binance_trader.app_config', new_callable=dict)
+    def test_oco_uses_above_below_params(self, mock_config, mock_client_fn, mock_sym):
+        """OCO bracket uses aboveType/belowType params for new Binance API."""
+        from src.execution.binance_trader import _place_oco_bracket
+        mock_config['settings'] = {'live_trading': {
+            'stop_loss_percentage': 0.10,
+            'take_profit_percentage': 0.50,
+        }}
+        mock_client = MagicMock()
+        mock_client.create_oco_order.return_value = {'orderListId': 42}
+        mock_client_fn.return_value = mock_client
+
+        result = _place_oco_bracket("BTCUSDT", 100.0, 0.01)
+        assert result is not None
+        assert result['order_list_id'] == 42
+
+        call_kwargs = mock_client.create_oco_order.call_args[1]
+        assert call_kwargs['aboveType'] == 'LIMIT_MAKER'
+        assert call_kwargs['abovePrice'] == str(round(100.0 * 1.50, 8))
+        assert call_kwargs['belowType'] == 'STOP_LOSS_LIMIT'
+        assert call_kwargs['belowStopPrice'] == str(round(100.0 * 0.90, 8))
+        assert call_kwargs['belowTimeInForce'] == 'GTC'
+        # Old params should NOT be present
+        assert 'price' not in call_kwargs
+        assert 'stopPrice' not in call_kwargs
+        assert 'stopLimitPrice' not in call_kwargs
+        assert 'stopLimitTimeInForce' not in call_kwargs
+
+    @patch('src.execution.binance_trader._get_symbol_info', return_value=None)
+    @patch('src.execution.binance_trader._get_binance_client')
+    @patch('src.execution.binance_trader.app_config', new_callable=dict)
+    def test_oco_with_custom_sl_tp(self, mock_config, mock_client_fn, mock_sym):
+        """OCO bracket respects custom sl_pct/tp_pct overrides."""
+        from src.execution.binance_trader import _place_oco_bracket
+        mock_config['settings'] = {'live_trading': {}}
+        mock_client = MagicMock()
+        mock_client.create_oco_order.return_value = {'orderListId': 99}
+        mock_client_fn.return_value = mock_client
+
+        result = _place_oco_bracket("ETHUSDT", 200.0, 0.5, sl_pct=0.05, tp_pct=0.20)
+        assert result['take_profit'] == round(200.0 * 1.20, 8)
+        assert result['stop_loss'] == round(200.0 * 0.95, 8)
+
+        call_kwargs = mock_client.create_oco_order.call_args[1]
+        assert call_kwargs['aboveType'] == 'LIMIT_MAKER'
+        assert call_kwargs['belowType'] == 'STOP_LOSS_LIMIT'
+
+
 class TestOCOWithRetry:
     """Tests for _place_oco_with_retry wrapper."""
 

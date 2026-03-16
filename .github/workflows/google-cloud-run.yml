@@ -118,13 +118,36 @@ jobs:
             simulated_slippage_pct: 0.001
 
             trade_risk_percentage: 0.05
-            stop_loss_percentage: 0.035
-            take_profit_percentage: 0.08
+            stop_loss_percentage: 0.10
+            take_profit_percentage: 0.50
+            min_trade_notional: 5.00
             max_concurrent_positions: 5
 
+            trend_filter:
+              use_daily_klines: true
+              daily_sma_period: 20
+              kline_cache_minutes: 60
+
+            dynamic_risk:
+              enabled: true
+              atr_period: 14
+              sl_atr_multiplier: 2.0
+              tp_atr_multiplier: 5.0
+              sl_floor: 0.07
+              sl_ceiling: 0.15
+              tp_floor: 0.10
+              tp_ceiling: 0.50
+
+            limit_orders:
+              enabled: true
+              pullback_pct: 0.005
+              ttl_cycles: 8
+              market_order_threshold: 0.8
+              max_pending_orders: 3
+
             trailing_stop_enabled: true
-            trailing_stop_activation: 0.02
-            trailing_stop_distance: 0.015
+            trailing_stop_activation: 0.05
+            trailing_stop_distance: 0.02
 
             regular_status_update:
               enabled: true
@@ -132,13 +155,13 @@ jobs:
 
             news_analysis:
               enabled: true
-              use_grounded_search: false
+              use_grounded_search: true
               web_scraping:
                 enabled: true
               deep_scraping:
                 enabled: true
               use_gemini_scoring: true
-              cache_ttl_minutes: 30
+              cache_ttl_minutes: 15
               freshness_half_life_hours: 6
               volume_spike_multiplier: 3.0
               sentiment_shift_threshold: 0.3
@@ -152,13 +175,13 @@ jobs:
               initial_capital: 100.0
               max_concurrent_positions: 2
               trade_risk_percentage: 0.05
-              stop_loss_percentage: 0.03
-              take_profit_percentage: 0.06
-              daily_loss_limit_pct: 0.05
-              max_drawdown_pct: 0.15
-              balance_floor_usd: 70.0
-              max_consecutive_losses: 3
-              cooldown_hours: 24
+              stop_loss_percentage: 0.10
+              take_profit_percentage: 0.50
+              daily_loss_limit_pct: 0.15
+              max_drawdown_pct: 0.25
+              balance_floor_usd: 50.0
+              max_consecutive_losses: 5
+              cooldown_hours: 6
 
             stock_trading:
               enabled: true
@@ -197,6 +220,7 @@ jobs:
             position_analyst:
               enabled: true
               min_position_age_hours: 2
+              quick_check_interval_minutes: 240
               check_interval_minutes: 1440
               exit_confidence_threshold: 0.8
               increase_confidence_threshold: 0.75
@@ -224,6 +248,9 @@ jobs:
               paper_trading_initial_capital: 10000.0
               max_concurrent_positions: 20
               summary_interval_hours: 1
+              min_signal_strength: 0.65
+              min_sell_signal_strength: 0.50
+              caution_strength_boost: 0.10
 
             position_rotation:
               enabled: true
@@ -260,6 +287,16 @@ jobs:
                 btc_trend: 1.0
               risk_on_threshold: 3.0
               risk_off_threshold: -3.0
+              risk_off_exit_acceleration:
+                trailing_activation_multiplier: 0.5
+                trailing_distance_multiplier: 0.7
+
+            sector_review:
+              enabled: true
+              review_hour_utc: 7
+              conviction_influence_pct: 0.10
+              min_articles_for_review: 3
+              telegram_digest: true
 
             sector_limits:
               enabled: true
@@ -328,10 +365,10 @@ jobs:
                 max_param_changes_per_cycle: 2
                 auto_revert_days: 7
                 auto_revert_degradation_pct: 0.10
-                sl_min: 0.015
-                sl_max: 0.06
-                tp_min: 0.03
-                tp_max: 0.15
+                sl_min: 0.05
+                sl_max: 0.15
+                tp_min: 0.08
+                tp_max: 0.50
                 confidence_min: 0.35
                 confidence_max: 0.75
 
