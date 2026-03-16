@@ -188,14 +188,14 @@ settings:
     initial_capital: 100.0
     max_concurrent_positions: 2
     trade_risk_percentage: 0.05
-    stop_loss_percentage: 0.03
-    take_profit_percentage: 0.06
-    # Circuit breaker thresholds
-    daily_loss_limit_pct: 0.05
-    max_drawdown_pct: 0.15
-    balance_floor_usd: 70.0
-    max_consecutive_losses: 3
-    cooldown_hours: 24
+    stop_loss_percentage: 0.10
+    take_profit_percentage: 0.50
+    # Circuit breaker thresholds (widened for catastrophic SL regime)
+    daily_loss_limit_pct: 0.15
+    max_drawdown_pct: 0.25
+    balance_floor_usd: 50.0
+    max_consecutive_losses: 5
+    cooldown_hours: 6
 
   # -- Stock Trading Settings --
   # Stock watch list is loaded from config/watch_list.yaml (US + EU + Asia).

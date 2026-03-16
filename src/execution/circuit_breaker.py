@@ -32,15 +32,20 @@ def check_circuit_breaker(balance, daily_pnl, recent_trades, asset_type='crypto'
     """
     config = _get_live_config()
     # Use asset-appropriate initial capital
+    settings = app_config.get('settings', {})
     if asset_type == 'stock':
-        stock_cfg = app_config.get('settings', {}).get('stock_trading', {})
+        stock_cfg = settings.get('stock_trading', {})
         initial_capital = stock_cfg.get('paper_trading_initial_capital',
-                                        app_config.get('settings', {}).get('paper_trading_initial_capital', 10000.0))
+                                        settings.get('paper_trading_initial_capital', 10000.0))
     elif asset_type == 'auto':
-        auto_cfg = app_config.get('settings', {}).get('auto_trading', {})
+        auto_cfg = settings.get('auto_trading', {})
         initial_capital = auto_cfg.get('paper_trading_initial_capital', 10000.0)
     else:
-        initial_capital = config.get('initial_capital', 100.0)
+        # Crypto: use paper trading capital when paper trading, live capital otherwise
+        if settings.get('paper_trading', True):
+            initial_capital = settings.get('paper_trading_initial_capital', 10000.0)
+        else:
+            initial_capital = config.get('initial_capital', 100.0)
 
     # 1. Cooldown check (must be first — overrides everything during cooldown)
     cooldown_hours = config.get('cooldown_hours', 24)

@@ -76,6 +76,9 @@ class TestCircuitBreaker:
     @patch('src.execution.circuit_breaker._get_peak_balance', return_value=100.0)
     @patch('src.execution.circuit_breaker.record_circuit_breaker_event')
     @patch('src.execution.circuit_breaker._get_live_config')
+    @patch('src.execution.circuit_breaker.app_config', {
+        'settings': {'paper_trading': False}
+    })
     def test_daily_loss_limit(self, mock_config, mock_record, mock_peak, mock_cooldown):
         """Circuit breaker trips when daily loss exceeds limit."""
         from src.execution.circuit_breaker import check_circuit_breaker
