@@ -22,6 +22,41 @@ from src.logger import log
 _FENCE_RE = re.compile(r'^```(?:json)?\s*\n?(.*?)```\s*$', re.DOTALL)
 
 
+def _extract_first_json_object(text: str) -> str:
+    """Extract the first complete top-level JSON object from text.
+
+    Uses brace-depth counting (skipping braces inside strings) to handle
+    cases where Gemini appends commentary or duplicate objects after the JSON.
+    Falls back to returning the full text if no balanced object is found.
+    """
+    start = text.find('{')
+    if start == -1:
+        return text
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape:
+            escape = False
+            continue
+        if ch == '\\' and in_string:
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return text
+
+
 def _parse_gemini_json(text: str) -> dict:
     """Strip markdown code-fence variants and parse JSON.
 
@@ -29,13 +64,19 @@ def _parse_gemini_json(text: str) -> dict:
       - Plain JSON (no fences)
       - ```json ... ```
       - ``` ... ```
+      - Extra data after the JSON object (Gemini commentary, duplicate objects)
     Raises json.JSONDecodeError on failure.
     """
     text = text.strip()
     m = _FENCE_RE.match(text)
     if m:
         text = m.group(1).strip()
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # Gemini sometimes appends extra text after the JSON — extract first object
+        extracted = _extract_first_json_object(text)
+        return json.loads(extracted)
 
 
 def _validate_gemini_response(result: dict, required_keys: list, context: str) -> dict:
@@ -351,7 +392,7 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
             "You are a senior trading desk analyst. Use BOTH the headlines we collected "
             "from our RSS feeds AND your own Google Search results to assess news impact.\n\n"
             "BOT PARAMETERS:\n"
-            "- Stop-loss: -3.5%, Take-profit: +8%, Trailing stop: +2%/1.5%\n"
+            "- Stop-loss: -10%, Take-profit: +50%, Trailing stop: +5%/2%\n"
             "- 15-minute decision cycles. Only confidence >= 0.5 triggers trades.\n\n"
             "INSTRUCTIONS:\n"
             "1. Review our collected headlines below for each symbol\n"

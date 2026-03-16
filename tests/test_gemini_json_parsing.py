@@ -5,7 +5,47 @@ import logging
 
 import pytest
 
-from src.analysis.gemini_news_analyzer import _parse_gemini_json, _validate_gemini_response
+from src.analysis.gemini_news_analyzer import (
+    _extract_first_json_object,
+    _parse_gemini_json,
+    _validate_gemini_response,
+)
+
+
+class TestExtractFirstJsonObject:
+    """Tests for _extract_first_json_object helper."""
+
+    def test_clean_json(self):
+        text = '{"key": "value"}'
+        assert _extract_first_json_object(text) == text
+
+    def test_extra_data_after_json(self):
+        text = '{"key": "value"}\n\nHere is some commentary from Gemini.'
+        assert _extract_first_json_object(text) == '{"key": "value"}'
+
+    def test_two_json_objects(self):
+        text = '{"first": 1}\n{"second": 2}'
+        assert _extract_first_json_object(text) == '{"first": 1}'
+
+    def test_nested_braces(self):
+        text = '{"a": {"b": {"c": 1}}} extra'
+        assert _extract_first_json_object(text) == '{"a": {"b": {"c": 1}}}'
+
+    def test_braces_in_strings(self):
+        text = '{"msg": "use {braces} here"} trailing'
+        assert _extract_first_json_object(text) == '{"msg": "use {braces} here"}'
+
+    def test_escaped_quotes_in_strings(self):
+        text = '{"msg": "say \\"hello\\""} extra'
+        assert _extract_first_json_object(text) == '{"msg": "say \\"hello\\""}'
+
+    def test_no_json_object(self):
+        text = 'no json here'
+        assert _extract_first_json_object(text) == text
+
+    def test_leading_text_before_json(self):
+        text = 'Here is the result:\n{"key": "value"} done'
+        assert _extract_first_json_object(text) == '{"key": "value"}'
 
 
 class TestParseGeminiJson:
@@ -38,6 +78,18 @@ class TestParseGeminiJson:
         text = '```json\n\n  {"a": 1}  \n\n```\n  '
         result = _parse_gemini_json(text)
         assert result == {"a": 1}
+
+    def test_extra_data_after_json(self):
+        """JSON followed by extra text (Gemini commentary) is handled."""
+        text = '{"symbol_assessments": {}, "market_mood": "neutral"}\n\nNote: analysis above...'
+        result = _parse_gemini_json(text)
+        assert result == {"symbol_assessments": {}, "market_mood": "neutral"}
+
+    def test_duplicate_json_objects(self):
+        """Two concatenated JSON objects — first one is used."""
+        text = '{"first": true}\n{"second": true}'
+        result = _parse_gemini_json(text)
+        assert result == {"first": True}
 
 
 class TestValidateGeminiResponse:
