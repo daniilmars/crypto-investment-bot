@@ -326,7 +326,7 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
         # Falls back to Vertex AI if no key set
         gemini_api_key = os.environ.get('GEMINI_API_KEY')
         if gemini_api_key:
-            client = genai.Client(api_key=gemini_api_key)
+            client = genai.Client(api_key=gemini_api_key, vertexai=False)
         else:
             project_id = os.environ.get('GCP_PROJECT_ID')
             location = os.environ.get('VERTEX_AI_LOCATION') or os.environ.get('GCP_LOCATION', 'europe-west4')
