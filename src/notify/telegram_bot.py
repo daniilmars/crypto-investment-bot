@@ -869,24 +869,28 @@ async def livebalance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @authorized
 async def circuitbreaker_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /circuitbreaker command."""
-    cb_status = get_circuit_breaker_status()
-    status_emoji = "🔴" if cb_status['in_cooldown'] else "🟢"
-    message = (
-        f"{status_emoji} *Circuit Breaker Status*\n\n"
-        f"*Active:* {'YES — trading halted' if cb_status['in_cooldown'] else 'No — trading allowed'}\n"
-        f"*Cooldown:* {cb_status['cooldown_hours']}h\n\n"
-        f"*Thresholds:*\n"
-        f"- Balance floor: ${cb_status['balance_floor']:.2f}\n"
-        f"- Daily loss limit: {cb_status['daily_loss_limit_pct']*100:.0f}%\n"
-        f"- Max drawdown: {cb_status['max_drawdown_pct']*100:.0f}%\n"
-        f"- Max consecutive losses: {cb_status['max_consecutive_losses']}"
-    )
-    last = cb_status.get('last_event')
-    if last:
-        message += (f"\n\n*Last event:* {last.get('event_type', 'unknown')}\n"
-                    f"*Details:* {last.get('details', 'N/A')}\n"
-                    f"*Triggered:* {last.get('triggered_at', 'N/A')}")
-    await update.message.reply_text(message, parse_mode='Markdown')
+    try:
+        cb_status = get_circuit_breaker_status()
+        status_emoji = "🔴" if cb_status['in_cooldown'] else "🟢"
+        message = (
+            f"{status_emoji} *Circuit Breaker Status*\n\n"
+            f"*Active:* {'YES — trading halted' if cb_status['in_cooldown'] else 'No — trading allowed'}\n"
+            f"*Cooldown:* {cb_status['cooldown_hours']}h\n\n"
+            f"*Thresholds:*\n"
+            f"- Balance floor: ${cb_status['balance_floor']:.2f}\n"
+            f"- Daily loss limit: {cb_status['daily_loss_limit_pct']*100:.0f}%\n"
+            f"- Max drawdown: {cb_status['max_drawdown_pct']*100:.0f}%\n"
+            f"- Max consecutive losses: {cb_status['max_consecutive_losses']}"
+        )
+        last = cb_status.get('last_event')
+        if last:
+            message += (f"\n\n*Last event:* {last.get('event_type', 'unknown')}\n"
+                        f"*Details:* {last.get('details', 'N/A')}\n"
+                        f"*Triggered:* {last.get('triggered_at', 'N/A')}")
+        await update.message.reply_text(message, parse_mode='Markdown')
+    except Exception as e:
+        log.error(f"Error in /circuitbreaker: {e}")
+        await update.message.reply_text("Error fetching circuit breaker status.")
 
 
 @authorized
@@ -1120,9 +1124,11 @@ async def regime_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Show key indicator values if available
         if indicators:
-            vix = indicators.get('vix')
-            if vix is not None:
-                message += f"\n\n*Indicators:*\n  VIX: {vix:.1f}"
+            vix_data = indicators.get('vix')
+            if isinstance(vix_data, dict) and 'current' in vix_data:
+                message += f"\n\n*Indicators:*\n  VIX: {vix_data['current']:.1f}"
+            elif isinstance(vix_data, (int, float)):
+                message += f"\n\n*Indicators:*\n  VIX: {vix_data:.1f}"
 
         await update.message.reply_text(message, parse_mode='Markdown')
     except Exception as e:
