@@ -69,6 +69,7 @@ jobs:
           ALPHA_VANTAGE_API_KEY=${{ secrets.ALPHA_VANTAGE_API_KEY }}
           ALPACA_API_KEY=${{ secrets.ALPACA_API_KEY }}
           ALPACA_API_SECRET=${{ secrets.ALPACA_API_SECRET }}
+          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
           DATABASE_URL=
           DB_INSTANCE_CONNECTION_NAME=
           GCP_BILLING_ENABLED=true

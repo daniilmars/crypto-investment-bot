@@ -318,18 +318,23 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
             log.info(f"Gemini cache hit for {list(symbols)} (age={age_minutes:.1f}m)")
             return cached_result
 
-    project_id = os.environ.get('GCP_PROJECT_ID')
-    location = os.environ.get('VERTEX_AI_LOCATION') or os.environ.get('GCP_LOCATION', 'europe-west4')
-
-    if not project_id:
-        log.warning("GCP_PROJECT_ID not set — skipping Gemini grounded news analysis.")
-        return None
-
     try:
         from google import genai
         from google.genai.types import GenerateContentConfig, Tool, GoogleSearch
 
-        client = genai.Client(vertexai=True, project=project_id, location=location)
+        # Prefer consumer API key (guaranteed free grounding tier, 1,500/day)
+        # Falls back to Vertex AI if no key set
+        gemini_api_key = os.environ.get('GEMINI_API_KEY')
+        if gemini_api_key:
+            client = genai.Client(api_key=gemini_api_key)
+        else:
+            project_id = os.environ.get('GCP_PROJECT_ID')
+            location = os.environ.get('VERTEX_AI_LOCATION') or os.environ.get('GCP_LOCATION', 'europe-west4')
+            if not project_id:
+                log.warning("Neither GEMINI_API_KEY nor GCP_PROJECT_ID set — "
+                            "skipping grounded news analysis.")
+                return None
+            client = genai.Client(vertexai=True, project=project_id, location=location)
 
         # Build per-symbol context sections
         symbol_sections = []

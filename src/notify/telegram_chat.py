@@ -446,13 +446,6 @@ async def _call_gemini(
     use_search: bool = False,
 ) -> str:
     """Calls Gemini 2.0 Flash with optional grounded search."""
-    project_id = os.environ.get('GCP_PROJECT_ID')
-    location = os.environ.get('VERTEX_AI_LOCATION',
-                               os.environ.get('GCP_LOCATION', 'europe-west4'))
-
-    if not project_id:
-        return "AI chat unavailable — GCP_PROJECT_ID not set."
-
     try:
         from google import genai
         from google.genai.types import (
@@ -461,7 +454,18 @@ async def _call_gemini(
     except ImportError:
         return "AI chat unavailable — google-genai SDK not installed."
 
-    client = genai.Client(vertexai=True, project=project_id, location=location)
+    # Prefer consumer API key (guaranteed free grounding tier, 1,500/day)
+    # Falls back to Vertex AI if no key set
+    gemini_api_key = os.environ.get('GEMINI_API_KEY')
+    if gemini_api_key:
+        client = genai.Client(api_key=gemini_api_key)
+    else:
+        project_id = os.environ.get('GCP_PROJECT_ID')
+        location = os.environ.get('VERTEX_AI_LOCATION',
+                                   os.environ.get('GCP_LOCATION', 'europe-west4'))
+        if not project_id:
+            return "AI chat unavailable — neither GEMINI_API_KEY nor GCP_PROJECT_ID set."
+        client = genai.Client(vertexai=True, project=project_id, location=location)
 
     system_instruction = _build_system_instruction(context, use_search=use_search)
 
