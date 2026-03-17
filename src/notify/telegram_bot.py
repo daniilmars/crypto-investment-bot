@@ -874,7 +874,7 @@ async def circuitbreaker_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
         status_emoji = "🔴" if cb_status['in_cooldown'] else "🟢"
         message = (
             f"{status_emoji} *Circuit Breaker Status*\n\n"
-            f"*Active:* {'YES — trading halted' if cb_status['in_cooldown'] else 'No — trading allowed'}\n"
+            f"*Active:* {'YES - trading halted' if cb_status['in_cooldown'] else 'No - trading allowed'}\n"
             f"*Cooldown:* {cb_status['cooldown_hours']}h\n\n"
             f"*Thresholds:*\n"
             f"- Balance floor: ${cb_status['balance_floor']:.2f}\n"
