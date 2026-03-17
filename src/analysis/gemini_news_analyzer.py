@@ -430,30 +430,41 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
             "- Include ALL requested symbols. When in doubt, score LOWER."
         )
 
-        _EMPTY_RETRIES = 5
+        # flash-lite with GoogleSearch intermittently returns empty text;
+        # retry up to 3 times, then fall back to flash (non-lite) once.
+        _EMPTY_RETRIES = 3
+        models_to_try = [
+            ("gemini-2.5-flash-lite", _EMPTY_RETRIES),
+            ("gemini-2.5-flash", 1),
+        ]
         text = ''
-        for attempt in range(_EMPTY_RETRIES):
-            response = _call_with_retry(
-                client.models.generate_content,
-                model="gemini-2.5-flash-lite",
-                contents=prompt,
-                config=GenerateContentConfig(
-                    tools=[Tool(google_search=GoogleSearch())],
-                    temperature=0.2,
-                ),
-            )
-            text = response.text.strip() if response.text else ''
+        for model_name, max_attempts in models_to_try:
+            for attempt in range(max_attempts):
+                response = _call_with_retry(
+                    client.models.generate_content,
+                    model=model_name,
+                    contents=prompt,
+                    config=GenerateContentConfig(
+                        tools=[Tool(google_search=GoogleSearch())],
+                        temperature=0.2,
+                    ),
+                )
+                text = response.text.strip() if response.text else ''
+                if text:
+                    break
+                log.warning(f"Gemini grounded search ({model_name}) returned "
+                            f"empty response (attempt {attempt + 1}/{max_attempts})"
+                            f" for {len(symbols)} symbols")
+                if attempt < max_attempts - 1:
+                    time.sleep(2 * (attempt + 1))
             if text:
+                if model_name != "gemini-2.5-flash-lite":
+                    log.info(f"Grounded search succeeded with fallback model "
+                             f"{model_name} for {len(symbols)} symbols")
                 break
-            log.warning(f"Gemini grounded search returned empty response "
-                        f"(attempt {attempt + 1}/{_EMPTY_RETRIES}) "
-                        f"for {len(symbols)} symbols")
-            if attempt < _EMPTY_RETRIES - 1:
-                time.sleep(3 * (attempt + 1))
         if not text:
-            log.error(f"Gemini grounded search returned empty after "
-                      f"{_EMPTY_RETRIES} attempts for "
-                      f"{len(symbols)} symbols: {symbols[:5]}...")
+            log.error(f"Gemini grounded search returned empty after all "
+                      f"retries for {len(symbols)} symbols: {symbols[:5]}...")
             return None
         result = _parse_gemini_json(text)
         _validate_gemini_response(result, ['symbol_assessments', 'market_mood'],

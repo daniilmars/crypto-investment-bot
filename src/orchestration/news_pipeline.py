@@ -193,9 +193,9 @@ def _split_symbols_into_batches(
 
     batches = []
 
-    # Max symbols per batch — keeps Gemini responses reliable JSON
-    # 25 per batch × ~14 batches × 96 cycles = ~1,344 calls/day (within 1,500 free)
-    max_batch = 25
+    # Max symbols per batch — smaller batches improve flash-lite grounding reliability.
+    # 15 per batch × ~27 batches, with 30-min cache → ~1,296 calls/day (within 1,500 free)
+    max_batch = 15
 
     for sym_list in [crypto_syms, us_stock_syms, eu_stock_syms,
                      asia_stock_syms, other_syms]:

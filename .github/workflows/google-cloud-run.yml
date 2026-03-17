@@ -161,7 +161,7 @@ jobs:
               deep_scraping:
                 enabled: true
               use_gemini_scoring: true
-              cache_ttl_minutes: 15
+              cache_ttl_minutes: 30
               freshness_half_life_hours: 6
               volume_spike_multiplier: 3.0
               sentiment_shift_threshold: 0.3
