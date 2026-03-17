@@ -872,11 +872,12 @@ async def circuitbreaker_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         cb_status = get_circuit_breaker_status()
         status_emoji = "🔴" if cb_status['in_cooldown'] else "🟢"
+        active_text = 'YES - trading halted' if cb_status['in_cooldown'] else 'No - trading allowed'
         message = (
-            f"{status_emoji} *Circuit Breaker Status*\n\n"
-            f"*Active:* {'YES - trading halted' if cb_status['in_cooldown'] else 'No - trading allowed'}\n"
-            f"*Cooldown:* {cb_status['cooldown_hours']}h\n\n"
-            f"*Thresholds:*\n"
+            f"{status_emoji} Circuit Breaker Status\n\n"
+            f"Active: {active_text}\n"
+            f"Cooldown: {cb_status['cooldown_hours']}h\n\n"
+            f"Thresholds:\n"
             f"- Balance floor: ${cb_status['balance_floor']:.2f}\n"
             f"- Daily loss limit: {cb_status['daily_loss_limit_pct']*100:.0f}%\n"
             f"- Max drawdown: {cb_status['max_drawdown_pct']*100:.0f}%\n"
@@ -884,10 +885,10 @@ async def circuitbreaker_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         last = cb_status.get('last_event')
         if last:
-            message += (f"\n\n*Last event:* {last.get('event_type', 'unknown')}\n"
-                        f"*Details:* {last.get('details', 'N/A')}\n"
-                        f"*Triggered:* {last.get('triggered_at', 'N/A')}")
-        await update.message.reply_text(message, parse_mode='Markdown')
+            message += (f"\n\nLast event: {last.get('event_type', 'unknown')}\n"
+                        f"Details: {last.get('details', 'N/A')}\n"
+                        f"Triggered: {last.get('triggered_at', 'N/A')}")
+        await update.message.reply_text(message)
     except Exception as e:
         log.error(f"Error in /circuitbreaker: {e}")
         await update.message.reply_text("Error fetching circuit breaker status.")
