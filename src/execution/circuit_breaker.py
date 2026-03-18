@@ -41,8 +41,9 @@ def check_circuit_breaker(balance, daily_pnl, recent_trades, asset_type='crypto'
         auto_cfg = settings.get('auto_trading', {})
         initial_capital = auto_cfg.get('paper_trading_initial_capital', 10000.0)
     else:
-        # Crypto: use paper trading capital when paper trading, live capital otherwise
-        if settings.get('paper_trading', True):
+        # Crypto: use paper trading capital when paper trading or testnet
+        mode = config.get('mode', 'live')
+        if settings.get('paper_trading', True) or mode == 'testnet':
             initial_capital = settings.get('paper_trading_initial_capital', 10000.0)
         else:
             initial_capital = config.get('initial_capital', 100.0)
@@ -83,13 +84,21 @@ def check_circuit_breaker(balance, daily_pnl, recent_trades, asset_type='crypto'
         return True, reason
 
     # 5. Consecutive losses
+    # Only trigger if the latest trade is newer than the last consecutive_losses event,
+    # otherwise we'd re-trigger on the same stale trades after every cooldown expiry.
     max_consecutive = config.get('max_consecutive_losses', 3)
     if len(recent_trades) >= max_consecutive:
         last_n = recent_trades[:max_consecutive]
         if all(t.get('pnl', 0) < 0 for t in last_n):
-            reason = f"Last {max_consecutive} trades were all losses"
-            record_circuit_breaker_event('consecutive_losses', reason, asset_type=asset_type)
-            return True, reason
+            latest_trade_ts = recent_trades[0].get('exit_timestamp', '')
+            last_event_ts = _get_last_event_timestamp('consecutive_losses', asset_type)
+            if last_event_ts and str(latest_trade_ts) <= str(last_event_ts):
+                # Same trades already triggered a cooldown — don't re-trigger
+                pass
+            else:
+                reason = f"Last {max_consecutive} trades were all losses"
+                record_circuit_breaker_event('consecutive_losses', reason, asset_type=asset_type)
+                return True, reason
 
     return False, ""
 
@@ -178,6 +187,39 @@ def is_in_cooldown(cooldown_hours=None, asset_type=None):
         log.warning(f"Could not check cooldown status: {e}")
         # Fail safe: assume cooldown is active if we can't check
         return True
+    finally:
+        release_db_connection(conn)
+
+
+def _get_last_event_timestamp(event_type, asset_type=None):
+    """Returns the triggered_at timestamp of the most recent event of this type."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            if asset_type:
+                query = (
+                    "SELECT triggered_at FROM circuit_breaker_events "
+                    "WHERE event_type = %s AND asset_type = %s ORDER BY triggered_at DESC LIMIT 1"
+                    if is_pg else
+                    "SELECT triggered_at FROM circuit_breaker_events "
+                    "WHERE event_type = ? AND asset_type = ? ORDER BY triggered_at DESC LIMIT 1"
+                )
+                cursor.execute(query, (event_type, asset_type))
+            else:
+                query = (
+                    "SELECT triggered_at FROM circuit_breaker_events "
+                    "WHERE event_type = %s ORDER BY triggered_at DESC LIMIT 1"
+                    if is_pg else
+                    "SELECT triggered_at FROM circuit_breaker_events "
+                    "WHERE event_type = ? ORDER BY triggered_at DESC LIMIT 1"
+                )
+                cursor.execute(query, (event_type,))
+            row = cursor.fetchone()
+            return row[0] if row else None
+    except Exception:
+        return None
     finally:
         release_db_connection(conn)
 
