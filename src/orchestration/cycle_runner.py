@@ -53,6 +53,7 @@ from src.orchestration.news_pipeline import (
     collect_and_analyze_news, run_proactive_market_alerts,
 )
 from src.analysis.signal_attribution import record_signal_attribution
+from src.config import get_strategy_configs
 
 # --- Daily kline cache (Plan 2: Daily SMA + Plan 1: ATR) ---
 _daily_kline_cache: dict[str, list[dict]] = {}
@@ -206,9 +207,18 @@ async def run_bot_cycle():
     is_live = _is_live_trading()
     _cached_crypto_positions = await asyncio.to_thread(get_open_positions, trading_strategy='manual') if (paper_trading or is_live) else []
 
+    # Load all configured strategies and cache their positions
     auto_cfg = settings.get('auto_trading', {})
     auto_enabled = auto_cfg.get('enabled', False)
-    _cached_auto_positions = await asyncio.to_thread(get_open_positions, trading_strategy='auto') if auto_enabled else []
+    strategy_configs = get_strategy_configs(settings)
+    _cached_strategy_positions: dict[str, list] = {}
+    for strat_name, strat_cfg in strategy_configs.items():
+        if strat_cfg.get('enabled', False):
+            _cached_strategy_positions[strat_name] = await asyncio.to_thread(
+                get_open_positions, trading_strategy=strat_name)
+
+    # Backward compat alias
+    _cached_auto_positions = _cached_strategy_positions.get('auto', [])
 
     open_positions = _cached_crypto_positions
     auto_open_crypto = [p for p in _cached_auto_positions
@@ -464,50 +474,88 @@ async def run_bot_cycle():
                 dynamic_sl_pct=symbol_dynamic_sl,
                 dynamic_tp_pct=symbol_dynamic_tp)
 
-        # --- Auto-Trading Shadow Bot: Position Monitoring ---
-        if auto_enabled:
-            for position in _cached_auto_positions:
+        # --- Strategy Bots: Position Monitoring + Signal Execution ---
+        for strat_name, strat_cfg in strategy_configs.items():
+            if not strat_cfg.get('enabled', False):
+                continue
+            strat_positions = _cached_strategy_positions.get(strat_name, [])
+            strat_label = strat_name.upper()
+
+            # Build per-strategy risk config (fall back to global defaults)
+            strat_risk_params = strat_cfg.get('risk_params', {})
+            strat_risk = dict(
+                stop_loss_pct=strat_risk_params.get('stop_loss_percentage', stop_loss_percentage),
+                take_profit_pct=strat_risk_params.get('take_profit_percentage', take_profit_percentage),
+                trailing_stop_enabled=strat_risk_params.get('trailing_stop_enabled', trailing_stop_enabled),
+                trailing_stop_activation=strat_risk_params.get('trailing_stop_activation', trailing_stop_activation),
+                trailing_stop_distance=strat_risk_params.get('trailing_stop_distance', trailing_stop_distance),
+                stoploss_cooldown_hours=stoploss_cooldown_hours,
+            )
+            # RISK_OFF exit acceleration applies to all strategies
+            if macro_regime_result['regime'] == 'RISK_OFF':
+                risk_off_cfg = settings.get('macro_regime', {}).get('risk_off_exit_acceleration', {})
+                strat_risk['trailing_stop_activation'] *= risk_off_cfg.get('trailing_activation_multiplier', 0.5)
+                strat_risk['trailing_stop_distance'] *= risk_off_cfg.get('trailing_distance_multiplier', 0.7)
+
+            # Position Monitoring
+            for position in strat_positions:
                 if position['symbol'] == symbol and position['status'] == 'OPEN':
-                    auto_pos_risk = dict(risk_cfg)
+                    pos_risk = dict(strat_risk)
                     if position.get('dynamic_sl_pct') is not None:
-                        auto_pos_risk['stop_loss_pct'] = position['dynamic_sl_pct']
+                        pos_risk['stop_loss_pct'] = position['dynamic_sl_pct']
                     if position.get('dynamic_tp_pct') is not None:
-                        auto_pos_risk['take_profit_pct'] = position['dynamic_tp_pct']
+                        pos_risk['take_profit_pct'] = position['dynamic_tp_pct']
                     result = await monitor_position(
-                        position, current_price, **auto_pos_risk,
-                        trading_strategy='auto', mode_label='AUTO')
+                        position, current_price, **pos_risk,
+                        trading_strategy=strat_name, mode_label=strat_label)
                     if result != 'none':
-                        _cached_auto_positions = await asyncio.to_thread(
-                            get_open_positions, trading_strategy='auto')
+                        _cached_strategy_positions[strat_name] = await asyncio.to_thread(
+                            get_open_positions, trading_strategy=strat_name)
+                        strat_positions = _cached_strategy_positions[strat_name]
                     elif market_price_data:
                         await run_position_analyst(
                             position, current_price, market_price_data,
                             settings, news_per_symbol,
-                            trailing_stop_activation=trailing_stop_activation,
-                            trading_strategy='auto')
+                            trailing_stop_activation=strat_risk['trailing_stop_activation'],
+                            trading_strategy=strat_name)
 
-        # --- Auto-Trading Shadow Bot: Signal Execution ---
-        if auto_enabled and not cb_tripped and bot_is_running.is_set() and signal is not None:
-            auto_open_crypto = [p for p in _cached_auto_positions
-                                if p.get('asset_type', 'crypto') == 'crypto' and p['status'] == 'OPEN']
-            auto_max = auto_cfg.get('max_concurrent_positions', max_concurrent_positions)
-            auto_balance = await asyncio.to_thread(get_account_balance, asset_type='crypto', trading_strategy='auto')
-            auto_available = auto_balance.get('USDT', 0)
+            # Signal Execution
+            # Per-strategy regime behavior
+            strat_regime = strat_cfg.get('regime_behavior', {})
+            strat_suppress = suppress_buys and not strat_regime.get('ignore_risk_off', False)
+            strat_caution_boost = strat_regime.get('caution_strength_boost',
+                                                   auto_cfg.get('caution_strength_boost', 0.10))
+            strat_macro_mult = macro_multiplier
+            # Override caution boost for this strategy
+            if macro_multiplier < 1.0 and strat_caution_boost != auto_cfg.get('caution_strength_boost', 0.10):
+                # Store on signal for trade_executor to pick up
+                pass
 
-            # Create a copy of the signal for auto-trading (don't mutate the original)
-            auto_signal = dict(signal)
-            await process_trade_signal(
-                symbol, auto_signal, current_price, auto_open_crypto, auto_available,
-                effective_risk_pct, signal_cooldown_hours, auto_max,
-                suppress_buys, macro_multiplier,
-                trading_strategy='auto', label='AUTO', is_auto=True,
-                current_prices=current_prices_dict,
-                dynamic_sl_pct=symbol_dynamic_sl,
-                dynamic_tp_pct=symbol_dynamic_tp)
+            if not cb_tripped and bot_is_running.is_set() and signal is not None:
+                strat_open = [p for p in strat_positions
+                              if p.get('asset_type', 'crypto') == 'crypto' and p['status'] == 'OPEN']
+                strat_max = strat_cfg.get('max_concurrent_positions', max_concurrent_positions)
+                strat_balance = await asyncio.to_thread(
+                    get_account_balance, asset_type='crypto', trading_strategy=strat_name)
+                strat_available = strat_balance.get('USDT', 0)
+
+                strat_signal = dict(signal)
+                await process_trade_signal(
+                    symbol, strat_signal, current_price, strat_open, strat_available,
+                    effective_risk_pct, signal_cooldown_hours, strat_max,
+                    strat_suppress, strat_macro_mult,
+                    trading_strategy=strat_name, label=strat_label, is_auto=True,
+                    current_prices=current_prices_dict,
+                    dynamic_sl_pct=symbol_dynamic_sl,
+                    dynamic_tp_pct=symbol_dynamic_tp)
+
+        # Update backward compat alias after strategy loop
+        _cached_auto_positions = _cached_strategy_positions.get('auto', [])
 
     # --- Event warnings for open positions ---
     try:
-        all_open = open_positions + (auto_open_crypto if auto_enabled else [])
+        all_strategy_positions = [p for positions in _cached_strategy_positions.values() for p in positions]
+        all_open = open_positions + all_strategy_positions
         event_warnings = await asyncio.to_thread(get_event_warnings_for_positions, all_open)
         for warn in event_warnings:
             sym = warn['symbol']
@@ -546,10 +594,17 @@ async def run_bot_cycle():
             get_open_positions, asset_type='stock')
         auto_summary_data = await get_trade_summary(
             24, 'auto') if auto_enabled else {}
+        # Per-strategy summaries for dashboard
+        strategy_summaries = {}
+        for sn, sc in strategy_configs.items():
+            if sc.get('enabled', False):
+                strategy_summaries[sn] = await get_trade_summary(24, sn)
         cycle_data = {
             'crypto_positions': _cached_crypto_positions,
             'stock_positions': stock_positions,
             'auto_positions': _cached_auto_positions,
+            'strategy_positions': _cached_strategy_positions,
+            'strategy_summaries': strategy_summaries,
             'crypto_balance': await asyncio.to_thread(
                 get_account_balance, asset_type='crypto'),
             'stock_balance': await asyncio.to_thread(
@@ -585,7 +640,8 @@ async def _check_pending_limit_orders(
     from src.database import get_pending_orders, fill_pending_order, cancel_pending_order
     from datetime import datetime, timezone
 
-    for strategy in ('manual', 'auto'):
+    all_strategies = ['manual'] + list(get_strategy_configs(settings).keys())
+    for strategy in all_strategies:
         pending = get_pending_orders(asset_type='crypto', trading_strategy=strategy)
         for order in pending:
             symbol = order['symbol']
@@ -740,7 +796,13 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
 
     auto_cfg = settings.get('auto_trading', {})
     auto_enabled = auto_cfg.get('enabled', False)
-    _cached_auto_stock_positions = await asyncio.to_thread(get_open_positions, asset_type='stock', trading_strategy='auto') if auto_enabled else []
+    strategy_configs = get_strategy_configs(settings)
+    _cached_strategy_stock_positions: dict[str, list] = {}
+    for strat_name, strat_cfg in strategy_configs.items():
+        if strat_cfg.get('enabled', False):
+            _cached_strategy_stock_positions[strat_name] = await asyncio.to_thread(
+                get_open_positions, asset_type='stock', trading_strategy=strat_name)
+    _cached_auto_stock_positions = _cached_strategy_stock_positions.get('auto', [])
 
     # Stock circuit breaker check — once per cycle
     live_config = settings.get('live_trading', {})
@@ -936,38 +998,49 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                 suppress_buys, macro_multiplier, asset_type='stock',
                 current_prices=stock_prices_dict)
 
-        # --- Auto-Trading Shadow Bot: Stock Position Monitoring ---
-        if auto_enabled:
-            for position in _cached_auto_stock_positions:
+        # --- Strategy Bots: Stock Position Monitoring + Signal Execution ---
+        for strat_name, strat_cfg in strategy_configs.items():
+            if not strat_cfg.get('enabled', False):
+                continue
+            strat_stock_positions = _cached_strategy_stock_positions.get(strat_name, [])
+            strat_label = strat_name.upper()
+
+            # Position Monitoring
+            for position in strat_stock_positions:
                 if position['symbol'] == symbol and position['status'] == 'OPEN':
                     result = await monitor_position(
                         position, current_price, **risk_cfg,
-                        asset_type='stock', trading_strategy='auto', mode_label='AUTO')
+                        asset_type='stock', trading_strategy=strat_name, mode_label=strat_label)
                     if result != 'none':
-                        _cached_auto_stock_positions = await asyncio.to_thread(
-                            get_open_positions, asset_type='stock', trading_strategy='auto')
+                        _cached_strategy_stock_positions[strat_name] = await asyncio.to_thread(
+                            get_open_positions, asset_type='stock', trading_strategy=strat_name)
+                        strat_stock_positions = _cached_strategy_stock_positions[strat_name]
                     else:
                         await run_position_analyst(
                             position, current_price,
                             {'current_price': current_price, 'sma': None, 'rsi': None},
                             settings, news_per_symbol,
                             trailing_stop_activation=trailing_stop_activation,
-                            asset_type='stock', trading_strategy='auto')
+                            asset_type='stock', trading_strategy=strat_name)
 
-        # --- Auto-Trading Shadow Bot: Stock Signal Execution ---
-        if auto_enabled and not stock_cb_tripped and bot_is_running.is_set() and signal is not None:
-            auto_open_stocks = [p for p in _cached_auto_stock_positions if p['status'] == 'OPEN']
-            auto_max = auto_cfg.get('max_concurrent_positions', max_concurrent_positions)
-            auto_balance = await asyncio.to_thread(get_account_balance, asset_type='stock', trading_strategy='auto')
-            auto_available = auto_balance.get('USDT', 0)
+            # Signal Execution
+            strat_regime = strat_cfg.get('regime_behavior', {})
+            strat_suppress = suppress_buys and not strat_regime.get('ignore_risk_off', False)
 
-            auto_signal = dict(signal)
-            await process_trade_signal(
-                symbol, auto_signal, current_price, auto_open_stocks, auto_available,
-                trade_risk_percentage, signal_cooldown_hours, auto_max,
-                suppress_buys, macro_multiplier,
-                asset_type='stock', trading_strategy='auto', label='AUTO', is_auto=True,
-                current_prices=stock_prices_dict)
+            if not stock_cb_tripped and bot_is_running.is_set() and signal is not None:
+                strat_open = [p for p in strat_stock_positions if p['status'] == 'OPEN']
+                strat_max = strat_cfg.get('max_concurrent_positions', max_concurrent_positions)
+                strat_balance = await asyncio.to_thread(
+                    get_account_balance, asset_type='stock', trading_strategy=strat_name)
+                strat_available = strat_balance.get('USDT', 0)
+
+                strat_signal = dict(signal)
+                await process_trade_signal(
+                    symbol, strat_signal, current_price, strat_open, strat_available,
+                    trade_risk_percentage, signal_cooldown_hours, strat_max,
+                    strat_suppress, macro_multiplier,
+                    asset_type='stock', trading_strategy=strat_name, label=strat_label, is_auto=True,
+                    current_prices=stock_prices_dict)
 
     log.info("--- Stock trading cycle complete ---")
 
