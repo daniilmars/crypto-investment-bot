@@ -417,8 +417,11 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
             '      "confidence": 0.0,\n'
             '      "reasoning": "one sentence: [catalyst] + [expected impact]",\n'
             '      "catalyst_type": "regulatory|etf|hack_exploit|macro|partnership|'
-            'protocol_upgrade|fund_flow|earnings|none",\n'
+            'protocol_upgrade|fund_flow|earnings|narrative|none",\n'
             '      "catalyst_freshness": "breaking|recent|stale|none",\n'
+            '      "catalyst_count": 1,\n'
+            '      "hype_vs_fundamental": "hype|fundamental|mixed",\n'
+            '      "risk_factors": [],\n'
             '      "sentiment_divergence": false,\n'
             '      "key_headline": "the single most impactful headline"\n'
             '    }\n'
@@ -426,6 +429,14 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
             '  "market_mood": "brief overall sentiment phrase",\n'
             '  "cross_asset_theme": "common driver across symbols, or null"\n'
             "}\n\n"
+            "FIELD DEFINITIONS:\n"
+            "- catalyst_count: number of DISTINCT independent catalysts (not rehashes "
+            "of the same story). Max 5.\n"
+            "- hype_vs_fundamental: 'hype' = social momentum/narrative/influencer-driven, "
+            "'fundamental' = regulatory/earnings/adoption/technology, "
+            "'mixed' = elements of both.\n"
+            "- risk_factors: up to 3 specific risks, e.g. ['priced in', 'low volume', "
+            "'single source', 'contradicted by on-chain data']. Empty array if none.\n\n"
             "CONFIDENCE CALIBRATION:\n"
             "- 0.0-0.3: no catalyst, noise, stale news\n"
             "- 0.3-0.5: weak catalyst or unconfirmed reports\n"
@@ -643,8 +654,11 @@ def analyze_news_impact(headlines_by_symbol: dict, current_prices: dict,
             '      "confidence": 0.0,\n'
             '      "reasoning": "one sentence: [catalyst] + [expected impact]",\n'
             '      "catalyst_type": "regulatory|etf|hack_exploit|macro|partnership|'
-            'protocol_upgrade|fund_flow|earnings|none",\n'
+            'protocol_upgrade|fund_flow|earnings|narrative|none",\n'
             '      "catalyst_freshness": "breaking|recent|stale|none",\n'
+            '      "catalyst_count": 1,\n'
+            '      "hype_vs_fundamental": "hype|fundamental|mixed",\n'
+            '      "risk_factors": [],\n'
             '      "sentiment_divergence": false,\n'
             '      "key_headline": "the single most impactful headline"\n'
             '    }\n'
@@ -652,6 +666,14 @@ def analyze_news_impact(headlines_by_symbol: dict, current_prices: dict,
             '  "market_mood": "brief overall sentiment phrase",\n'
             '  "cross_asset_theme": "common driver across symbols, or null"\n'
             "}\n\n"
+            "FIELD DEFINITIONS:\n"
+            "- catalyst_count: number of DISTINCT independent catalysts (not rehashes "
+            "of the same story). Max 5.\n"
+            "- hype_vs_fundamental: 'hype' = social momentum/narrative/influencer-driven, "
+            "'fundamental' = regulatory/earnings/adoption/technology, "
+            "'mixed' = elements of both.\n"
+            "- risk_factors: up to 3 specific risks, e.g. ['priced in', 'low volume', "
+            "'single source', 'contradicted by on-chain data']. Empty array if none.\n\n"
             "CONFIDENCE CALIBRATION (follow strictly):\n"
             "- 0.0-0.3: no catalyst, noise only, or stale/priced-in news\n"
             "- 0.3-0.5: weak catalyst or unconfirmed reports from lower-tier sources\n"

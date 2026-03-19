@@ -15,53 +15,67 @@ def _get_live_config():
 
 
 def check_circuit_breaker(balance, daily_pnl, recent_trades, asset_type='crypto',
-                          current_prices=None):
+                          current_prices=None, cb_config=None):
     """
-    Checks all circuit breaker conditions for a specific asset type.
+    Checks all circuit breaker conditions for a specific asset type or strategy.
 
     Args:
         balance: Current USDT balance (float).
         daily_pnl: Sum of today's closed-trade PnL (float), should include unrealized.
         recent_trades: List of recent closed trades (dicts with 'pnl' key),
                        ordered newest-first.
-        asset_type: 'crypto' or 'stock' — isolates circuit breaker per asset class.
+        asset_type: Free-text identifier for DB isolation (e.g. 'crypto', 'stock',
+                    'auto', 'momentum', 'conservative').
         current_prices: {symbol: float} — current market prices for unrealized PnL.
+        cb_config: Optional per-strategy circuit breaker config dict. When provided,
+                   overrides thresholds from the global live_trading config. Expected
+                   keys: initial_capital, cooldown_hours, balance_floor_usd,
+                   daily_loss_limit_pct, max_drawdown_pct, max_consecutive_losses.
 
     Returns:
         (is_tripped, reason): Tuple of (bool, str). If tripped, reason explains why.
     """
     config = _get_live_config()
-    # Use asset-appropriate initial capital
-    settings = app_config.get('settings', {})
-    if asset_type == 'stock':
-        stock_cfg = settings.get('stock_trading', {})
-        initial_capital = stock_cfg.get('paper_trading_initial_capital',
-                                        settings.get('paper_trading_initial_capital', 10000.0))
-    elif asset_type == 'auto':
-        auto_cfg = settings.get('auto_trading', {})
-        initial_capital = auto_cfg.get('paper_trading_initial_capital', 10000.0)
+
+    # Determine initial capital — cb_config overrides asset_type-based lookup
+    if cb_config and 'initial_capital' in cb_config:
+        initial_capital = cb_config['initial_capital']
     else:
-        # Crypto: use paper trading capital when paper trading or testnet
-        mode = config.get('mode', 'live')
-        if settings.get('paper_trading', True) or mode == 'testnet':
-            initial_capital = settings.get('paper_trading_initial_capital', 10000.0)
+        settings = app_config.get('settings', {})
+        if asset_type == 'stock':
+            stock_cfg = settings.get('stock_trading', {})
+            initial_capital = stock_cfg.get('paper_trading_initial_capital',
+                                            settings.get('paper_trading_initial_capital', 10000.0))
+        elif asset_type == 'auto':
+            auto_cfg = settings.get('auto_trading', {})
+            initial_capital = auto_cfg.get('paper_trading_initial_capital', 10000.0)
         else:
-            initial_capital = config.get('initial_capital', 100.0)
+            mode = config.get('mode', 'live')
+            if settings.get('paper_trading', True) or mode == 'testnet':
+                initial_capital = settings.get('paper_trading_initial_capital', 10000.0)
+            else:
+                initial_capital = config.get('initial_capital', 100.0)
+
+    # Helper to read threshold: cb_config first, then global config
+    def _threshold(key, default):
+        if cb_config and key in cb_config:
+            return cb_config[key]
+        return config.get(key, default)
 
     # 1. Cooldown check (must be first — overrides everything during cooldown)
-    cooldown_hours = config.get('cooldown_hours', 24)
+    cooldown_hours = _threshold('cooldown_hours', 24)
     if is_in_cooldown(cooldown_hours, asset_type=asset_type):
         return True, f"Cooldown active (waiting {cooldown_hours}h after last {asset_type} circuit breaker event)"
 
     # 2. Balance floor — absolute minimum
-    balance_floor = config.get('balance_floor_usd', 70.0)
+    balance_floor = _threshold('balance_floor_usd', 70.0)
     if balance < balance_floor:
         reason = f"Balance ${balance:.2f} below floor ${balance_floor:.2f}"
         record_circuit_breaker_event('balance_floor', reason, asset_type=asset_type)
         return True, reason
 
     # 3. Daily loss limit
-    daily_loss_limit_pct = config.get('daily_loss_limit_pct', 0.10)
+    daily_loss_limit_pct = _threshold('daily_loss_limit_pct', 0.10)
     daily_loss_limit = initial_capital * daily_loss_limit_pct
     if daily_pnl <= -daily_loss_limit:
         reason = f"Daily loss ${daily_pnl:.2f} exceeds limit -${daily_loss_limit:.2f} ({daily_loss_limit_pct*100:.0f}%)"
@@ -69,7 +83,7 @@ def check_circuit_breaker(balance, daily_pnl, recent_trades, asset_type='crypto'
         return True, reason
 
     # 4. Max drawdown from peak (include unrealized PnL in effective balance)
-    max_drawdown_pct = config.get('max_drawdown_pct', 0.25)
+    max_drawdown_pct = _threshold('max_drawdown_pct', 0.25)
     peak_balance = _get_peak_balance(initial_capital, asset_type=asset_type)
     drawdown_threshold = peak_balance * (1 - max_drawdown_pct)
     unrealized = 0.0
@@ -86,7 +100,7 @@ def check_circuit_breaker(balance, daily_pnl, recent_trades, asset_type='crypto'
     # 5. Consecutive losses
     # Only trigger if the latest trade is newer than the last consecutive_losses event,
     # otherwise we'd re-trigger on the same stale trades after every cooldown expiry.
-    max_consecutive = config.get('max_consecutive_losses', 3)
+    max_consecutive = _threshold('max_consecutive_losses', 3)
     if len(recent_trades) >= max_consecutive:
         last_n = recent_trades[:max_consecutive]
         if all(t.get('pnl', 0) < 0 for t in last_n):

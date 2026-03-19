@@ -176,6 +176,29 @@ def load_config():
     
     return config
 
+def get_strategy_configs(settings=None):
+    """Returns configured trading strategies as {name: config} dict.
+
+    Reads from settings.strategies if present, otherwise synthesizes
+    a single 'auto' strategy from the legacy auto_trading section.
+    The 'manual' strategy is never included — it uses the Telegram
+    confirmation flow and is handled separately.
+    """
+    if settings is None:
+        settings = app_config.get('settings', {})
+
+    strategies = settings.get('strategies')
+    if strategies and isinstance(strategies, dict):
+        return {name: cfg for name, cfg in strategies.items()
+                if isinstance(cfg, dict)}
+
+    # Fallback: synthesize from legacy auto_trading section
+    auto_cfg = settings.get('auto_trading', {})
+    if not auto_cfg.get('enabled', False):
+        return {}
+    return {'auto': auto_cfg}
+
+
 # Create a single, memoized config instance.
 app_config = load_config()
 
