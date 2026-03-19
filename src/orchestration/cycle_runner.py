@@ -217,12 +217,9 @@ async def run_bot_cycle():
             _cached_strategy_positions[strat_name] = await asyncio.to_thread(
                 get_open_positions, trading_strategy=strat_name)
 
-    # Backward compat alias
-    _cached_auto_positions = _cached_strategy_positions.get('auto', [])
+    _cached_auto_positions = _cached_strategy_positions.get('auto', [])  # used by dashboard
 
     open_positions = _cached_crypto_positions
-    auto_open_crypto = [p for p in _cached_auto_positions
-                        if p.get('asset_type', 'crypto') == 'crypto' and p['status'] == 'OPEN']
 
     # Risk management config for position monitor
     risk_cfg = dict(
@@ -794,15 +791,12 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
     _cached_stock_positions = await asyncio.to_thread(get_open_positions, asset_type='stock', trading_strategy='manual') if (paper_trading or is_live) else []
     _cached_alpaca_positions = await asyncio.to_thread(get_stock_positions) if broker == 'alpaca' else []
 
-    auto_cfg = settings.get('auto_trading', {})
-    auto_enabled = auto_cfg.get('enabled', False)
     strategy_configs = get_strategy_configs(settings)
     _cached_strategy_stock_positions: dict[str, list] = {}
     for strat_name, strat_cfg in strategy_configs.items():
         if strat_cfg.get('enabled', False):
             _cached_strategy_stock_positions[strat_name] = await asyncio.to_thread(
                 get_open_positions, asset_type='stock', trading_strategy=strat_name)
-    _cached_auto_stock_positions = _cached_strategy_stock_positions.get('auto', [])
 
     # Stock circuit breaker check — once per cycle
     live_config = settings.get('live_trading', {})
