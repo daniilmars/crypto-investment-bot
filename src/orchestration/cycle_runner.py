@@ -446,6 +446,9 @@ async def run_bot_cycle():
                 log.debug(f"Attribution recording skipped: {_attr_err}")
 
         # --- 4. Trade Execution (Paper & Live) with Dynamic Sizing ---
+        # Preserve original signal before manual path can mutate it
+        # (process_trade_signal sets signal['signal']='HOLD' on cooldown/regime block)
+        original_signal = dict(signal) if signal else None
         can_trade = paper_trading or is_live
 
         if can_trade:
@@ -528,7 +531,7 @@ async def run_bot_cycle():
                 # Store on signal for trade_executor to pick up
                 pass
 
-            if not cb_tripped and bot_is_running.is_set() and signal is not None:
+            if not cb_tripped and bot_is_running.is_set() and original_signal is not None:
                 strat_open = [p for p in strat_positions
                               if p.get('asset_type', 'crypto') == 'crypto' and p['status'] == 'OPEN']
                 strat_max = strat_cfg.get('max_concurrent_positions', max_concurrent_positions)
@@ -536,7 +539,7 @@ async def run_bot_cycle():
                     get_account_balance, asset_type='crypto', trading_strategy=strat_name)
                 strat_available = strat_balance.get('USDT', 0)
 
-                strat_signal = dict(signal)
+                strat_signal = dict(original_signal)
                 await process_trade_signal(
                     symbol, strat_signal, current_price, strat_open, strat_available,
                     effective_risk_pct, signal_cooldown_hours, strat_max,
@@ -974,6 +977,9 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
         stock_kelly = stock_trade_stats.get('kelly_fraction', 0.0)
         stock_risk_pct = stock_kelly if (stock_kelly > 0 and stock_trade_stats.get('total_trades', 0) >= 10) else trade_risk_percentage
 
+        # Preserve original signal before manual path can mutate it
+        original_stock_signal = dict(signal) if signal else None
+
         if broker == 'alpaca':
             pdt_status = await asyncio.to_thread(_check_pdt_rule)
             balance = await asyncio.to_thread(get_stock_balance)
@@ -1021,14 +1027,14 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
             strat_regime = strat_cfg.get('regime_behavior', {})
             strat_suppress = suppress_buys and not strat_regime.get('ignore_risk_off', False)
 
-            if not stock_cb_tripped and bot_is_running.is_set() and signal is not None:
+            if not stock_cb_tripped and bot_is_running.is_set() and original_stock_signal is not None:
                 strat_open = [p for p in strat_stock_positions if p['status'] == 'OPEN']
                 strat_max = strat_cfg.get('max_concurrent_positions', max_concurrent_positions)
                 strat_balance = await asyncio.to_thread(
                     get_account_balance, asset_type='stock', trading_strategy=strat_name)
                 strat_available = strat_balance.get('USDT', 0)
 
-                strat_signal = dict(signal)
+                strat_signal = dict(original_stock_signal)
                 await process_trade_signal(
                     symbol, strat_signal, current_price, strat_open, strat_available,
                     trade_risk_percentage, signal_cooldown_hours, strat_max,
