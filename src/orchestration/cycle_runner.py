@@ -547,7 +547,8 @@ async def run_bot_cycle():
                     trading_strategy=strat_name, label=strat_label, is_auto=True,
                     current_prices=current_prices_dict,
                     dynamic_sl_pct=symbol_dynamic_sl,
-                    dynamic_tp_pct=symbol_dynamic_tp)
+                    dynamic_tp_pct=symbol_dynamic_tp,
+                    strategy_config=strat_cfg)
 
         # Update backward compat alias after strategy loop
         _cached_auto_positions = _cached_strategy_positions.get('auto', [])
@@ -1040,7 +1041,8 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                     trade_risk_percentage, signal_cooldown_hours, strat_max,
                     strat_suppress, macro_multiplier,
                     asset_type='stock', trading_strategy=strat_name, label=strat_label, is_auto=True,
-                    current_prices=stock_prices_dict)
+                    current_prices=stock_prices_dict,
+                    strategy_config=strat_cfg)
 
     log.info("--- Stock trading cycle complete ---")
 

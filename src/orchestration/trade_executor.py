@@ -54,6 +54,7 @@ async def process_trade_signal(
     current_prices: dict | None = None,
     dynamic_sl_pct: float | None = None,
     dynamic_tp_pct: float | None = None,
+    strategy_config: dict | None = None,
 ) -> dict | None:
     """Unified signal processing pipeline: cooldowns → gates → execute.
 
@@ -83,15 +84,18 @@ async def process_trade_signal(
     # 2. Auto signal quality gate — block weak signals
     if is_auto and signal_type in ("BUY", "SELL"):
         signal_strength = signal.get('signal_strength', 0)
-        auto_cfg = app_config.get('settings', {}).get('auto_trading', {})
+        # Use per-strategy config if provided, else fall back to global auto_trading
+        scfg = strategy_config or app_config.get('settings', {}).get('auto_trading', {})
+        regime_cfg = scfg.get('regime_behavior', {})
 
         if signal_type == "BUY":
-            min_strength = auto_cfg.get('min_signal_strength', 0.65)
+            min_strength = scfg.get('min_signal_strength', 0.65)
             # Raise bar in CAUTION/RISK_OFF regime
             if macro_multiplier < 1.0:
-                min_strength += auto_cfg.get('caution_strength_boost', 0.10)
+                min_strength += regime_cfg.get('caution_strength_boost',
+                                               scfg.get('caution_strength_boost', 0.10))
         else:
-            min_strength = auto_cfg.get('min_sell_signal_strength', 0.50)
+            min_strength = scfg.get('min_sell_signal_strength', 0.50)
 
         if signal_strength < min_strength:
             log.info(f"[{label}] Skipping auto {signal_type} for {symbol}: "
