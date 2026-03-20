@@ -322,7 +322,7 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
         from google import genai
         from google.genai.types import GenerateContentConfig, Tool, GoogleSearch
 
-        # Prefer consumer API key (guaranteed free grounding tier, 1,500/day)
+        # Prefer consumer API key (free grounding tier, 500 RPD)
         # Falls back to Vertex AI if no key set
         gemini_api_key = os.environ.get('GEMINI_API_KEY')
         if gemini_api_key:
@@ -446,38 +446,18 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
             "- Include ALL requested symbols. When in doubt, score LOWER."
         )
 
-        # flash-lite with GoogleSearch intermittently returns empty text;
-        # retry up to 3 times, then fall back to flash (non-lite) once.
-        _EMPTY_RETRIES = 3
-        models_to_try = [
-            ("gemini-2.5-flash-lite", _EMPTY_RETRIES),
-            ("gemini-2.5-flash", 1),
-        ]
-        text = ''
-        for model_name, max_attempts in models_to_try:
-            for attempt in range(max_attempts):
-                response = _call_with_retry(
-                    client.models.generate_content,
-                    model=model_name,
-                    contents=prompt,
-                    config=GenerateContentConfig(
-                        tools=[Tool(google_search=GoogleSearch())],
-                        temperature=0.2,
-                    ),
-                )
-                text = response.text.strip() if response.text else ''
-                if text:
-                    break
-                log.warning(f"Gemini grounded search ({model_name}) returned "
-                            f"empty response (attempt {attempt + 1}/{max_attempts})"
-                            f" for {len(symbols)} symbols")
-                if attempt < max_attempts - 1:
-                    time.sleep(2 * (attempt + 1))
-            if text:
-                if model_name != "gemini-2.5-flash-lite":
-                    log.info(f"Grounded search succeeded with fallback model "
-                             f"{model_name} for {len(symbols)} symbols")
-                break
+        # Single attempt per batch — no retries to stay within 500 RPD free tier.
+        # Empty response = skip this batch (will be reassessed next uncached cycle).
+        response = _call_with_retry(
+            client.models.generate_content,
+            model="gemini-2.5-flash-lite",
+            contents=prompt,
+            config=GenerateContentConfig(
+                tools=[Tool(google_search=GoogleSearch())],
+                temperature=0.2,
+            ),
+        )
+        text = response.text.strip() if response.text else ''
         if not text:
             log.error(f"Gemini grounded search returned empty after all "
                       f"retries for {len(symbols)} symbols: {symbols[:5]}...")

@@ -193,9 +193,9 @@ def _split_symbols_into_batches(
 
     batches = []
 
-    # Max symbols per batch — smaller batches improve flash-lite grounding reliability.
-    # 15 per batch × ~27 batches, with 30-min cache → ~1,296 calls/day (within 1,500 free)
-    max_batch = 15
+    # Max symbols per batch — larger batches reduce API call count.
+    # 40 per batch × ~10 batches, with 90-min cache → ~80 calls/day (within 500 free RPD)
+    max_batch = 40
 
     for sym_list in [crypto_syms, us_stock_syms, eu_stock_syms,
                      asia_stock_syms, other_syms]:

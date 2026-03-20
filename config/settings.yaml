@@ -165,9 +165,9 @@ settings:
       enabled: true
     # Use Gemini 2.0 Flash for per-article sentiment scoring (replaces VADER, DB-cached)
     use_gemini_scoring: true
-    # Cache Gemini grounded search per batch (45 min = every 3rd cycle)
-    # 28 batches × ~17 uncached cycles/day = ~476 calls/day (within 500 free RPD)
-    cache_ttl_minutes: 45
+    # Cache Gemini grounded search per batch (90 min = every 6th cycle)
+    # 10 batches × ~8 uncached cycles/day = ~80 calls/day (within 500 free RPD)
+    cache_ttl_minutes: 90
     # Freshness decay half-life: articles older than this (hours) get half weight
     freshness_half_life_hours: 6
     # Volume spike: trigger Gemini if current_volume > previous_volume * multiplier
