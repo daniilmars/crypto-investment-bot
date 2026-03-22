@@ -70,27 +70,26 @@ async def collect_and_analyze_news(
         cache_ttl = news_config.get('cache_ttl_minutes', 15)
         batches = _split_symbols_into_batches(all_symbols, settings)
 
-        # Limit concurrency to avoid Gemini rate limits
-        sem = asyncio.Semaphore(4)
-
-        async def _call_batch(batch):
-            async with sem:
-                return await asyncio.to_thread(
-                    analyze_news_with_search,
-                    batch, current_prices_dict,
-                    cache_ttl_minutes=cache_ttl,
-                    headlines_by_symbol={s: headlines_by_symbol[s]
-                                         for s in batch if s in headlines_by_symbol} or None,
-                    archived_articles_by_symbol={s: archived_articles_by_symbol[s]
-                                                 for s in batch if s in archived_articles_by_symbol} or None,
-                    news_stats_by_symbol={s: news_stats_by_symbol[s]
-                                          for s in batch if s in news_stats_by_symbol} or None,
-                    scored_articles_by_symbol={s: scored_articles_by_symbol[s]
-                                               for s in batch if s in scored_articles_by_symbol} or None,
-                )
-
-        batch_results = await asyncio.gather(
-            *[_call_batch(b) for b in batches])
+        # Sequential batch calls with small delay to avoid overwhelming flash-lite.
+        # Parallel calls caused 60%+ empty response rate.
+        batch_results = []
+        for i, batch in enumerate(batches):
+            result = await asyncio.to_thread(
+                analyze_news_with_search,
+                batch, current_prices_dict,
+                cache_ttl_minutes=cache_ttl,
+                headlines_by_symbol={s: headlines_by_symbol[s]
+                                     for s in batch if s in headlines_by_symbol} or None,
+                archived_articles_by_symbol={s: archived_articles_by_symbol[s]
+                                             for s in batch if s in archived_articles_by_symbol} or None,
+                news_stats_by_symbol={s: news_stats_by_symbol[s]
+                                      for s in batch if s in news_stats_by_symbol} or None,
+                scored_articles_by_symbol={s: scored_articles_by_symbol[s]
+                                           for s in batch if s in scored_articles_by_symbol} or None,
+            )
+            batch_results.append(result)
+            if i < len(batches) - 1:
+                await asyncio.sleep(1)  # 1s delay between batches
 
         # Merge batch results into single gemini_assessments dict
         gemini_assessments = _merge_batch_results(batch_results)

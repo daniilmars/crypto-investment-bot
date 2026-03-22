@@ -279,10 +279,10 @@ async def execute_buy(
 ):
     """Calculate quantity and execute a BUY signal (or send for confirmation).
 
-    For auto-trading (trading_strategy='auto'), skips confirmation and alerts.
+    For auto strategies (any trading_strategy != 'manual'), skips confirmation.
     """
     prefix = f"[{label}] " if label else ""
-    is_auto = trading_strategy == 'auto'
+    is_auto = trading_strategy != 'manual'
 
     capital_to_risk = current_balance * risk_pct * size_mult
     quantity = capital_to_risk / current_price if current_price > 0 else 0
@@ -315,11 +315,11 @@ async def execute_buy(
         if use_limit:
             return _place_limit_buy(
                 symbol, quantity, current_price, pullback_pct,
-                asset_type=asset_type, trading_strategy='auto',
+                asset_type=asset_type, trading_strategy=trading_strategy,
                 dynamic_sl_pct=dynamic_sl_pct, dynamic_tp_pct=dynamic_tp_pct)
 
         return place_order(symbol, "BUY", quantity, current_price,
-                           asset_type=asset_type, trading_strategy='auto',
+                           asset_type=asset_type, trading_strategy=trading_strategy,
                            dynamic_sl_pct=dynamic_sl_pct,
                            dynamic_tp_pct=dynamic_tp_pct)
 
@@ -416,7 +416,7 @@ async def execute_sell(
     For auto-trading (trading_strategy='auto'), skips confirmation and alerts.
     """
     prefix = f"[{label}] " if label else ""
-    is_auto = trading_strategy == 'auto'
+    is_auto = trading_strategy != 'manual'
     qty = position['quantity']
     order_id = position['order_id']
 
@@ -426,12 +426,12 @@ async def execute_sell(
 
     if is_auto:
         log.info(f"{prefix}Executing SELL {qty:.6f} {symbol}")
-        order_kw = {'trading_strategy': 'auto'}
+        order_kw = {'trading_strategy': trading_strategy}
         if asset_type == 'stock':
             order_kw['asset_type'] = 'stock'
         result = place_order(symbol, "SELL", qty, current_price,
                              existing_order_id=order_id, exit_reason='signal_sell', **order_kw)
-        bot_state.auto_clear_trailing_stop(order_id)
+        bot_state.strategy_clear_trailing_stop(order_id, trading_strategy)
         return result
 
     # Manual trading
