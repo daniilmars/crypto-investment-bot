@@ -40,7 +40,7 @@ def _cursor(conn):
 # --- Connection Pool (for PostgreSQL) ---
 _pg_pool = None
 
-ALLOWED_TABLES = frozenset({"market_prices", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles", "stoploss_cooldowns", "position_additions", "ipo_events", "macro_regime_history", "source_registry", "signal_attribution", "experiment_log", "tuning_history", "session_peaks", "watchlist_items", "bot_state_kv", "signal_decisions", "sector_convictions"})
+ALLOWED_TABLES = frozenset({"market_prices", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles", "stoploss_cooldowns", "position_additions", "ipo_events", "macro_regime_history", "source_registry", "signal_attribution", "experiment_log", "tuning_history", "session_peaks", "watchlist_items", "bot_state_kv", "signal_decisions", "sector_convictions", "gemini_assessments"})
 
 # --- Database Connection Management ---
 
@@ -879,6 +879,44 @@ def initialize_database(db_url=None):
             "ON sector_convictions (sector_group, recorded_at)"
         )
 
+        # Gemini Assessments (persistent per-symbol assessment history for backtesting)
+        gemini_assessments_sql = '''
+            CREATE TABLE IF NOT EXISTS gemini_assessments (
+                id SERIAL PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                direction TEXT,
+                confidence REAL,
+                catalyst_type TEXT,
+                catalyst_freshness TEXT,
+                catalyst_count INTEGER,
+                hype_vs_fundamental TEXT,
+                risk_factors TEXT,
+                reasoning TEXT,
+                key_headline TEXT,
+                market_mood TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )''' if is_postgres_conn else '''
+            CREATE TABLE IF NOT EXISTS gemini_assessments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                direction TEXT,
+                confidence REAL,
+                catalyst_type TEXT,
+                catalyst_freshness TEXT,
+                catalyst_count INTEGER,
+                hype_vs_fundamental TEXT,
+                risk_factors TEXT,
+                reasoning TEXT,
+                key_headline TEXT,
+                market_mood TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )'''
+        cursor.execute(gemini_assessments_sql)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_gemini_assess_symbol "
+            "ON gemini_assessments (symbol, created_at)"
+        )
+
         # --- Performance indexes ---
         perf_indexes = [
             "CREATE INDEX IF NOT EXISTS idx_market_prices_symbol_ts "
@@ -1547,6 +1585,63 @@ def load_trailing_stop_peaks() -> dict:
     except (sqlite3.Error, psycopg2.Error) as e:
         log.error(f"Database error in load_trailing_stop_peaks: {e}", exc_info=True)
         return {}
+    finally:
+        release_db_connection(conn)
+
+
+def save_gemini_assessments(assessments: dict):
+    """Persist per-symbol Gemini assessments for backtesting.
+
+    Args:
+        assessments: Full Gemini result dict with 'symbol_assessments' and 'market_mood'.
+    """
+    if not assessments:
+        return
+    symbol_data = assessments.get('symbol_assessments', {})
+    if not symbol_data:
+        return
+    mood = assessments.get('market_mood', '')
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        query = '''
+            INSERT INTO gemini_assessments
+            (symbol, direction, confidence, catalyst_type, catalyst_freshness,
+             catalyst_count, hype_vs_fundamental, risk_factors, reasoning,
+             key_headline, market_mood)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ''' if is_pg else '''
+            INSERT INTO gemini_assessments
+            (symbol, direction, confidence, catalyst_type, catalyst_freshness,
+             catalyst_count, hype_vs_fundamental, risk_factors, reasoning,
+             key_headline, market_mood)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        '''
+        import json as _json
+        with _cursor(conn) as cursor:
+            for sym, sa in symbol_data.items():
+                rf = sa.get('risk_factors')
+                rf_str = _json.dumps(rf) if isinstance(rf, list) else str(rf) if rf else None
+                cursor.execute(query, (
+                    sym,
+                    sa.get('direction'),
+                    sa.get('confidence'),
+                    sa.get('catalyst_type'),
+                    sa.get('catalyst_freshness'),
+                    sa.get('catalyst_count'),
+                    sa.get('hype_vs_fundamental'),
+                    rf_str,
+                    sa.get('reasoning', '')[:500],
+                    sa.get('key_headline', '')[:200],
+                    mood[:200] if mood else None,
+                ))
+        conn.commit()
+        log.debug(f"Saved {len(symbol_data)} Gemini assessments to DB.")
+    except Exception as e:
+        log.warning(f"Failed to save Gemini assessments: {e}")
+        if conn:
+            conn.rollback()
     finally:
         release_db_connection(conn)
 
@@ -2298,6 +2393,7 @@ def cleanup_old_rows(days: int = 30) -> dict:
                 ("market_prices", "timestamp"),
                 ("signals", "timestamp"),
                 ("news_sentiment", "timestamp"),
+                ("gemini_assessments", "created_at"),
             ]
             for table, col in tables:
                 if is_pg:

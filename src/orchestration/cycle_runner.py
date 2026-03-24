@@ -53,6 +53,7 @@ from src.orchestration.news_pipeline import (
     collect_and_analyze_news, run_proactive_market_alerts,
 )
 from src.analysis.signal_attribution import record_signal_attribution
+from src.analysis.strategy_weights import compute_effective_strength
 from src.config import get_strategy_configs
 
 # --- Daily kline cache (Plan 2: Daily SMA + Plan 1: ATR) ---
@@ -198,6 +199,14 @@ async def run_bot_cycle():
     gemini_assessments, news_per_symbol = await collect_and_analyze_news(
         all_symbols, current_prices_dict, settings,
         macro_regime_result=macro_regime_result)
+
+    # Persist Gemini assessments for backtesting
+    if gemini_assessments:
+        try:
+            from src.database import save_gemini_assessments
+            await asyncio.to_thread(save_gemini_assessments, gemini_assessments)
+        except Exception as e:
+            log.debug(f"Assessment persistence skipped: {e}")
 
     # --- Proactive Market Event Alerts ---
     all_watch_symbols = watch_list + settings.get('stock_trading', {}).get('watch_list', [])
@@ -541,6 +550,11 @@ async def run_bot_cycle():
                 strat_available = strat_balance.get('USDT', 0)
 
                 strat_signal = dict(original_signal)
+                # Apply strategy-specific weighting to signal strength
+                if ga and strat_signal.get('signal') in ('BUY', 'SELL'):
+                    strat_signal['signal_strength'] = compute_effective_strength(
+                        strat_signal.get('signal_strength', 0),
+                        ga, strat_cfg.get('weights', {}))
                 await process_trade_signal(
                     symbol, strat_signal, current_price, strat_open, strat_available,
                     effective_risk_pct, signal_cooldown_hours, strat_max,
@@ -1037,6 +1051,12 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                 strat_available = strat_balance.get('USDT', 0)
 
                 strat_signal = dict(original_stock_signal)
+                # Apply strategy-specific weighting to signal strength
+                stock_ga = gemini_assessments.get('symbol_assessments', {}).get(symbol) if gemini_assessments else None
+                if stock_ga and strat_signal.get('signal') in ('BUY', 'SELL'):
+                    strat_signal['signal_strength'] = compute_effective_strength(
+                        strat_signal.get('signal_strength', 0),
+                        stock_ga, strat_cfg.get('weights', {}))
                 await process_trade_signal(
                     symbol, strat_signal, current_price, strat_open, strat_available,
                     trade_risk_percentage, signal_cooldown_hours, strat_max,
