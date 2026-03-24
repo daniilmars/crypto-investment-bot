@@ -231,6 +231,89 @@ def _classify_regime(signals: dict, cfg: dict) -> tuple:
         return MacroRegime.CAUTION, caution_mult, False
 
 
+def get_regime_trajectory() -> dict:
+    """Compute regime trajectory from recent history.
+
+    Returns dict with days_in_regime, regime_direction (improving/worsening/stable),
+    vix_trend (rising/falling/flat), score_trend, and a human-readable summary.
+    """
+    try:
+        from src.database import get_macro_regime_history
+        history = get_macro_regime_history(limit=100)
+        if not history or len(history) < 2:
+            return {'days_in_regime': 0, 'regime_direction': 'unknown',
+                    'vix_trend': 'unknown', 'summary': ''}
+
+        current_regime = history[0].get('regime', 'CAUTION')
+
+        # Days in current regime (count consecutive same-regime rows)
+        consecutive = 0
+        for row in history:
+            if row.get('regime') == current_regime:
+                consecutive += 1
+            else:
+                break
+        # Approximate days from 15-min cycle intervals
+        days_in_regime = round(consecutive * 15 / 60 / 24, 1)
+
+        # Score trend: compare avg of last 10 vs previous 10
+        recent_scores = [r.get('score', 0) for r in history[:10] if r.get('score') is not None]
+        older_scores = [r.get('score', 0) for r in history[10:20] if r.get('score') is not None]
+        if recent_scores and older_scores:
+            avg_recent = sum(recent_scores) / len(recent_scores)
+            avg_older = sum(older_scores) / len(older_scores)
+            score_delta = avg_recent - avg_older
+            if score_delta > 0.5:
+                regime_direction = 'improving'
+            elif score_delta < -0.5:
+                regime_direction = 'worsening'
+            else:
+                regime_direction = 'stable'
+        else:
+            avg_recent = recent_scores[0] if recent_scores else 0
+            regime_direction = 'stable'
+
+        # VIX trend: compare latest vs 24h ago (~96 rows at 15-min intervals)
+        vix_now = history[0].get('vix_current')
+        vix_rows_ago = min(96, len(history) - 1)
+        vix_prev = history[vix_rows_ago].get('vix_current') if vix_rows_ago > 0 else None
+        if vix_now is not None and vix_prev is not None:
+            vix_delta = vix_now - vix_prev
+            if vix_delta > 1.0:
+                vix_trend = 'rising'
+            elif vix_delta < -1.0:
+                vix_trend = 'falling'
+            else:
+                vix_trend = 'flat'
+            vix_str = f"VIX {vix_now:.1f} ({vix_trend} from {vix_prev:.1f})"
+        else:
+            vix_trend = 'unknown'
+            vix_str = f"VIX {vix_now:.1f}" if vix_now else "VIX unknown"
+
+        # Previous regime
+        prev_regime = None
+        for row in history[consecutive:]:
+            prev_regime = row.get('regime')
+            break
+
+        summary = (f"{current_regime} for {days_in_regime}d ({regime_direction}). "
+                   f"Score: {avg_recent:.1f}. {vix_str}.")
+
+        return {
+            'current_regime': current_regime,
+            'days_in_regime': days_in_regime,
+            'regime_direction': regime_direction,
+            'vix_trend': vix_trend,
+            'score_trend': f"{avg_recent:.1f}",
+            'previous_regime': prev_regime,
+            'summary': summary,
+        }
+    except Exception as e:
+        log.warning(f"Failed to compute regime trajectory: {e}")
+        return {'days_in_regime': 0, 'regime_direction': 'unknown',
+                'vix_trend': 'unknown', 'summary': ''}
+
+
 def clear_regime_cache():
     """Clears the cached regime result. Useful for tests."""
     _regime_cache.clear()

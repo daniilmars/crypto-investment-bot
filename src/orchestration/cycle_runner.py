@@ -196,7 +196,8 @@ async def run_bot_cycle():
             current_prices_dict[sym] = price
 
     gemini_assessments, news_per_symbol = await collect_and_analyze_news(
-        all_symbols, current_prices_dict, settings)
+        all_symbols, current_prices_dict, settings,
+        macro_regime_result=macro_regime_result)
 
     # --- Proactive Market Event Alerts ---
     all_watch_symbols = watch_list + settings.get('stock_trading', {}).get('watch_list', [])

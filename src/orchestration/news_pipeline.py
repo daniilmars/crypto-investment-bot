@@ -11,10 +11,77 @@ from src.logger import log
 from src.notify.telegram_bot import send_news_alert, send_market_event_alert
 
 
+def build_trade_feedback_context(days=14, limit=20) -> str:
+    """Build trade outcome feedback string for Gemini prompt injection."""
+    try:
+        from src.analysis.signal_attribution import get_recent_trade_outcomes
+        outcomes = get_recent_trade_outcomes(days=days, limit=limit)
+        if not outcomes:
+            return ''
+
+        lines = []
+        for t in outcomes:
+            sym = t.get('symbol', '?')
+            conf = t.get('gemini_confidence')
+            cat = t.get('catalyst_type', '?')
+            exit_r = t.get('exit_reason', '?')
+            pnl_pct = t.get('trade_pnl_pct')
+            pnl_str = f"{pnl_pct:+.1f}%" if pnl_pct is not None else "?"
+
+            # Derive lesson from outcome
+            if exit_r and 'stop_loss' in exit_r:
+                lesson = "catalyst did not sustain price movement"
+            elif exit_r and 'take_profit' in exit_r:
+                lesson = "catalyst confirmed, strong follow-through"
+            elif exit_r and 'trailing' in exit_r:
+                lesson = "partial move captured before reversal"
+            elif exit_r and 'analyst' in exit_r:
+                lesson = "position analyst recommended exit"
+            else:
+                lesson = f"{exit_r or 'closed'}"
+
+            conf_str = f"conf={conf:.2f}" if conf else "conf=?"
+            lines.append(f"- {sym}: BUY ({conf_str}, {cat}) -> {exit_r} {pnl_str}. {lesson}")
+
+        return '\n'.join(lines)
+    except Exception as e:
+        log.debug(f"Trade feedback context unavailable: {e}")
+        return ''
+
+
+def build_regime_context(macro_regime_result: dict = None) -> str:
+    """Build regime trajectory context string for Gemini prompt injection."""
+    try:
+        from src.analysis.macro_regime import get_regime_trajectory
+        trajectory = get_regime_trajectory()
+        summary = trajectory.get('summary', '')
+        if not summary:
+            return ''
+
+        regime = trajectory.get('current_regime', '?')
+        direction = trajectory.get('regime_direction', '?')
+        days = trajectory.get('days_in_regime', 0)
+
+        lines = [
+            f"MARKET REGIME: {regime} for {days}d ({direction})",
+            f"  {summary}",
+        ]
+        if regime == 'RISK_OFF':
+            lines.append("  Apply extra scrutiny to BUY signals. Require stronger catalysts.")
+        elif regime == 'RISK_ON':
+            lines.append("  Risk appetite is strong. Standard confidence thresholds apply.")
+
+        return '\n'.join(lines)
+    except Exception as e:
+        log.debug(f"Regime context unavailable: {e}")
+        return ''
+
+
 async def collect_and_analyze_news(
     all_symbols: list,
     current_prices_dict: dict,
     settings: dict,
+    macro_regime_result: dict = None,
 ) -> tuple:
     """Collect news and run Gemini analysis for all symbols.
 
@@ -65,13 +132,16 @@ async def collect_and_analyze_news(
             symbols_with_news, news_per_symbol)
 
     # Step 3: Get Gemini assessment — try grounded search first (free tier)
-    # Batch by asset class for focused prompts (1,500 free calls/day budget).
+    # Batch by asset class for focused prompts (500 RPD free budget).
     if use_grounded_search:
         cache_ttl = news_config.get('cache_ttl_minutes', 15)
         batches = _split_symbols_into_batches(all_symbols, settings)
 
+        # Build feedback context once (shared across all batches)
+        trade_feedback = await asyncio.to_thread(build_trade_feedback_context)
+        regime_context = build_regime_context(macro_regime_result)
+
         # Sequential batch calls with small delay to avoid overwhelming flash-lite.
-        # Parallel calls caused 60%+ empty response rate.
         batch_results = []
         for i, batch in enumerate(batches):
             result = await asyncio.to_thread(
@@ -86,6 +156,8 @@ async def collect_and_analyze_news(
                                       for s in batch if s in news_stats_by_symbol} or None,
                 scored_articles_by_symbol={s: scored_articles_by_symbol[s]
                                            for s in batch if s in scored_articles_by_symbol} or None,
+                trade_feedback_context=trade_feedback,
+                regime_context=regime_context,
             )
             batch_results.append(result)
             if i < len(batches) - 1:

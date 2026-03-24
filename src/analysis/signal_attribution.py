@@ -342,6 +342,56 @@ def get_signal_accuracy(symbol=None, days=30):
             release_db_connection(conn)
 
 
+def get_recent_trade_outcomes(days=14, limit=30):
+    """Get recent resolved trade outcomes for prompt feedback.
+
+    Returns list of dicts with symbol, confidence, catalyst, exit reason, and PnL.
+    Used to inject trade history context into the Gemini scoring prompt.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        ph = _ph(is_pg)
+
+        if is_pg:
+            query = f"""
+                SELECT symbol, signal_type, gemini_confidence, catalyst_type,
+                       exit_reason, trade_pnl, trade_pnl_pct
+                FROM signal_attribution
+                WHERE resolved_at IS NOT NULL
+                  AND trade_pnl IS NOT NULL
+                  AND resolved_at >= NOW() - INTERVAL '{ph} days'
+                ORDER BY resolved_at DESC
+                LIMIT {ph}
+            """
+        else:
+            query = f"""
+                SELECT symbol, signal_type, gemini_confidence, catalyst_type,
+                       exit_reason, trade_pnl, trade_pnl_pct
+                FROM signal_attribution
+                WHERE resolved_at IS NOT NULL
+                  AND trade_pnl IS NOT NULL
+                  AND resolved_at >= datetime('now', {ph} || ' days')
+                ORDER BY resolved_at DESC
+                LIMIT {ph}
+            """
+
+        with _cursor(conn) as cur:
+            if is_pg:
+                cur.execute(query, (days, limit))
+            else:
+                cur.execute(query, (f'-{days}', limit))
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, r)) for r in cur.fetchall()]
+    except Exception as e:
+        log.warning(f"Failed to get trade outcomes for feedback: {e}")
+        return []
+    finally:
+        if conn:
+            release_db_connection(conn)
+
+
 def get_recent_attributions(symbol=None, limit=20):
     """Get recent attribution records for display."""
     conn = None

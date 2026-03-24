@@ -285,7 +285,9 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
                              headlines_by_symbol: dict = None,
                              archived_articles_by_symbol: dict = None,
                              news_stats_by_symbol: dict = None,
-                             scored_articles_by_symbol: dict = None) -> dict | None:
+                             scored_articles_by_symbol: dict = None,
+                             trade_feedback_context: str = None,
+                             regime_context: str = None) -> dict | None:
     """
     Uses Gemini with Google Search grounding + our RSS/scraper headlines
     to produce a comprehensive news assessment per symbol.
@@ -393,12 +395,23 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
         collected_context = "\n\n".join(symbol_sections)
         symbols_str = ", ".join(symbols)
 
+        # Build feedback sections (empty strings if no data — backward compatible)
+        feedback_sections = ""
+        if regime_context:
+            feedback_sections += f"\n{regime_context}\n"
+        if trade_feedback_context:
+            feedback_sections += (
+                "\nRECENT TRADE OUTCOMES (learn from these — avoid repeating losses):\n"
+                f"{trade_feedback_context}\n"
+            )
+
         prompt = (
             "You are a senior trading desk analyst. Use BOTH the headlines we collected "
             "from our RSS feeds AND your own Google Search results to assess news impact.\n\n"
             "BOT PARAMETERS:\n"
             "- Stop-loss: -10%, Take-profit: +50%, Trailing stop: +5%/2%\n"
-            "- 15-minute decision cycles. Only confidence >= 0.5 triggers trades.\n\n"
+            "- 15-minute decision cycles. Only confidence >= 0.5 triggers trades.\n"
+            f"{feedback_sections}\n"
             "INSTRUCTIONS:\n"
             "1. Review our collected headlines below for each symbol\n"
             "2. Search the web for any additional breaking news we may have missed\n"
