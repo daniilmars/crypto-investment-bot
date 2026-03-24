@@ -342,6 +342,58 @@ def get_signal_accuracy(symbol=None, days=30):
             release_db_connection(conn)
 
 
+def get_symbol_win_rates(days=30, min_trades=3):
+    """Get per-symbol win rates from resolved attributions.
+
+    Returns dict: {symbol: {'wins': int, 'losses': int, 'win_rate': float, 'total': int}}
+    Only includes symbols with >= min_trades resolved trades.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+
+        if is_pg:
+            date_filter = f"resolved_at >= NOW() - INTERVAL '{days} days'"
+        else:
+            date_filter = f"resolved_at >= datetime('now', '-{days} days')"
+
+        query = f"""
+            SELECT symbol,
+                   COUNT(*) AS total,
+                   SUM(CASE WHEN trade_pnl > 0 THEN 1 ELSE 0 END) AS wins
+            FROM signal_attribution
+            WHERE resolved_at IS NOT NULL AND trade_pnl IS NOT NULL
+              AND {date_filter}
+            GROUP BY symbol
+            HAVING COUNT(*) >= {min_trades}
+        """
+        with _cursor(conn) as cur:
+            cur.execute(query)
+            rows = cur.fetchall()
+
+        result = {}
+        for row in rows:
+            if is_pg:
+                sym, total, wins = row['symbol'], row['total'], row['wins']
+            else:
+                sym, total, wins = row[0], row[1], row[2]
+            wins = wins or 0
+            result[sym] = {
+                'total': total,
+                'wins': wins,
+                'losses': total - wins,
+                'win_rate': wins / total if total else 0,
+            }
+        return result
+    except Exception as e:
+        log.warning(f"Failed to get symbol win rates: {e}")
+        return {}
+    finally:
+        if conn:
+            release_db_connection(conn)
+
+
 def get_recent_trade_outcomes(days=14, limit=30):
     """Get recent resolved trade outcomes for prompt feedback.
 

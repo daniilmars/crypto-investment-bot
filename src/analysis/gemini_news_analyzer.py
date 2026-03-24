@@ -287,7 +287,9 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
                              news_stats_by_symbol: dict = None,
                              scored_articles_by_symbol: dict = None,
                              trade_feedback_context: str = None,
-                             regime_context: str = None) -> dict | None:
+                             regime_context: str = None,
+                             source_reliability_context: str = None,
+                             symbol_memory_context: str = None) -> dict | None:
     """
     Uses Gemini with Google Search grounding + our RSS/scraper headlines
     to produce a comprehensive news assessment per symbol.
@@ -404,6 +406,10 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
                 "\nRECENT TRADE OUTCOMES (learn from these — avoid repeating losses):\n"
                 f"{trade_feedback_context}\n"
             )
+        if source_reliability_context:
+            feedback_sections += f"\n{source_reliability_context}\n"
+        if symbol_memory_context:
+            feedback_sections += f"\n{symbol_memory_context}\n"
 
         prompt = (
             "You are a senior trading desk analyst. Use BOTH the headlines we collected "

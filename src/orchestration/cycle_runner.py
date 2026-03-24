@@ -552,9 +552,18 @@ async def run_bot_cycle():
                 strat_signal = dict(original_signal)
                 # Apply strategy-specific weighting to signal strength
                 if ga and strat_signal.get('signal') in ('BUY', 'SELL'):
-                    strat_signal['signal_strength'] = compute_effective_strength(
-                        strat_signal.get('signal_strength', 0),
-                        ga, strat_cfg.get('weights', {}))
+                    base_str = strat_signal.get('signal_strength', 0)
+                    eff_str = compute_effective_strength(
+                        base_str, ga, strat_cfg.get('weights', {}))
+                    strat_signal['signal_strength'] = eff_str
+                    # Persist for backtesting (non-blocking)
+                    try:
+                        from src.database import save_strategy_score
+                        await asyncio.to_thread(
+                            save_strategy_score, symbol, strat_name,
+                            strat_signal['signal'], base_str, eff_str, ga)
+                    except Exception:
+                        pass
                 await process_trade_signal(
                     symbol, strat_signal, current_price, strat_open, strat_available,
                     effective_risk_pct, signal_cooldown_hours, strat_max,
@@ -1054,9 +1063,17 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                 # Apply strategy-specific weighting to signal strength
                 stock_ga = gemini_assessments.get('symbol_assessments', {}).get(symbol) if gemini_assessments else None
                 if stock_ga and strat_signal.get('signal') in ('BUY', 'SELL'):
-                    strat_signal['signal_strength'] = compute_effective_strength(
-                        strat_signal.get('signal_strength', 0),
+                    base_str = strat_signal.get('signal_strength', 0)
+                    eff_str = compute_effective_strength(base_str,
                         stock_ga, strat_cfg.get('weights', {}))
+                    strat_signal['signal_strength'] = eff_str
+                    try:
+                        from src.database import save_strategy_score
+                        await asyncio.to_thread(
+                            save_strategy_score, symbol, strat_name,
+                            strat_signal['signal'], base_str, eff_str, stock_ga)
+                    except Exception:
+                        pass
                 await process_trade_signal(
                     symbol, strat_signal, current_price, strat_open, strat_available,
                     trade_risk_percentage, signal_cooldown_hours, strat_max,

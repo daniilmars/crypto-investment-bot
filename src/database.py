@@ -40,7 +40,7 @@ def _cursor(conn):
 # --- Connection Pool (for PostgreSQL) ---
 _pg_pool = None
 
-ALLOWED_TABLES = frozenset({"market_prices", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles", "stoploss_cooldowns", "position_additions", "ipo_events", "macro_regime_history", "source_registry", "signal_attribution", "experiment_log", "tuning_history", "session_peaks", "watchlist_items", "bot_state_kv", "signal_decisions", "sector_convictions", "gemini_assessments"})
+ALLOWED_TABLES = frozenset({"market_prices", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles", "stoploss_cooldowns", "position_additions", "ipo_events", "macro_regime_history", "source_registry", "signal_attribution", "experiment_log", "tuning_history", "session_peaks", "watchlist_items", "bot_state_kv", "signal_decisions", "sector_convictions", "gemini_assessments", "strategy_scores"})
 
 # --- Database Connection Management ---
 
@@ -917,6 +917,38 @@ def initialize_database(db_url=None):
             "ON gemini_assessments (symbol, created_at)"
         )
 
+        # Strategy Scores (per-strategy effective strength for backtesting)
+        strategy_scores_sql = '''
+            CREATE TABLE IF NOT EXISTS strategy_scores (
+                id SERIAL PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                strategy_name TEXT NOT NULL,
+                signal_type TEXT NOT NULL,
+                base_strength REAL,
+                effective_strength REAL NOT NULL,
+                catalyst_type TEXT,
+                hype_vs_fundamental TEXT,
+                catalyst_count INTEGER,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )''' if is_postgres_conn else '''
+            CREATE TABLE IF NOT EXISTS strategy_scores (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                strategy_name TEXT NOT NULL,
+                signal_type TEXT NOT NULL,
+                base_strength REAL,
+                effective_strength REAL NOT NULL,
+                catalyst_type TEXT,
+                hype_vs_fundamental TEXT,
+                catalyst_count INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )'''
+        cursor.execute(strategy_scores_sql)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_strategy_scores_strat "
+            "ON strategy_scores (strategy_name, created_at)"
+        )
+
         # --- Performance indexes ---
         perf_indexes = [
             "CREATE INDEX IF NOT EXISTS idx_market_prices_symbol_ts "
@@ -1640,6 +1672,42 @@ def save_gemini_assessments(assessments: dict):
         log.debug(f"Saved {len(symbol_data)} Gemini assessments to DB.")
     except Exception as e:
         log.warning(f"Failed to save Gemini assessments: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        release_db_connection(conn)
+
+
+def save_strategy_score(symbol, strategy_name, signal_type, base_strength,
+                        effective_strength, gemini_assessment=None):
+    """Save a single strategy score for backtesting comparison."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        query = '''
+            INSERT INTO strategy_scores
+            (symbol, strategy_name, signal_type, base_strength,
+             effective_strength, catalyst_type, hype_vs_fundamental, catalyst_count)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ''' if is_pg else '''
+            INSERT INTO strategy_scores
+            (symbol, strategy_name, signal_type, base_strength,
+             effective_strength, catalyst_type, hype_vs_fundamental, catalyst_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        '''
+        ga = gemini_assessment or {}
+        with _cursor(conn) as cursor:
+            cursor.execute(query, (
+                symbol, strategy_name, signal_type, base_strength,
+                effective_strength,
+                ga.get('catalyst_type'),
+                ga.get('hype_vs_fundamental'),
+                ga.get('catalyst_count'),
+            ))
+        conn.commit()
+    except Exception as e:
+        log.debug(f"Strategy score save failed: {e}")
         if conn:
             conn.rollback()
     finally:
@@ -2394,6 +2462,7 @@ def cleanup_old_rows(days: int = 30) -> dict:
                 ("signals", "timestamp"),
                 ("news_sentiment", "timestamp"),
                 ("gemini_assessments", "created_at"),
+                ("strategy_scores", "created_at"),
             ]
             for table, col in tables:
                 if is_pg:

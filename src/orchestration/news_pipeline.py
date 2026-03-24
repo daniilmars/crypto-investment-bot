@@ -77,6 +77,75 @@ def build_regime_context(macro_regime_result: dict = None) -> str:
         return ''
 
 
+def build_source_reliability_context(days=30, min_signals=3) -> str:
+    """Build source reliability context string for Gemini prompt injection."""
+    try:
+        from src.analysis.signal_attribution import get_source_performance
+        sources = get_source_performance(days=days)
+        if not sources:
+            return ''
+
+        # Filter to sources with enough trades
+        qualified = [s for s in sources if s.get('total_signals', 0) >= min_signals]
+        if len(qualified) < 2:
+            return ''
+
+        qualified.sort(key=lambda s: s.get('win_rate', 0), reverse=True)
+        top = qualified[:5]
+        bottom = [s for s in qualified if s.get('win_rate', 0) < 0.40][:5]
+
+        lines = ["SOURCE RELIABILITY (from our trade outcomes):"]
+        if top:
+            top_str = ', '.join(
+                f"{s['source_name']} ({s['win_rate']:.0%} WR, {s['total_signals']} trades)"
+                for s in top)
+            lines.append(f"  Top performers: {top_str}")
+        if bottom:
+            bot_str = ', '.join(
+                f"{s['source_name']} ({s['win_rate']:.0%} WR, {s['total_signals']} trades)"
+                for s in bottom)
+            lines.append(f"  Underperformers: {bot_str}")
+        lines.append("  Weight corroborated stories from top sources higher.")
+
+        return '\n'.join(lines)
+    except Exception as e:
+        log.debug(f"Source reliability context unavailable: {e}")
+        return ''
+
+
+def build_symbol_memory_context(days=30, min_trades=3) -> str:
+    """Build symbol win rate memory context string for Gemini prompt injection."""
+    try:
+        from src.analysis.signal_attribution import get_symbol_win_rates
+        win_rates = get_symbol_win_rates(days=days, min_trades=min_trades)
+        if not win_rates:
+            return ''
+
+        caution = {s: d for s, d in win_rates.items() if d['win_rate'] < 0.30}
+        strong = {s: d for s, d in win_rates.items() if d['win_rate'] > 0.60}
+
+        if not caution and not strong:
+            return ''
+
+        lines = ["SYMBOL TRACK RECORD (from our recent trades):"]
+        if caution:
+            caution_str = ', '.join(
+                f"{s} ({d['wins']}W/{d['losses']}L={d['win_rate']:.0%})"
+                for s, d in sorted(caution.items(), key=lambda x: x[1]['win_rate']))
+            lines.append(f"  CAUTION — poor history: {caution_str}")
+            lines.append("  Require stronger catalysts for CAUTION symbols.")
+        if strong:
+            strong_str = ', '.join(
+                f"{s} ({d['wins']}W/{d['losses']}L={d['win_rate']:.0%})"
+                for s, d in sorted(strong.items(), key=lambda x: -x[1]['win_rate']))
+            lines.append(f"  Strong performers: {strong_str}")
+
+        return '\n'.join(lines)
+    except Exception as e:
+        log.debug(f"Symbol memory context unavailable: {e}")
+        return ''
+
+
 async def collect_and_analyze_news(
     all_symbols: list,
     current_prices_dict: dict,
@@ -140,6 +209,8 @@ async def collect_and_analyze_news(
         # Build feedback context once (shared across all batches)
         trade_feedback = await asyncio.to_thread(build_trade_feedback_context)
         regime_context = build_regime_context(macro_regime_result)
+        source_reliability = await asyncio.to_thread(build_source_reliability_context)
+        symbol_memory = await asyncio.to_thread(build_symbol_memory_context)
 
         # Sequential batch calls with small delay to avoid overwhelming flash-lite.
         batch_results = []
@@ -158,6 +229,8 @@ async def collect_and_analyze_news(
                                            for s in batch if s in scored_articles_by_symbol} or None,
                 trade_feedback_context=trade_feedback,
                 regime_context=regime_context,
+                source_reliability_context=source_reliability,
+                symbol_memory_context=symbol_memory,
             )
             batch_results.append(result)
             if i < len(batches) - 1:

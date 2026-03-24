@@ -36,8 +36,9 @@ def test_initialize_database_creates_tables(mock_get_db_connection, mock_release
     # + 1 UPDATE (resolve stale cb_events)
     # + 1 CREATE TABLE (sector_convictions) + 2 CREATE INDEX (sector_conv)
     # + 1 CREATE TABLE (gemini_assessments) + 1 CREATE INDEX
-    # + 6 performance indexes = 59
-    assert mock_cursor.execute.call_count == 59
+    # + 1 CREATE TABLE (strategy_scores) + 1 CREATE INDEX
+    # + 6 performance indexes = 61
+    assert mock_cursor.execute.call_count == 61
 
     # Check the SQL statements (case-insensitive and ignoring whitespace)
     executed_queries = [' '.join(call[0][0].split()) for call in mock_cursor.execute.call_args_list]
