@@ -266,6 +266,7 @@ RSS_FEEDS = [
     {'url': 'https://decrypt.co/feed', 'category': 'kol'},
     {'url': 'https://blockworks.co/feed', 'category': 'kol'},
     {'url': 'https://bitcoinmagazine.com/feed', 'category': 'kol'},
+    {'url': 'https://www.trumpstruth.org/feed', 'category': 'kol'},
     # Layer E — Asia-Pacific market feeds (English-language)
     {'url': 'https://asia.nikkei.com/rss/feed/nar', 'category': 'asia'},
     {'url': 'https://www.scmp.com/rss/5/feed', 'category': 'asia'},

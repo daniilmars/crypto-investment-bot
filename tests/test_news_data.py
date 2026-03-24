@@ -16,7 +16,7 @@ class TestRSSFeedConfig:
     """Validates the RSS_FEEDS list structure and category distribution."""
 
     def test_total_feed_count(self):
-        assert len(RSS_FEEDS) == 95
+        assert len(RSS_FEEDS) == 96
 
     def test_all_feeds_have_required_keys(self):
         for feed in RSS_FEEDS:
@@ -56,7 +56,7 @@ class TestRSSFeedConfig:
 
     def test_kol_feed_count(self):
         kol_feeds = [f for f in RSS_FEEDS if f['category'] == 'kol']
-        assert len(kol_feeds) == 3
+        assert len(kol_feeds) == 4
 
     def test_ipo_feed_count(self):
         ipo_feeds = [f for f in RSS_FEEDS if f['category'] == 'ipo']
