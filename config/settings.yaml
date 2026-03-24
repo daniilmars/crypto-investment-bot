@@ -504,6 +504,12 @@ settings:
       confidence_min: 0.35
       confidence_max: 0.75
 
+    weekly_self_review:
+      enabled: true
+      review_day: 6            # 0=Mon, 6=Sun
+      review_hour_utc: 4
+      min_trades_for_review: 5
+
   # -- Telegram Enhancements --
   telegram_enhancements:
     morning_briefing:

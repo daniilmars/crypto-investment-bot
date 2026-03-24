@@ -143,6 +143,40 @@ async def daily_sector_review_loop():
             log.error(f"Daily sector review error: {e}", exc_info=True)
 
 
+async def weekly_self_review_loop():
+    """Runs weekly self-review on configured day/hour (UTC)."""
+    review_cfg = app_config.get('settings', {}).get('autonomous_bot', {}).get(
+        'weekly_self_review', {})
+    if not review_cfg.get('enabled', True):
+        return
+    target_day = review_cfg.get('review_day', 6)  # 0=Mon, 6=Sun
+    target_hour = review_cfg.get('review_hour_utc', 4)
+    while True:
+        now = datetime.now(timezone.utc)
+        # Find next target_day at target_hour
+        days_ahead = (target_day - now.weekday()) % 7
+        if days_ahead == 0 and now.hour >= target_hour:
+            days_ahead = 7
+        next_run = (now + timedelta(days=days_ahead)).replace(
+            hour=target_hour, minute=0, second=0, microsecond=0)
+        wait_seconds = (next_run - now).total_seconds()
+        log.info(f"Weekly self-review scheduled in {wait_seconds/3600:.1f}h")
+        await asyncio.sleep(wait_seconds)
+        try:
+            from src.analysis.weekly_self_review import (
+                run_weekly_self_review, format_weekly_review_telegram)
+            result = await asyncio.to_thread(run_weekly_self_review)
+            if result:
+                msg = format_weekly_review_telegram(result)
+                from src.notify.telegram_bot import send_telegram_alert
+                await send_telegram_alert({
+                    'signal': 'INFO', 'symbol': 'WEEKLY_REVIEW',
+                    'reason': msg, 'asset_type': 'system'})
+                log.info("Weekly self-review sent.")
+        except Exception as e:
+            log.error(f"Weekly self-review error: {e}", exc_info=True)
+
+
 async def db_cleanup_loop():
     """Daily cleanup of old market_prices, signals, and news_sentiment rows."""
     while True:
@@ -313,6 +347,7 @@ async def startup_event():
         _background_tasks.append(asyncio.create_task(daily_sector_review_loop()))
         log.info("Daily sector review loop started.")
 
+    _background_tasks.append(asyncio.create_task(weekly_self_review_loop()))
     _background_tasks.append(asyncio.create_task(db_cleanup_loop()))
     _background_tasks.append(asyncio.create_task(db_backup_loop()))
     _background_tasks.append(asyncio.create_task(_chat_session_cleanup_loop()))
