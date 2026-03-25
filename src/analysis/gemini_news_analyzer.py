@@ -466,10 +466,11 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
         )
 
         # Single attempt per batch — no retries to stay within 500 RPD free tier.
-        # Empty response = skip this batch (will be reassessed next uncached cycle).
+        # Using flash (not flash-lite) — flash-lite has known grounding reliability
+        # issues (empty responses, hallucinated chunks). Same 500 RPD free pool.
         response = _call_with_retry(
             client.models.generate_content,
-            model="gemini-2.5-flash-lite",
+            model="gemini-2.5-flash",
             contents=prompt,
             config=GenerateContentConfig(
                 tools=[Tool(google_search=GoogleSearch())],
