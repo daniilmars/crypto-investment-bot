@@ -247,3 +247,11 @@ groups:
   it_services:
     max_positions: 2
     symbols: [TCS.NS, INFY.NS, WIPRO.NS, COIN, WBC.AX]
+
+  commodities:
+    max_positions: 2
+    symbols: [GLD, SLV, USO, COPX]
+
+  fixed_income:
+    max_positions: 2
+    symbols: [TLT, HYG, LQD]

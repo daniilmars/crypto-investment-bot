@@ -85,19 +85,21 @@ def _load_watch_list(settings):
     if crypto_symbols:
         settings['watch_list'] = crypto_symbols
 
-    # Stock symbols: combine US + Europe + Asia + AI
+    # Stock symbols: combine US + Europe + Asia + AI + Macro ETFs
     us_stocks = wl_data.get('stocks', [])
     eu_stocks = wl_data.get('stocks_europe', [])
     asia_stocks = wl_data.get('stocks_asia', [])
     ai_stocks = wl_data.get('stocks_ai', [])
-    combined_stocks = us_stocks + eu_stocks + asia_stocks + ai_stocks
+    macro_stocks = wl_data.get('stocks_macro', [])
+    combined_stocks = us_stocks + eu_stocks + asia_stocks + ai_stocks + macro_stocks
     if combined_stocks:
         stock_trading = settings.get('stock_trading', {})
         stock_trading['watch_list'] = combined_stocks
         settings['stock_trading'] = stock_trading
 
     log.info(f"Loaded watch_list.yaml: {len(crypto_symbols)} crypto, "
-             f"{len(us_stocks)} US + {len(eu_stocks)} EU + {len(asia_stocks)} Asia + {len(ai_stocks)} AI stocks")
+             f"{len(us_stocks)} US + {len(eu_stocks)} EU + {len(asia_stocks)} Asia "
+             f"+ {len(ai_stocks)} AI + {len(macro_stocks)} macro stocks")
     return settings
 
 

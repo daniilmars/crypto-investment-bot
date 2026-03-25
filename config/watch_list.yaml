@@ -256,6 +256,18 @@ stocks:
   - GEV
   - VST
 
+# --- Commodity & Fixed Income ETFs ---
+stocks_macro:
+  # Commodities
+  - GLD      # SPDR Gold Trust
+  - SLV      # iShares Silver Trust
+  - USO      # United States Oil Fund
+  - COPX     # Global X Copper Miners ETF
+  # Fixed Income
+  - TLT      # iShares 20+ Year Treasury Bond
+  - HYG      # iShares High Yield Corporate Bond
+  - LQD      # iShares Investment Grade Corporate Bond
+
 # --- AI Pure-Play Stocks ---
 stocks_ai:
   - AI      # C3.ai
