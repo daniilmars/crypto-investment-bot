@@ -90,8 +90,11 @@ async def process_trade_signal(
 
         if signal_type == "BUY":
             min_strength = scfg.get('min_signal_strength', 0.65)
-            # Raise bar in CAUTION/RISK_OFF regime
-            if macro_multiplier < 1.0:
+            # Transition trading: higher bar, but no caution boost
+            if scfg.get('_transition_active'):
+                min_strength = scfg.get('_transition_min_signal_strength', 0.80)
+            elif macro_multiplier < 1.0:
+                # Raise bar in CAUTION/RISK_OFF regime
                 min_strength += regime_cfg.get('caution_strength_boost',
                                                scfg.get('caution_strength_boost', 0.10))
         else:

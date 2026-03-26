@@ -296,6 +296,8 @@ settings:
       regime_behavior:
         ignore_risk_off: false
         caution_strength_boost: 0.10
+        allow_transition_trading: true
+        transition_min_signal_strength: 0.80
       risk_params:
         stop_loss_percentage: 0.10
         take_profit_percentage: 0.50
@@ -406,6 +408,17 @@ settings:
     risk_off_exit_acceleration:
       trailing_activation_multiplier: 0.5   # 2% → 1%
       trailing_distance_multiplier: 0.7     # 1.5% → 1.05%
+
+    # Regime transition trading — early entries when RISK_OFF is improving
+    # Detects: score trending up from trough + VIX declining from peak
+    # Disabled by default — opt-in after validating with backtesting
+    transition_trading:
+      enabled: false
+      min_score_improvement: 2.0        # score must rise this much from trough
+      min_vix_decline_points: 2.0       # VIX must fall this much from peak
+      vix_ceiling: 35                   # block if VIX above this (crash guard)
+      min_consecutive_improving: 2      # cycles of improvement before allowing
+      transition_multiplier: 0.3        # position size (half of CAUTION 0.6x)
 
   # -- Daily Sector Review --
   # Gemini Pro sector conviction scores, modulates signal thresholds.

@@ -57,11 +57,17 @@ def get_macro_regime(force_refresh=False) -> dict:
         'classified_at': time.time(),
     }
 
+    # Detect regime transition (RISK_OFF improving)
+    result['transition'] = detect_regime_transition(result)
+
     _regime_cache['result'] = result
     _regime_cache['fetched_at'] = now
 
+    transition_info = ""
+    if result['transition'].get('transition_active'):
+        transition_info = f", TRANSITION ACTIVE"
     log.info(f"Macro regime: {regime.value} (score={score}, mult={multiplier}, "
-             f"suppress_buys={suppress_buys})")
+             f"suppress_buys={suppress_buys}{transition_info})")
     return result
 
 
@@ -231,6 +237,112 @@ def _classify_regime(signals: dict, cfg: dict) -> tuple:
         return MacroRegime.CAUTION, caution_mult, False
 
 
+# --- Regime Transition Trading ---
+# Module-level state for tracking RISK_OFF improvement
+_transition_state = {
+    'consecutive_improving': 0,
+    'score_trough': None,
+    'vix_peak': None,
+    'prev_score': None,
+}
+
+
+def detect_regime_transition(macro_regime_result: dict) -> dict:
+    """Detect if RISK_OFF regime is transitioning toward recovery.
+
+    Returns dict with transition_active, transition_multiplier, and context.
+    Only fires when RISK_OFF is genuinely improving (score rising, VIX falling).
+    """
+    inactive = {'transition_active': False, 'reason': 'not applicable'}
+
+    cfg = app_config.get('settings', {}).get('macro_regime', {}).get(
+        'transition_trading', {})
+    if not cfg.get('enabled', False):
+        return inactive
+
+    regime = macro_regime_result.get('regime', 'CAUTION')
+    score = macro_regime_result.get('score', 0)
+    vix_data = macro_regime_result.get('indicators', {}).get('vix')
+    vix_now = vix_data.get('current') if isinstance(vix_data, dict) else None
+    signals = macro_regime_result.get('signals', {})
+    vix_signal = signals.get('vix_trend', 0)  # -1 = rising (bearish)
+
+    # Only active during RISK_OFF
+    if regime != 'RISK_OFF':
+        _transition_state['consecutive_improving'] = 0
+        _transition_state['score_trough'] = None
+        _transition_state['vix_peak'] = None
+        _transition_state['prev_score'] = None
+        return inactive
+
+    # Initialize tracking on first RISK_OFF cycle
+    if _transition_state['score_trough'] is None:
+        _transition_state['score_trough'] = score
+        _transition_state['vix_peak'] = vix_now
+        _transition_state['prev_score'] = score
+        return {**inactive, 'reason': 'tracking started'}
+
+    # Update trough and peak
+    if score < _transition_state['score_trough']:
+        _transition_state['score_trough'] = score
+    if vix_now is not None and (
+            _transition_state['vix_peak'] is None or vix_now > _transition_state['vix_peak']):
+        _transition_state['vix_peak'] = vix_now
+
+    # Check if score is improving vs previous cycle
+    prev_score = _transition_state['prev_score']
+    if prev_score is not None and score > prev_score:
+        _transition_state['consecutive_improving'] += 1
+    else:
+        _transition_state['consecutive_improving'] = 0
+    _transition_state['prev_score'] = score
+
+    # Compute improvements
+    score_improvement = score - _transition_state['score_trough']
+    vix_decline = (_transition_state['vix_peak'] - vix_now) if (
+        _transition_state['vix_peak'] is not None and vix_now is not None) else 0
+
+    # Read thresholds
+    min_score_imp = cfg.get('min_score_improvement', 2.0)
+    min_vix_decline = cfg.get('min_vix_decline_points', 2.0)
+    vix_ceiling = cfg.get('vix_ceiling', 35)
+    min_consecutive = cfg.get('min_consecutive_improving', 2)
+    transition_mult = cfg.get('transition_multiplier', 0.3)
+
+    # Anti-conditions
+    if vix_now is not None and vix_now > vix_ceiling:
+        return {**inactive, 'reason': f'VIX {vix_now:.1f} > ceiling {vix_ceiling}'}
+    if vix_signal == -1:  # VIX still rising
+        return {**inactive, 'reason': 'VIX still rising'}
+
+    # Check all conditions
+    if (score_improvement >= min_score_imp
+            and vix_decline >= min_vix_decline
+            and _transition_state['consecutive_improving'] >= min_consecutive):
+        reason = (f"Score improved {score_improvement:+.1f} from trough "
+                  f"{_transition_state['score_trough']:.1f}, "
+                  f"VIX declined {vix_decline:.1f} from peak "
+                  f"{_transition_state['vix_peak']:.1f}")
+        log.info(f"Regime transition trading ACTIVE: {reason}")
+        return {
+            'transition_active': True,
+            'transition_multiplier': transition_mult,
+            'score_improvement': score_improvement,
+            'score_trough': _transition_state['score_trough'],
+            'vix_decline': vix_decline,
+            'vix_peak': _transition_state['vix_peak'],
+            'consecutive_improving': _transition_state['consecutive_improving'],
+            'reason': reason,
+        }
+
+    return {
+        **inactive,
+        'reason': (f"improving but not enough: score +{score_improvement:.1f}/{min_score_imp}, "
+                   f"VIX -{vix_decline:.1f}/{min_vix_decline}, "
+                   f"consecutive {_transition_state['consecutive_improving']}/{min_consecutive}"),
+    }
+
+
 def get_regime_trajectory() -> dict:
     """Compute regime trajectory from recent history.
 
@@ -315,5 +427,9 @@ def get_regime_trajectory() -> dict:
 
 
 def clear_regime_cache():
-    """Clears the cached regime result. Useful for tests."""
+    """Clears the cached regime result and transition state. Useful for tests."""
     _regime_cache.clear()
+    _transition_state['consecutive_improving'] = 0
+    _transition_state['score_trough'] = None
+    _transition_state['vix_peak'] = None
+    _transition_state['prev_score'] = None

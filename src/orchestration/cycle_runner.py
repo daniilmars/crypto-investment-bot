@@ -533,13 +533,22 @@ async def run_bot_cycle():
             # Per-strategy regime behavior
             strat_regime = strat_cfg.get('regime_behavior', {})
             strat_suppress = suppress_buys and not strat_regime.get('ignore_risk_off', False)
-            strat_caution_boost = strat_regime.get('caution_strength_boost',
-                                                   auto_cfg.get('caution_strength_boost', 0.10))
             strat_macro_mult = macro_multiplier
-            # Override caution boost for this strategy
-            if macro_multiplier < 1.0 and strat_caution_boost != auto_cfg.get('caution_strength_boost', 0.10):
-                # Store on signal for trade_executor to pick up
-                pass
+            strat_cfg_override = strat_cfg  # may be replaced with transition override
+
+            # Regime transition trading: override suppression when RISK_OFF is improving
+            transition = macro_regime_result.get('transition', {})
+            if (strat_suppress and transition.get('transition_active')
+                    and strat_regime.get('allow_transition_trading', False)):
+                strat_suppress = False
+                strat_macro_mult = transition.get('transition_multiplier', 0.3)
+                strat_cfg_override = dict(strat_cfg)
+                strat_cfg_override['_transition_active'] = True
+                strat_cfg_override['_transition_min_signal_strength'] = strat_regime.get(
+                    'transition_min_signal_strength', 0.80)
+                log.info(f"[{strat_label}] Transition trading active for {symbol}: "
+                         f"mult={strat_macro_mult}, min_str="
+                         f"{strat_cfg_override['_transition_min_signal_strength']}")
 
             if not cb_tripped and bot_is_running.is_set() and original_signal is not None:
                 strat_open = [p for p in strat_positions
@@ -572,7 +581,7 @@ async def run_bot_cycle():
                     current_prices=current_prices_dict,
                     dynamic_sl_pct=symbol_dynamic_sl,
                     dynamic_tp_pct=symbol_dynamic_tp,
-                    strategy_config=strat_cfg)
+                    strategy_config=strat_cfg_override)
 
         # Update backward compat alias after strategy loop
         _cached_auto_positions = _cached_strategy_positions.get('auto', [])
