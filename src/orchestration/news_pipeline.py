@@ -151,6 +151,7 @@ async def collect_and_analyze_news(
     current_prices_dict: dict,
     settings: dict,
     macro_regime_result: dict = None,
+    ytd_changes: dict = None,
 ) -> tuple:
     """Collect news and run Gemini analysis for all symbols.
 
@@ -231,6 +232,7 @@ async def collect_and_analyze_news(
                 regime_context=regime_context,
                 source_reliability_context=source_reliability,
                 symbol_memory_context=symbol_memory,
+                ytd_changes=ytd_changes,
             )
             batch_results.append(result)
             if i < len(batches) - 1:

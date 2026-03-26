@@ -312,6 +312,8 @@ settings:
         risk_factor_penalty: 0.05
         breaking_boost: 0.0
         min_catalyst_count: 0
+        sma50_penalty: 0.15
+        sma200_penalty: 0.25
 
     momentum:
       enabled: true
@@ -336,6 +338,8 @@ settings:
         risk_factor_penalty: 0.0
         breaking_boost: 0.15
         min_catalyst_count: 0
+        sma50_penalty: 0.10
+        sma200_penalty: 0.15
 
     conservative:
       enabled: true
@@ -360,6 +364,8 @@ settings:
         risk_factor_penalty: 0.10
         breaking_boost: 0.0
         min_catalyst_count: 2
+        sma50_penalty: 0.20
+        sma200_penalty: 0.30
 
   # -- Position Rotation Settings --
   # When at max positions and a strong BUY signal fires, rotate out the

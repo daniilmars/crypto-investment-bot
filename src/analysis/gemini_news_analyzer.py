@@ -289,7 +289,8 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
                              trade_feedback_context: str = None,
                              regime_context: str = None,
                              source_reliability_context: str = None,
-                             symbol_memory_context: str = None) -> dict | None:
+                             symbol_memory_context: str = None,
+                             ytd_changes: dict = None) -> dict | None:
     """
     Uses Gemini with Google Search grounding + our RSS/scraper headlines
     to produce a comprehensive news assessment per symbol.
@@ -345,7 +346,9 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
         for sym in symbols:
             price = current_prices.get(sym)
             price_str = f"${price:,.2f}" if price else "unknown"
-            section = f"**{sym}** (current price: {price_str})"
+            ytd = ytd_changes.get(sym) if ytd_changes else None
+            ytd_str = f", YTD: {ytd:+.1%}" if ytd is not None else ""
+            section = f"**{sym}** (current price: {price_str}{ytd_str})"
 
             # Add our collected headlines
             if headlines_by_symbol and sym in headlines_by_symbol:
@@ -424,7 +427,9 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
             "3. Cross-reference both sources — corroborated stories get higher confidence\n"
             "4. Only CONCRETE catalysts (regulatory, ETF, hack, earnings surprise, "
             "Fed decision) justify confidence >= 0.6\n"
-            "5. Opinion pieces, recycled narratives, price predictions → confidence <= 0.4\n\n"
+            "5. Opinion pieces, recycled narratives, price predictions → confidence <= 0.4\n"
+            "6. Consider YTD performance — a catalyst on a -27% YTD asset fighting a strong "
+            "downtrend deserves lower confidence than the same catalyst on a +15% YTD asset\n\n"
             f"--- Symbols to analyze: {symbols_str} ---\n\n"
             f"{collected_context}\n\n"
             "Now search the web for any additional news about these assets, then respond "

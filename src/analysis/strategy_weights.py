@@ -11,6 +11,8 @@ def compute_effective_strength(
     base_signal_strength: float,
     gemini_assessment: dict | None,
     weights: dict,
+    trend_alignment: dict | None = None,
+    signal_direction: str = 'BUY',
 ) -> float:
     """Combine base signal strength with enriched Gemini fields and strategy weights.
 
@@ -20,6 +22,9 @@ def compute_effective_strength(
             optional fields: catalyst_count, hype_vs_fundamental, risk_factors,
             catalyst_freshness, catalyst_type. May be None if no assessment available.
         weights: Strategy-specific weight config dict from settings.yaml.
+        trend_alignment: Optional dict with 'price_below_sma50' and
+            'price_below_sma200' booleans for multi-timeframe trend check.
+        signal_direction: 'BUY' or 'SELL' — penalties only apply to BUY.
 
     Returns:
         Effective signal strength clamped to [0.0, 1.0], or 0.0 if gated out.
@@ -58,5 +63,12 @@ def compute_effective_strength(
     if isinstance(risk_factors, list):
         penalty = weights.get('risk_factor_penalty', 0.05)
         score -= len(risk_factors) * penalty
+
+    # Multi-timeframe trend penalty (BUY only — downtrend makes buys riskier)
+    if trend_alignment and signal_direction == 'BUY':
+        if trend_alignment.get('price_below_sma200'):
+            score -= weights.get('sma200_penalty', 0.25)
+        elif trend_alignment.get('price_below_sma50'):
+            score -= weights.get('sma50_penalty', 0.15)
 
     return max(0.0, min(1.0, score))

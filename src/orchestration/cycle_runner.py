@@ -76,7 +76,7 @@ async def _fetch_daily_klines_batch(
     for sym in symbols:
         api_sym = sym if sym.endswith("USDT") else f"{sym}USDT"
         try:
-            klines = await asyncio.to_thread(get_klines, api_sym, '1d', 50)
+            klines = await asyncio.to_thread(get_klines, api_sym, '1d', 210)
             if klines:
                 result[sym] = klines
         except Exception as e:
@@ -196,9 +196,14 @@ async def run_bot_cycle():
         if price:
             current_prices_dict[sym] = price
 
+    # Compute YTD changes for prompt context
+    from src.analysis.trend_alignment import compute_ytd_changes_from_klines
+    ytd_changes = compute_ytd_changes_from_klines(daily_klines_batch, current_prices_dict)
+
     gemini_assessments, news_per_symbol = await collect_and_analyze_news(
         all_symbols, current_prices_dict, settings,
-        macro_regime_result=macro_regime_result)
+        macro_regime_result=macro_regime_result,
+        ytd_changes=ytd_changes)
 
     # Persist Gemini assessments for backtesting
     if gemini_assessments:
@@ -350,13 +355,19 @@ async def run_bot_cycle():
         # 2. Compute technical indicators (SMA from daily klines, RSI from snapshots)
         log.info(f"Analyzing data for {symbol}...")
 
-        market_price_data = {'current_price': current_price, 'sma': None, 'rsi': None}
+        market_price_data = {'current_price': current_price, 'sma': None, 'rsi': None,
+                             'sma50': None, 'sma200': None}
 
         # Daily SMA from klines (trend filter) — falls back to 15-min snapshots
         daily_klines = daily_klines_batch.get(symbol)
         if daily_klines and len(daily_klines) >= daily_sma_period:
             daily_closes = [k['close'] for k in daily_klines]
             market_price_data['sma'] = calculate_sma(daily_closes, period=daily_sma_period)
+            # Multi-timeframe SMAs for trend alignment
+            if len(daily_closes) >= 50:
+                market_price_data['sma50'] = sum(daily_closes[-50:]) / 50
+            if len(daily_closes) >= 200:
+                market_price_data['sma200'] = sum(daily_closes[-200:]) / 200
         else:
             # Fallback: 15-min snapshot SMA (old behavior)
             price_limit = max(sma_period, rsi_period, 26) + 1
@@ -562,8 +573,16 @@ async def run_bot_cycle():
                 # Apply strategy-specific weighting to signal strength
                 if ga and strat_signal.get('signal') in ('BUY', 'SELL'):
                     base_str = strat_signal.get('signal_strength', 0)
+                    trend_align = {
+                        'price_below_sma50': (market_price_data.get('sma50') is not None
+                                              and current_price < market_price_data['sma50']),
+                        'price_below_sma200': (market_price_data.get('sma200') is not None
+                                               and current_price < market_price_data['sma200']),
+                    }
                     eff_str = compute_effective_strength(
-                        base_str, ga, strat_cfg.get('weights', {}))
+                        base_str, ga, strat_cfg.get('weights', {}),
+                        trend_alignment=trend_align,
+                        signal_direction=strat_signal.get('signal', 'BUY'))
                     strat_signal['signal_strength'] = eff_str
                     # Persist for backtesting (non-blocking)
                     try:
