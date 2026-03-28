@@ -196,14 +196,9 @@ async def run_bot_cycle():
         if price:
             current_prices_dict[sym] = price
 
-    # Compute YTD changes for prompt context
-    from src.analysis.trend_alignment import compute_ytd_changes_from_klines
-    ytd_changes = compute_ytd_changes_from_klines(daily_klines_batch, current_prices_dict)
-
     gemini_assessments, news_per_symbol = await collect_and_analyze_news(
         all_symbols, current_prices_dict, settings,
-        macro_regime_result=macro_regime_result,
-        ytd_changes=ytd_changes)
+        macro_regime_result=macro_regime_result)
 
     # Persist Gemini assessments for backtesting
     if gemini_assessments:

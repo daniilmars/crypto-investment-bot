@@ -65,7 +65,7 @@ def get_macro_regime(force_refresh=False) -> dict:
 
     transition_info = ""
     if result['transition'].get('transition_active'):
-        transition_info = f", TRANSITION ACTIVE"
+        transition_info = ", TRANSITION ACTIVE"
     log.info(f"Macro regime: {regime.value} (score={score}, mult={multiplier}, "
              f"suppress_buys={suppress_buys}{transition_info})")
     return result
