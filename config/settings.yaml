@@ -222,9 +222,7 @@ settings:
     enabled: true
     timeout_minutes: 30
     require_confirmation_for:
-      - "BUY"
       - "SELL"
-      - "INCREASE"
 
   # -- News Scraper Daemon Settings --
   # Continuous scraper with tiered intervals (replaces launchd batch approach)
@@ -323,6 +321,7 @@ settings:
       min_sell_signal_strength: 0.45
       regime_behavior:
         ignore_risk_off: true
+        max_vix_for_risk_off_bypass: 22  # only ignore RISK_OFF when VIX < 22
         caution_strength_boost: 0.00
       risk_params:
         stop_loss_percentage: 0.05
@@ -366,6 +365,37 @@ settings:
         min_catalyst_count: 2
         sma50_penalty: 0.20
         sma200_penalty: 0.30
+
+    longterm:
+      enabled: true
+      paper_trading_initial_capital: 20000.0
+      max_concurrent_positions: 10
+      min_signal_strength: 0.70
+      min_sell_signal_strength: 0.50
+      regime_behavior:
+        ignore_risk_off: true
+        caution_strength_boost: 0.0
+      risk_params:
+        stop_loss_percentage: 0.25
+        take_profit_percentage: 9.99
+        trailing_stop_enabled: false
+        trailing_stop_activation: 0.0
+        trailing_stop_distance: 0.0
+      weights:
+        base_confidence: 1.0
+        fundamental_multiplier: 1.5
+        hype_multiplier: 0.3
+        catalyst_count_bonus: 0.15
+        min_catalyst_count: 2
+        sma50_penalty: 0.0
+        sma200_penalty: 0.0
+        risk_factor_penalty: 0.05
+        breaking_boost: 0.0
+      thesis_review:
+        enabled: true
+        review_day: 0
+        review_hour_utc: 5
+        model: "gemini-2.5-pro"
 
   # -- Position Rotation Settings --
   # When at max positions and a strong BUY signal fires, rotate out the

@@ -538,7 +538,15 @@ async def run_bot_cycle():
             # Signal Execution
             # Per-strategy regime behavior
             strat_regime = strat_cfg.get('regime_behavior', {})
-            strat_suppress = suppress_buys and not strat_regime.get('ignore_risk_off', False)
+            ignore_risk_off = strat_regime.get('ignore_risk_off', False)
+            # VIX gate: only allow RISK_OFF bypass when VIX is below threshold
+            max_vix = strat_regime.get('max_vix_for_risk_off_bypass')
+            if ignore_risk_off and max_vix is not None:
+                vix_data = macro_regime_result.get('indicators', {}).get('vix')
+                current_vix = vix_data.get('current') if isinstance(vix_data, dict) else None
+                if current_vix is not None and current_vix >= max_vix:
+                    ignore_risk_off = False  # VIX too high, respect regime
+            strat_suppress = suppress_buys and not ignore_risk_off
             strat_macro_mult = macro_multiplier
             strat_cfg_override = strat_cfg  # may be replaced with transition override
 
@@ -565,6 +573,12 @@ async def run_bot_cycle():
                 strat_available = strat_balance.get('USDT', 0)
 
                 strat_signal = dict(original_signal)
+                # Longterm strategy: only BUY thesis stocks
+                if strat_name == 'longterm' and strat_signal.get('signal') == 'BUY':
+                    from src.analysis.thesis_generator import get_thesis_symbols
+                    if symbol not in get_thesis_symbols():
+                        continue
+
                 # Apply strategy-specific weighting to signal strength
                 if ga and strat_signal.get('signal') in ('BUY', 'SELL'):
                     base_str = strat_signal.get('signal_strength', 0)
@@ -1073,7 +1087,19 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
 
             # Signal Execution
             strat_regime = strat_cfg.get('regime_behavior', {})
-            strat_suppress = suppress_buys and not strat_regime.get('ignore_risk_off', False)
+            ignore_risk_off = strat_regime.get('ignore_risk_off', False)
+            max_vix = strat_regime.get('max_vix_for_risk_off_bypass')
+            if ignore_risk_off and max_vix is not None:
+                try:
+                    from src.analysis.macro_regime import get_macro_regime
+                    regime_data = get_macro_regime()
+                    vix_data = regime_data.get('indicators', {}).get('vix')
+                    current_vix = vix_data.get('current') if isinstance(vix_data, dict) else None
+                    if current_vix is not None and current_vix >= max_vix:
+                        ignore_risk_off = False
+                except Exception:
+                    pass
+            strat_suppress = suppress_buys and not ignore_risk_off
 
             if not stock_cb_tripped and bot_is_running.is_set() and original_stock_signal is not None:
                 strat_open = [p for p in strat_stock_positions if p['status'] == 'OPEN']
@@ -1083,6 +1109,12 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                 strat_available = strat_balance.get('USDT', 0)
 
                 strat_signal = dict(original_stock_signal)
+                # Longterm strategy: only BUY thesis stocks
+                if strat_name == 'longterm' and strat_signal.get('signal') == 'BUY':
+                    from src.analysis.thesis_generator import get_thesis_symbols
+                    if symbol not in get_thesis_symbols():
+                        continue
+
                 # Apply strategy-specific weighting to signal strength
                 stock_ga = gemini_assessments.get('symbol_assessments', {}).get(symbol) if gemini_assessments else None
                 if stock_ga and strat_signal.get('signal') in ('BUY', 'SELL'):

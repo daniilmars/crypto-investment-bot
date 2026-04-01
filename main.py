@@ -177,6 +177,40 @@ async def weekly_self_review_loop():
             log.error(f"Weekly self-review error: {e}", exc_info=True)
 
 
+async def weekly_thesis_review_loop():
+    """Runs weekly investment thesis generation for longterm strategy."""
+    strategies = app_config.get('settings', {}).get('strategies', {})
+    thesis_cfg = strategies.get('longterm', {}).get('thesis_review', {})
+    if not thesis_cfg.get('enabled', False):
+        return
+    target_day = thesis_cfg.get('review_day', 0)  # 0=Monday
+    target_hour = thesis_cfg.get('review_hour_utc', 5)
+    while True:
+        now = datetime.now(timezone.utc)
+        days_ahead = (target_day - now.weekday()) % 7
+        if days_ahead == 0 and now.hour >= target_hour:
+            days_ahead = 7
+        next_run = (now + timedelta(days=days_ahead)).replace(
+            hour=target_hour, minute=0, second=0, microsecond=0)
+        wait_seconds = (next_run - now).total_seconds()
+        log.info(f"Thesis review scheduled in {wait_seconds/3600:.1f}h")
+        await asyncio.sleep(wait_seconds)
+        try:
+            from src.analysis.thesis_generator import generate_investment_thesis
+            result = await asyncio.to_thread(generate_investment_thesis)
+            if result:
+                sectors = result.get('sectors', [])
+                total_stocks = sum(len(s.get('stocks', [])) for s in sectors)
+                summary = f"Thesis updated: {len(sectors)} sectors, {total_stocks} stocks"
+                from src.notify.telegram_bot import send_telegram_alert
+                await send_telegram_alert({
+                    'signal': 'INFO', 'symbol': 'THESIS_REVIEW',
+                    'reason': summary, 'asset_type': 'system'})
+                log.info(summary)
+        except Exception as e:
+            log.error(f"Thesis review error: {e}", exc_info=True)
+
+
 async def db_cleanup_loop():
     """Daily cleanup of old market_prices, signals, and news_sentiment rows."""
     while True:
@@ -348,6 +382,18 @@ async def startup_event():
         log.info("Daily sector review loop started.")
 
     _background_tasks.append(asyncio.create_task(weekly_self_review_loop()))
+    _background_tasks.append(asyncio.create_task(weekly_thesis_review_loop()))
+
+    # Load longterm thesis into cache at startup
+    try:
+        from src.database import get_active_thesis
+        from src.analysis.thesis_generator import load_thesis_into_cache
+        thesis = await asyncio.to_thread(get_active_thesis)
+        if thesis:
+            load_thesis_into_cache(thesis['thesis_json'])
+    except Exception as e:
+        log.debug(f"Thesis cache not loaded: {e}")
+
     _background_tasks.append(asyncio.create_task(db_cleanup_loop()))
     _background_tasks.append(asyncio.create_task(db_backup_loop()))
     _background_tasks.append(asyncio.create_task(_chat_session_cleanup_loop()))

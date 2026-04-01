@@ -40,7 +40,7 @@ def _cursor(conn):
 # --- Connection Pool (for PostgreSQL) ---
 _pg_pool = None
 
-ALLOWED_TABLES = frozenset({"market_prices", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles", "stoploss_cooldowns", "position_additions", "ipo_events", "macro_regime_history", "source_registry", "signal_attribution", "experiment_log", "tuning_history", "session_peaks", "watchlist_items", "bot_state_kv", "signal_decisions", "sector_convictions", "gemini_assessments", "strategy_scores"})
+ALLOWED_TABLES = frozenset({"market_prices", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles", "stoploss_cooldowns", "position_additions", "ipo_events", "macro_regime_history", "source_registry", "signal_attribution", "experiment_log", "tuning_history", "session_peaks", "watchlist_items", "bot_state_kv", "signal_decisions", "sector_convictions", "gemini_assessments", "strategy_scores", "longterm_thesis"})
 
 # --- Database Connection Management ---
 
@@ -949,6 +949,26 @@ def initialize_database(db_url=None):
             "ON strategy_scores (strategy_name, created_at)"
         )
 
+        # Longterm Thesis (autonomous sector/stock selection)
+        longterm_thesis_sql = '''
+            CREATE TABLE IF NOT EXISTS longterm_thesis (
+                id SERIAL PRIMARY KEY,
+                thesis_json TEXT NOT NULL,
+                sectors_summary TEXT,
+                model_used TEXT,
+                is_active BOOLEAN DEFAULT TRUE,
+                generated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )''' if is_postgres_conn else '''
+            CREATE TABLE IF NOT EXISTS longterm_thesis (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                thesis_json TEXT NOT NULL,
+                sectors_summary TEXT,
+                model_used TEXT,
+                is_active INTEGER DEFAULT 1,
+                generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )'''
+        cursor.execute(longterm_thesis_sql)
+
         # --- Performance indexes ---
         perf_indexes = [
             "CREATE INDEX IF NOT EXISTS idx_market_prices_symbol_ts "
@@ -1710,6 +1730,67 @@ def save_strategy_score(symbol, strategy_name, signal_type, base_strength,
         log.debug(f"Strategy score save failed: {e}")
         if conn:
             conn.rollback()
+    finally:
+        release_db_connection(conn)
+
+
+def save_longterm_thesis(thesis_json: str, sectors_summary: str, model_used: str):
+    """Save a new investment thesis, deactivating previous ones."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            # Deactivate previous theses
+            if is_pg:
+                cursor.execute("UPDATE longterm_thesis SET is_active = FALSE WHERE is_active = TRUE")
+            else:
+                cursor.execute("UPDATE longterm_thesis SET is_active = 0 WHERE is_active = 1")
+            # Insert new thesis
+            query = (
+                "INSERT INTO longterm_thesis (thesis_json, sectors_summary, model_used) "
+                "VALUES (%s, %s, %s)" if is_pg else
+                "INSERT INTO longterm_thesis (thesis_json, sectors_summary, model_used) "
+                "VALUES (?, ?, ?)"
+            )
+            cursor.execute(query, (thesis_json, sectors_summary, model_used))
+        conn.commit()
+    except Exception as e:
+        log.warning(f"Failed to save longterm thesis: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        release_db_connection(conn)
+
+
+def get_active_thesis() -> dict | None:
+    """Returns the latest active investment thesis."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        with _cursor(conn) as cursor:
+            query = (
+                "SELECT thesis_json, sectors_summary, model_used, generated_at "
+                "FROM longterm_thesis WHERE is_active = %s ORDER BY generated_at DESC LIMIT 1"
+                if is_pg else
+                "SELECT thesis_json, sectors_summary, model_used, generated_at "
+                "FROM longterm_thesis WHERE is_active = 1 ORDER BY generated_at DESC LIMIT 1"
+            )
+            if is_pg:
+                cursor.execute(query, (True,))
+            else:
+                cursor.execute(query)
+            row = cursor.fetchone()
+            if row:
+                if is_pg:
+                    return dict(row)
+                cols = [d[0] for d in cursor.description]
+                return dict(zip(cols, row))
+        return None
+    except Exception as e:
+        log.debug(f"Could not load thesis: {e}")
+        return None
     finally:
         release_db_connection(conn)
 
