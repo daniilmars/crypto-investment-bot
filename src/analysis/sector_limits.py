@@ -80,6 +80,15 @@ def get_symbol_group(symbol: str) -> str | None:
     return _symbol_to_group.get(symbol.upper())
 
 
+def get_group_symbols(group_name: str) -> list[str]:
+    """Returns list of symbols in a sector group, or empty list if not found."""
+    _ensure_loaded()
+    if not _sector_config:
+        return []
+    group_data = _sector_config.get('groups', {}).get(group_name, {})
+    return [str(s).upper() for s in group_data.get('symbols', [])]
+
+
 def get_group_limit(group_name: str) -> int:
     """Returns max_positions for a group."""
     _ensure_loaded()
@@ -185,7 +194,8 @@ def _check_asset_class_limit(symbol: str, open_positions: list) -> tuple:
 # Crypto sector group names (used to infer asset class from group)
 _CRYPTO_GROUPS = frozenset([
     'l1_major', 'l1_legacy', 'defi', 'l2_scaling',
-    'ai_data', 'gaming', 'meme', 'infra', 'privacy',
+    'ai_data', 'depin', 'rwa', 'gaming', 'meme', 'infra',
+    'liquid_staking', 'privacy', 'btc_ecosystem', 'misc_alt',
 ])
 
 

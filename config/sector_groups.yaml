@@ -23,23 +23,31 @@ groups:
   # --- Crypto ---
   l1_major:
     max_positions: 2
-    symbols: [BTC, ETH, SOL, BNB]
+    symbols: [BTC, ETH, SOL, BNB, SUI, APT]
 
   l1_legacy:
     max_positions: 2
-    symbols: [XRP, ADA, TRX, LTC, DOT]
+    symbols: [XRP, ADA, TRX, LTC, DOT, ICP, HBAR, TON, XLM]
 
   defi:
     max_positions: 2
-    symbols: [UNI, AAVE, MKR, CRV, SUSHI, DYDX, COMP, SNX]
+    symbols: [UNI, AAVE, CRV, SUSHI, DYDX, COMP, SNX, CAKE]
 
   l2_scaling:
     max_positions: 2
-    symbols: [ARB, OP, MATIC, IMX, STRK]
+    symbols: [ARB, OP, MATIC, IMX, STRK, INJ, SEI, TIA]
 
   ai_data:
     max_positions: 2
-    symbols: [FET, RENDER, OCEAN, TAO, AKT, NEAR]
+    symbols: [FET, TAO, NEAR, WLD]
+
+  depin:
+    max_positions: 2
+    symbols: [RENDER, FIL, AKT, AR, HNT, THETA, GRT]
+
+  rwa:
+    max_positions: 2
+    symbols: [ONDO, MKR, PENDLE, ENA, ETHFI]
 
   gaming:
     max_positions: 2
@@ -47,20 +55,32 @@ groups:
 
   meme:
     max_positions: 2
-    symbols: [DOGE, SHIB, PEPE, FLOKI, BONK, WIF]
+    symbols: [DOGE, SHIB, PEPE, FLOKI, BONK, WIF, NOT, DOGS]
 
   infra:
     max_positions: 2
-    symbols: [LINK, ATOM, AVAX, FIL, GRT, THETA, AR]
+    symbols: [LINK, ATOM, AVAX]
+
+  liquid_staking:
+    max_positions: 1
+    symbols: [LDO, RPL, SSV]
 
   privacy:
     max_positions: 1
     symbols: [XMR, ZEC, DASH]
 
+  btc_ecosystem:
+    max_positions: 1
+    symbols: [STX, ORDI, 1000SATS, RUNE]
+
+  misc_alt:
+    max_positions: 2
+    symbols: [JUP, PYTH, CHZ, ENJ, ALGO, VET, FTM, EGLD, FLOW, ENS, GMX]
+
   # --- Stocks (cross-regional industry sectors) ---
   tech_mega:
     max_positions: 2
-    symbols: [AAPL, MSFT, GOOGL, AMZN, META, NVDA, TSLA, SAP.DE, 9984.T, "0700.HK", 9988.HK]
+    symbols: [AAPL, MSFT, GOOGL, AMZN, META, NVDA, TSLA, SAP.DE, 9984.T, "0700.HK", 9988.HK, ORCL, NOW]
 
   semiconductors:
     max_positions: 3
@@ -100,6 +120,9 @@ groups:
       - PANW
       - FTNT
       - APP
+      - SHOP
+      - SPOT
+      - RBLX
       - WKL.AS
       - ADYEN.AS
       - DSY.PA
@@ -184,7 +207,19 @@ groups:
 
   energy:
     max_positions: 2
-    symbols: [XOM, CVX, COP, SLB, EOG, OXY, SHEL.L, BP.L, TTE.PA, ENI.MI, NESTE.HE, RELIANCE.NS, WDS.AX]
+    symbols: [XOM, CVX, COP, SLB, EOG, OXY, HAL, EQNR.OL, MPC, VLO, SHEL.L, BP.L, TTE.PA, ENI.MI, NESTE.HE, RELIANCE.NS, WDS.AX]
+
+  defense:
+    max_positions: 2
+    symbols: [LMT, RTX, GD, NOC, LHX, HII, RHM.DE, BAES.L, HO.PA, LDO.MI, SAAB-B.ST]
+
+  nuclear_power:
+    max_positions: 2
+    symbols: [CEG, VST, GEV, SMR, OKLO, CCJ, URA]
+
+  shipping_tankers:
+    max_positions: 1
+    symbols: [FRO, STNG, EURN, MAERSK-B.CO]
 
   automotive:
     max_positions: 2
@@ -192,11 +227,11 @@ groups:
 
   consumer_disc:
     max_positions: 2
-    symbols: [HD, MCD, NKE, SBUX, TJX, LOW, BKNG, CMG, UBER, ABNB, MC.PA, OR.PA, ADS.DE, ITX.MC, KER.PA, 3690.HK, 9618.HK, 2020.HK, 9999.HK, 9983.T]
+    symbols: [HD, MCD, NKE, SBUX, TJX, LOW, BKNG, CMG, UBER, ABNB, MC.PA, OR.PA, ADS.DE, ITX.MC, KER.PA, 3690.HK, 9618.HK, 2020.HK, 9999.HK, 9983.T, MELI]
 
   consumer_staples:
     max_positions: 2
-    symbols: [WMT, COST, KO, PG, PEP, PM, ULVR.L, NESN.SW, DGE.L, HEN3.DE, BATS.L, AD.AS, HINDUNILVR.NS]
+    symbols: [WMT, COST, KO, PG, PEP, PM, CL, MDLZ, ULVR.L, NESN.SW, DGE.L, HEN3.DE, BATS.L, AD.AS, HINDUNILVR.NS]
 
   industrials:
     max_positions: 3
@@ -205,19 +240,15 @@ groups:
       - BA
       - GE
       - HON
-      - RTX
       - UPS
       - DE
-      - LMT
       - SIE.DE
       - AIR.PA
       - SAF.PA
       - SU.PA
       - ABB.ST
       - VOLV-B.ST
-      - MAERSK-B.CO
       - ATCO-A.ST
-      - RHM.DE
       - KNEBV.HE
       - 6501.T
       - 6367.T
@@ -230,7 +261,7 @@ groups:
 
   communication:
     max_positions: 2
-    symbols: [DIS, NFLX, CMCSA, TMUS, CHTR, TTD, DTE.DE, VOD.L, ERIC-B.ST, NOKIA.HE, WPP.L, 9432.T, "0941.HK", 1024.HK]
+    symbols: [DIS, NFLX, CMCSA, TMUS, CHTR, T, VZ, TTD, DTE.DE, VOD.L, ERIC-B.ST, NOKIA.HE, WPP.L, 9432.T, "0941.HK", 1024.HK]
 
   consumer_electronics:
     max_positions: 2
@@ -238,11 +269,11 @@ groups:
 
   utilities_reits:
     max_positions: 2
-    symbols: [NEE, SO, DUK, AMT, PLD, CCI, ENEL.MI, IBE.MC, NG.L, ORSTED.CO]
+    symbols: [NEE, SO, DUK, AMT, PLD, CCI, EQIX, O, ENEL.MI, IBE.MC, NG.L, ORSTED.CO]
 
   materials:
     max_positions: 2
-    symbols: [LIN, APD, SHW, FCX, BAS.DE, AI.PA, GLEN.L, AAL.L, RIO.L, UPM.HE, NZYM-B.CO, 4063.T, "051910.KS", BHP.AX, FMG.AX]
+    symbols: [LIN, APD, SHW, FCX, GOLD, ALB, NEM, NUE, ECL, BAS.DE, AI.PA, GLEN.L, AAL.L, RIO.L, UPM.HE, NZYM-B.CO, 4063.T, "051910.KS", BHP.AX, FMG.AX]
 
   it_services:
     max_positions: 2

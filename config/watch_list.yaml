@@ -105,6 +105,7 @@ symbols:
   - GLM
   - OCEAN
   - NMR
+  - HNT
 
 # --- Stablecoins (lowercase) for exchange inflow monitoring ---
 stablecoins:
@@ -163,13 +164,15 @@ stocks:
   - AMGN
   - GILD
   - ISRG
-  # Energy (6)
+  # Energy (8)
   - XOM
   - CVX
   - COP
   - SLB
   - EOG
   - OXY
+  - HAL
+  - EQNR.OL
   # Consumer Discretionary (8)
   - HD
   - MCD
@@ -209,11 +212,13 @@ stocks:
   - AMT
   - PLD
   - CCI
-  # Materials (4)
+  # Materials (6)
   - LIN
   - APD
   - SHW
   - FCX
+  - GOLD
+  - ALB
   # Tech/Semis (8)
   - MRVL
   - LRCX
@@ -255,6 +260,20 @@ stocks:
   - O
   - GEV
   - VST
+  # Defense (4)
+  - GD
+  - NOC
+  - LHX
+  - HII
+  # Nuclear (4)
+  - CEG
+  - SMR
+  - OKLO
+  - CCJ
+  # Shipping (3)
+  - FRO
+  - STNG
+  - EURN
 
 # --- Commodity & Fixed Income ETFs ---
 stocks_macro:
@@ -263,6 +282,7 @@ stocks_macro:
   - SLV      # iShares Silver Trust
   - USO      # United States Oil Fund
   - COPX     # Global X Copper Miners ETF
+  - URA      # Global X Uranium ETF
   # Fixed Income
   - TLT      # iShares 20+ Year Treasury Bond
   - HYG      # iShares High Yield Corporate Bond
@@ -357,6 +377,11 @@ stocks_europe:
   - NESTE.HE
   - UPM.HE
   - NOKIA.HE
+  # Defense EU (4)
+  - BAES.L
+  - HO.PA
+  - LDO.MI
+  - SAAB-B.ST
   # New EU (+25)
   - RACE.MI
   - ADYEN.AS

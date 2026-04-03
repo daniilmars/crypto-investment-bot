@@ -139,6 +139,29 @@ async def daily_sector_review_loop():
                 from src.notify.telegram_bot import send_sector_review_digest
                 await send_sector_review_digest(result)
                 log.info("Daily sector review digest sent.")
+
+            # Check for conviction spikes requiring midweek thesis refresh
+            try:
+                strategies = app_config.get('settings', {}).get('strategies', {})
+                midweek_cfg = strategies.get('longterm', {}).get(
+                    'thesis_review', {}).get('midweek_refresh', {})
+                if midweek_cfg.get('enabled', False):
+                    from src.analysis.thesis_generator import check_conviction_spike_refresh
+                    refresh_result = await asyncio.to_thread(
+                        check_conviction_spike_refresh)
+                    if refresh_result:
+                        added = refresh_result.get('added_sectors', [])
+                        n_stocks = refresh_result.get('added_stocks', 0)
+                        summary = (
+                            f"Midweek thesis refresh: added {len(added)} sector(s) "
+                            f"({', '.join(added)}), {n_stocks} new stocks")
+                        from src.notify.telegram_bot import send_telegram_alert
+                        await send_telegram_alert({
+                            'signal': 'INFO', 'symbol': 'THESIS',
+                            'reason': summary, 'asset_type': 'system'})
+                        log.info(summary)
+            except Exception as e:
+                log.error(f"Midweek thesis refresh check error: {e}", exc_info=True)
         except Exception as e:
             log.error(f"Daily sector review error: {e}", exc_info=True)
 

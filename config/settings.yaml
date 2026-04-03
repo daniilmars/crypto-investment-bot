@@ -277,7 +277,7 @@ settings:
     summary_interval_hours: 1
     min_signal_strength: 0.65
     min_sell_signal_strength: 0.50
-    caution_strength_boost: 0.10
+    caution_strength_boost: 0.05
 
   # -- Parallel Trading Strategies --
   # Each strategy runs independently with its own capital pool, risk params,
@@ -293,7 +293,7 @@ settings:
       min_sell_signal_strength: 0.50
       regime_behavior:
         ignore_risk_off: false
-        caution_strength_boost: 0.10
+        caution_strength_boost: 0.05
         allow_transition_trading: true
         transition_min_signal_strength: 0.80
       risk_params:
@@ -348,7 +348,7 @@ settings:
       min_sell_signal_strength: 0.65
       regime_behavior:
         ignore_risk_off: false
-        caution_strength_boost: 0.15
+        caution_strength_boost: 0.05
       risk_params:
         stop_loss_percentage: 0.07
         take_profit_percentage: 0.50
@@ -396,6 +396,13 @@ settings:
         review_day: 0
         review_hour_utc: 5
         model: "gemini-2.5-pro"
+        midweek_refresh:
+          enabled: true
+          min_conviction_score: 0.7     # sector conviction threshold to trigger
+          require_accelerating: true     # require momentum == "accelerating"
+          min_confidence: 0.6            # sector review confidence threshold
+          cooldown_hours: 72             # min hours between mid-week refreshes
+          max_sectors_per_refresh: 1     # only add 1 sector per refresh
 
   # -- Position Rotation Settings --
   # When at max positions and a strong BUY signal fires, rotate out the
