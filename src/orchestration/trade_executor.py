@@ -283,9 +283,16 @@ async def execute_buy(
     """Calculate quantity and execute a BUY signal (or send for confirmation).
 
     For auto strategies (any trading_strategy != 'manual'), skips confirmation.
+    Manual BUY is disabled entirely — new entries must come from an automated
+    strategy. Manual only handles protective exits on existing positions.
     """
     prefix = f"[{label}] " if label else ""
     is_auto = trading_strategy != 'manual'
+
+    if not is_auto:
+        log.debug(f"{prefix}Skipping manual BUY for {symbol}: "
+                  f"manual strategy is exit-only.")
+        return None
 
     capital_to_risk = current_balance * risk_pct * size_mult
     quantity = capital_to_risk / current_price if current_price > 0 else 0
@@ -325,55 +332,6 @@ async def execute_buy(
                            asset_type=asset_type, trading_strategy=trading_strategy,
                            dynamic_sl_pct=dynamic_sl_pct,
                            dynamic_tp_pct=dynamic_tp_pct)
-
-    # Manual trading
-    signal['quantity'] = quantity
-    signal['asset_type'] = asset_type
-
-    if broker == 'alpaca':
-        if is_confirmation_required("BUY"):
-            log.info(f"{prefix}Sending BUY {symbol} (Alpaca) for confirmation.")
-            await send_signal_for_confirmation(signal)
-            return None
-        else:
-            log.info(f"{prefix}Executing Alpaca trade: BUY {quantity:.4f} {symbol} "
-                     f"(size_mult={size_mult:.2f}).")
-            order_result = place_stock_order(symbol, "BUY", quantity, current_price)
-            if order_result.get('status') == 'FILLED':
-                signal['order_result'] = order_result
-            await send_telegram_alert(signal)
-            return order_result
-
-    # Paper/live crypto or paper stock
-    if is_confirmation_required("BUY"):
-        log.info(f"{prefix}Sending BUY {symbol} for confirmation "
-                 f"(qty={quantity:.6f}).")
-        await send_signal_for_confirmation(signal)
-        return None
-    else:
-        if use_limit:
-            log.info(f"{prefix}Placing limit BUY {quantity:.6f} {symbol} "
-                     f"({pullback_pct:.1%} pullback).")
-            result = _place_limit_buy(
-                symbol, quantity, current_price, pullback_pct,
-                asset_type=asset_type,
-                dynamic_sl_pct=dynamic_sl_pct, dynamic_tp_pct=dynamic_tp_pct)
-            if result:
-                signal['order_result'] = result
-                signal['order_type'] = 'LIMIT'
-            await send_telegram_alert(signal)
-            return result
-
-        log.info(f"{prefix}Executing trade: BUY {quantity:.6f} {symbol} "
-                 f"(risk={risk_pct:.4f}, size_mult={size_mult:.2f}).")
-        order_result = place_order(symbol, "BUY", quantity, current_price,
-                                   asset_type=asset_type,
-                                   dynamic_sl_pct=dynamic_sl_pct,
-                                   dynamic_tp_pct=dynamic_tp_pct)
-        if order_result.get('status') == 'FILLED':
-            signal['order_result'] = order_result
-        await send_telegram_alert(signal)
-        return order_result
 
 
 def _place_limit_buy(

@@ -26,7 +26,6 @@ class TestMinNotional:
         from src.orchestration.trade_executor import execute_buy
         mock_config.get.return_value = {'min_trade_notional': 5.00}
 
-        # quantity * price = 0.00003 * 100000 * 10000 = too complex, let me simplify
         # With risk_pct=0.00003, balance=10000, price=100000:
         # capital_to_risk = 10000 * 0.00003 * 1.0 = 0.3
         # quantity = 0.3 / 100000 = 0.000003
@@ -34,7 +33,7 @@ class TestMinNotional:
         result = run_async(execute_buy(
             "BTC", {"signal": "BUY", "symbol": "BTC", "current_price": 100000},
             current_price=100000.0, current_balance=10000.0,
-            risk_pct=0.00003, size_mult=1.0))
+            risk_pct=0.00003, size_mult=1.0, trading_strategy='auto'))
         assert result is None
         mock_order.assert_not_called()
 
@@ -56,9 +55,18 @@ class TestMinNotional:
         result = run_async(execute_buy(
             "BTC", {"signal": "BUY", "symbol": "BTC", "current_price": 50000},
             current_price=50000.0, current_balance=10000.0,
-            risk_pct=0.01, size_mult=1.0))
+            risk_pct=0.01, size_mult=1.0, trading_strategy='auto'))
         assert result is not None
         mock_order.assert_called_once()
+
+    def test_manual_buy_is_blocked(self):
+        """Manual strategy BUY should never proceed — manual is exit-only."""
+        from src.orchestration.trade_executor import execute_buy
+        result = run_async(execute_buy(
+            "BTC", {"signal": "BUY", "symbol": "BTC", "current_price": 50000},
+            current_price=50000.0, current_balance=10000.0,
+            risk_pct=0.01, size_mult=1.0, trading_strategy='manual'))
+        assert result is None
 
 
 # --- Fix 4: PDT Tracking ---

@@ -592,7 +592,9 @@ async def send_sector_review_digest(result: dict):
         if abs(score) < 0.2:
             continue
         catalyst = data.get('key_catalyst', '')
-        line = f" {score:+.2f} {group} — {_escape_md(catalyst[:60])}" if catalyst else f" {score:+.2f} {group}"
+        safe_group = _escape_md(group)
+        line = (f" {score:+.2f} {safe_group} — {_escape_md(catalyst[:60])}"
+                if catalyst else f" {score:+.2f} {safe_group}")
         if group in _CRYPTO_GROUPS:
             crypto_lines.append(line)
         else:
