@@ -643,6 +643,7 @@ def _score_with_gemini(articles_with_hashes: list) -> dict:
 
     Args:
         articles_with_hashes: list of dicts with 'title', 'description', 'title_hash'.
+            Optional fields: 'collected_at' (for age context), 'source' (for attribution).
 
     Returns:
         {title_hash: score} for all articles that could be scored (cached + new).
@@ -785,6 +786,8 @@ def collect_news_sentiment(symbols):
                     'title': title,
                     'description': article.get('description', ''),
                     'title_hash': title_hash,
+                    'collected_at': article.get('published') or article.get('collected_at'),
+                    'source': article.get('source', ''),
                 })
         gemini_article_scores = _score_with_gemini(articles_for_scoring)
 

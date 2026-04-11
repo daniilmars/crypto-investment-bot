@@ -4,6 +4,7 @@ import random
 import re
 import time
 import warnings
+from datetime import datetime, timezone
 
 import vertexai
 with warnings.catch_warnings():
@@ -12,6 +13,41 @@ with warnings.catch_warnings():
 
 from src.config import app_config
 from src.logger import log
+
+
+def _today_context() -> str:
+    """Returns a 'TODAY' header to anchor Gemini's freshness judgment.
+
+    Without this, Gemini cannot tell if a story about e.g. the Sept 2025
+    OpenAI-NVIDIA 10GW partnership is a week old or 7 months old.
+    """
+    now = datetime.now(timezone.utc)
+    return (
+        f"TODAY'S DATE: {now.strftime('%Y-%m-%d %H:%M UTC')}\n"
+        "Use this to judge whether events are actually recent. RSS feeds "
+        "frequently re-publish old stories as 'analysis' or 'retrospective' "
+        "pieces — if an article describes an event that happened weeks/months "
+        "before today, treat it as STALE / PRICED-IN regardless of when the "
+        "article itself was written.\n"
+    )
+
+
+def _age_tag(collected_at: str | None) -> str:
+    """Compact age tag like '3h', '2d', '?' for prompts."""
+    if not collected_at:
+        return '?'
+    try:
+        s = str(collected_at).replace('Z', '').split('+')[0].split('.')[0]
+        dt = datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
+        delta = datetime.now(timezone.utc) - dt
+        hours = delta.total_seconds() / 3600
+        if hours < 1:
+            return f"{int(delta.total_seconds() / 60)}m"
+        if hours < 48:
+            return f"{int(hours)}h"
+        return f"{int(hours / 24)}d"
+    except Exception:
+        return '?'
 
 # TODO(2026-06): Migrate from vertexai SDK to google.genai SDK before June 2026 deadline.
 # analyze_news_with_search() already uses google.genai; score_articles_batch() and
@@ -150,11 +186,14 @@ def _score_single_batch(model, articles: list) -> list | None:
     for i, art in enumerate(articles, 1):
         title = art.get('title', '')
         desc = (art.get('description', '') or '')[:200]
-        numbered_lines.append(f"{i}. {title} | {desc}")
+        age = _age_tag(art.get('collected_at'))
+        source = (art.get('source') or '?')[:25]
+        numbered_lines.append(f"{i}. [collected {age} ago, {source}] {title} | {desc}")
 
     articles_text = "\n".join(numbered_lines)
 
     prompt = (
+        f"{_today_context()}\n"
         "You are a senior prop trading desk analyst. Your job is NOT sentiment analysis — "
         "it is to evaluate each article the way a professional trader would: "
         "identify actionable catalysts, assess what is already priced in, "
@@ -168,12 +207,20 @@ def _score_single_batch(model, articles: list) -> list | None:
         "2. IS IT PRICED IN? — If every outlet has been covering this for days, "
         "the market already moved. Score near 0.0. Only SURPRISE or FRESH information "
         "deserves a high score.\n"
-        "3. WHAT'S THE TRADE? — Would you actually put money on this? "
+        "3. EVENT AGE vs COLLECTION AGE — The '[collected Xh ago]' tag tells you when "
+        "OUR PIPELINE scraped the article, NOT when the underlying event happened. "
+        "Read the TITLE/DESCRIPTION critically: if it describes a partnership, deal, "
+        "announcement, product launch, or earnings that clearly happened weeks or "
+        "months before today, SCORE 0.0 — this is re-syndicated old news being served "
+        "to us as if fresh. Example: an article titled 'OpenAI-NVIDIA 10GW deal announced' "
+        "scraped today is STALE because that deal was announced in September 2025. "
+        "Use your knowledge of when specific events actually occurred.\n"
+        "4. WHAT'S THE TRADE? — Would you actually put money on this? "
         "A +0.7 score means 'I would enter a position right now based on this.' "
         "Reserve high scores for news where you'd bet your own capital.\n"
-        "4. SECOND-ORDER EFFECTS — An AI chip export ban isn't just about NVDA. "
+        "5. SECOND-ORDER EFFECTS — An AI chip export ban isn't just about NVDA. "
         "Think about who benefits, who gets hurt, supply chain effects.\n"
-        "5. CONTRARIAN CHECK — When everyone is bearish on something, that's often "
+        "6. CONTRARIAN CHECK — When everyone is bearish on something, that's often "
         "the bottom. Extreme consensus = lower magnitude, not higher.\n\n"
         "SCORE CALIBRATION:\n"
         "- |score| 0.7-1.0: I WOULD TRADE THIS NOW — concrete catalyst, surprise factor, "
@@ -191,6 +238,9 @@ def _score_single_batch(model, articles: list) -> list | None:
         "- 'X could reach $Y' / 'analyst predicts' / 'why I'm bullish on'\n"
         "- Articles that describe price action without explaining what caused it\n"
         "- Rehashed narratives with a new date ('BTC halving will...')\n"
+        "- Re-syndicated old announcements (e.g. 'OpenAI-NVIDIA 10GW deal', "
+        "'FedNow launches', 'Mt. Gox payout' — if the underlying event is >14 days old, "
+        "score 0.0 regardless of how recently the article was scraped)\n"
         "- Press releases without market-moving substance\n"
         "- Same story from multiple sources — only the first occurrence matters\n\n"
         f"Articles:\n{articles_text}\n\n"
@@ -238,6 +288,8 @@ def score_articles_batch(articles: list, batch_size: int = 50) -> dict:
 
     Args:
         articles: list of dicts with 'title', 'description', 'title_hash' keys.
+            Optional: 'collected_at' (ISO timestamp) and 'source' are used to
+            tag each article in the prompt so Gemini can judge staleness.
         batch_size: number of articles per Gemini API call.
 
     Returns:
@@ -415,6 +467,7 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
             feedback_sections += f"\n{symbol_memory_context}\n"
 
         prompt = (
+            f"{_today_context()}\n"
             "You are a senior trading desk analyst. Use BOTH the headlines we collected "
             "from our RSS feeds AND your own Google Search results to assess news impact.\n\n"
             "BOT PARAMETERS:\n"
@@ -428,7 +481,12 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
             "4. Only CONCRETE catalysts (regulatory, ETF, hack, earnings surprise, "
             "Fed decision) justify confidence >= 0.6\n"
             "5. Opinion pieces, recycled narratives, price predictions → confidence <= 0.4\n"
-            "6. Consider YTD performance — a catalyst on a -27% YTD asset fighting a strong "
+            "6. CRITICAL — FRESHNESS: Judge the age of the underlying EVENT, not the "
+            "article. RSS feeds re-publish old announcements constantly. If the catalyst "
+            "is more than 14 days old (e.g. the Sept 2025 OpenAI-NVIDIA 10GW deal), "
+            "set catalyst_freshness='stale' and cap confidence at 0.3. Use web search "
+            "to verify when events actually happened if unsure.\n"
+            "7. Consider YTD performance — a catalyst on a -27% YTD asset fighting a strong "
             "downtrend deserves lower confidence than the same catalyst on a +15% YTD asset\n\n"
             f"--- Symbols to analyze: {symbols_str} ---\n\n"
             f"{collected_context}\n\n"
@@ -598,6 +656,7 @@ def analyze_news_impact(headlines_by_symbol: dict, current_prices: dict,
         headlines_text = "\n\n".join(symbol_sections)
 
         prompt = (
+            f"{_today_context()}\n"
             "You are a senior trading desk analyst scoring news for an automated trading bot.\n\n"
             "BOT PARAMETERS (critical context — your assessment drives real trades):\n"
             "- Stop-loss: -3.5%, Take-profit: +8%, Trailing stop: +2% activation / 1.5% trail\n"
@@ -637,10 +696,20 @@ def analyze_news_impact(headlines_by_symbol: dict, current_prices: dict,
             "- Headlines all agree → confidence boost\n"
             "- Headlines conflict → cap confidence at 0.5 max, set sentiment_divergence=true\n"
             "- Single source with no corroboration → treat with skepticism\n\n"
-            "STEP 4 — FRESHNESS & PRICED-IN CHECK:\n"
-            "- Breaking (< 2h old, not yet reflected in price) → full weight\n"
-            "- Recent (2-12h) → partial weight, market may have moved already\n"
-            "- Stale (>24h) → near-zero weight, already priced in\n"
+            "STEP 4 — FRESHNESS & PRICED-IN CHECK (CRITICAL):\n"
+            "- Judge the age of the EVENT, not the age of the article. RSS feeds "
+            "constantly re-publish old stories. If the catalyst described happened "
+            "more than 14 days before today's date, treat it as STALE and fully "
+            "priced in, regardless of how recently the article was scraped.\n"
+            "- Examples of stale-but-still-circulating catalysts to watch for: "
+            "long-announced partnerships (e.g. the Sept 2025 OpenAI-NVIDIA 10GW deal), "
+            "already-launched products, prior earnings, past Fed decisions, old ETF "
+            "approvals. These MUST score catalyst_freshness='stale' even if the "
+            "headline sounds exciting.\n"
+            "- Breaking (event happened <2h ago, not yet reflected in price) → full weight\n"
+            "- Recent (event happened 2-24h ago) → partial weight\n"
+            "- Stale (event >24h old, or re-syndication of old announcements) → "
+            "near-zero weight, set catalyst_freshness='stale', cap confidence at 0.3\n"
             "- Scheduled events (CPI, FOMC, earnings dates) that haven't happened yet "
             "→ only the RESULT matters, not pre-event speculation\n\n"
             "STEP 5 — PRICE IMPACT ESTIMATION:\n"
