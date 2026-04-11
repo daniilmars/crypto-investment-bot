@@ -325,10 +325,10 @@ settings:
         caution_strength_boost: 0.00
       risk_params:
         stop_loss_percentage: 0.05
-        take_profit_percentage: 0.15
+        take_profit_percentage: 0.20
         trailing_stop_enabled: true
-        trailing_stop_activation: 0.03
-        trailing_stop_distance: 0.015
+        trailing_stop_activation: 0.05
+        trailing_stop_distance: 0.03
       weights:
         base_confidence: 1.0
         hype_multiplier: 1.0
