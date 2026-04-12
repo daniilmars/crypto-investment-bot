@@ -16,7 +16,7 @@ class TestRSSFeedConfig:
     """Validates the RSS_FEEDS list structure and category distribution."""
 
     def test_total_feed_count(self):
-        assert len(RSS_FEEDS) == 97
+        assert len(RSS_FEEDS) == 100
 
     def test_all_feeds_have_required_keys(self):
         for feed in RSS_FEEDS:
@@ -48,7 +48,7 @@ class TestRSSFeedConfig:
 
     def test_regulatory_feed_count(self):
         reg_feeds = [f for f in RSS_FEEDS if f['category'] == 'regulatory']
-        assert len(reg_feeds) == 11
+        assert len(reg_feeds) == 14
 
     def test_sector_feed_count(self):
         sector_feeds = [f for f in RSS_FEEDS if f['category'] == 'sector']
@@ -481,6 +481,46 @@ class TestTrailingPunctuationKeyword:
         result = _match_article_to_symbols(
             'Amazon.com beats Q3 revenue expectations', '', ['AMZN'])
         assert 'AMZN' in result
+
+
+class TestMacroKeywordRouting:
+    """Macro keyword → sector routing for articles that match no specific symbol."""
+
+    def test_oil_routes_to_energy(self):
+        from src.collectors.news_data import _match_article_to_macro_sectors
+        result = _match_article_to_macro_sectors(
+            'Empty oil tankers heading to the United States', '')
+        assert 'energy' in result
+
+    def test_hormuz_routes_to_energy(self):
+        from src.collectors.news_data import _match_article_to_macro_sectors
+        result = _match_article_to_macro_sectors(
+            'Trump orders blockade of Strait of Hormuz', '')
+        assert 'energy' in result
+
+    def test_tariff_routes_to_multiple_sectors(self):
+        from src.collectors.news_data import _match_article_to_macro_sectors
+        result = _match_article_to_macro_sectors(
+            'New tariff on Chinese goods announced by White House', '')
+        assert 'semiconductors' in result or 'industrials' in result
+
+    def test_defense_routes_correctly(self):
+        from src.collectors.news_data import _match_article_to_macro_sectors
+        result = _match_article_to_macro_sectors(
+            'Pentagon awards new defense contract for missile systems', '')
+        assert 'defense' in result
+
+    def test_no_macro_match_returns_empty(self):
+        from src.collectors.news_data import _match_article_to_macro_sectors
+        result = _match_article_to_macro_sectors(
+            'Bruce Springsteen prior to plastic surgery???', '')
+        assert result == []
+
+    def test_direct_symbol_match_skips_macro(self):
+        """Articles matching a specific symbol should NOT trigger macro routing."""
+        result = _match_article_to_symbols(
+            'Exxon reports record Q4 profits from oil boom', '', ['XOM'])
+        assert 'XOM' in result  # Direct match — macro routing not needed
 
 
 class TestFetchRSSFeeds:

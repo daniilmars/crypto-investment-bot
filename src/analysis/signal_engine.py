@@ -250,14 +250,30 @@ def _generate_sentiment_signal(symbol, market_data,
         log.debug(f"[{symbol}] HOLD: {reason}")
         return {"signal": "HOLD", "symbol": symbol, "reason": reason}
 
-    # --- Step 2: SMA trend filter (don't trade against the trend) ---
+    # --- Step 2: SMA trend filter (soft override for high-conviction events) ---
+    sma_override_applied = False
+    sma_cfg = sentiment_config.get('sma_override', {})
+
     if direction == 'bullish' and current_price < sma:
-        reason = f"Sentiment bullish but price ${current_price:,.2f} < SMA ${sma:,.2f} (downtrend). {sentiment_reason}."
-        log.debug(f"[{symbol}] HOLD: {reason}")
-        return {"signal": "HOLD", "symbol": symbol, "reason": reason}
+        can_override = (
+            sma_cfg.get('enabled', False)
+            and g_confidence >= sma_cfg.get('min_confidence', 0.75)
+            and freshness == sma_cfg.get('required_freshness', 'breaking')
+        )
+        if can_override:
+            sma_override_applied = True
+            log.info(f"[{symbol}] SMA override: price ${current_price:,.2f} < SMA "
+                     f"${sma:,.2f} but Gemini conf {g_confidence:.2f} "
+                     f"(freshness={freshness}) exceeds threshold")
+        else:
+            reason = (f"Sentiment bullish but price ${current_price:,.2f} < SMA "
+                      f"${sma:,.2f} (downtrend). {sentiment_reason}.")
+            log.debug(f"[{symbol}] HOLD: {reason}")
+            return {"signal": "HOLD", "symbol": symbol, "reason": reason}
 
     if direction == 'bearish' and current_price > sma:
-        reason = f"Sentiment bearish but price ${current_price:,.2f} > SMA ${sma:,.2f} (uptrend). {sentiment_reason}."
+        reason = (f"Sentiment bearish but price ${current_price:,.2f} > SMA "
+                  f"${sma:,.2f} (uptrend). {sentiment_reason}.")
         log.debug(f"[{symbol}] HOLD: {reason}")
         return {"signal": "HOLD", "symbol": symbol, "reason": reason}
 
@@ -294,9 +310,19 @@ def _generate_sentiment_signal(symbol, market_data,
         gemini = news_sentiment_data.get('gemini_assessment')
         if gemini:
             raw_conf = gemini.get('confidence', 0)
-            freshness = gemini.get('catalyst_freshness', 'none')
-            f_mult = {'breaking': 1.0, 'recent': 0.8, 'stale': 0.3, 'none': 0.5}.get(freshness, 0.5)
+            freshness_val = gemini.get('catalyst_freshness', 'none')
+            f_mult = {'breaking': 1.0, 'recent': 0.8, 'stale': 0.3, 'none': 0.5}.get(freshness_val, 0.5)
             strength = raw_conf * f_mult
 
-    return {"signal": signal_type, "symbol": symbol, "reason": reason, "current_price": current_price,
-            "signal_strength": strength}
+    # Apply SMA override penalty — signal passes but at reduced strength
+    if sma_override_applied:
+        penalty = sma_cfg.get('penalty_pct', 0.25)
+        strength *= (1.0 - penalty)
+        log.info(f"[{symbol}] SMA override penalty: strength {strength:.3f} "
+                 f"(reduced by {penalty:.0%})")
+
+    result = {"signal": signal_type, "symbol": symbol, "reason": reason,
+              "current_price": current_price, "signal_strength": strength}
+    if sma_override_applied:
+        result["sma_override"] = True
+    return result

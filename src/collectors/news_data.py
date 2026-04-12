@@ -287,6 +287,61 @@ SYMBOL_REQUIRED_CONTEXT = {
     },
 }
 
+# Macro keyword → sector group routing. When an article matches no specific
+# symbol but contains macro keywords, it gets routed to all symbols in the
+# matched sector group(s). Applied as a fallback only.
+_MACRO_KEYWORD_SECTORS_RAW = {
+    r'oil\b|crude|petroleum|Hormuz|OPEC|Brent\b|WTI\b': ['energy'],
+    r'tariff|trade war|China trade|import dut|export ban': ['tech_mega', 'semiconductors', 'consumer_disc', 'industrials'],
+    r'fertilizer|commodit': ['materials', 'commodities'],
+    r'defense|military|Pentagon|NATO\b|weapons?\b|missile': ['defense'],
+    r'interest rate|Fed |federal reserve|inflation\b|CPI\b': ['financials_banks', 'utilities_reits'],
+    r'crypto|Bitcoin|digital asset|SEC crypto|stablecoin': ['l1_major', 'defi'],
+    r'nuclear|uranium': ['nuclear_power'],
+    r'shipping|tanker|freight': ['shipping_tankers'],
+    r'semiconductor|chip ban|chip export': ['semiconductors'],
+}
+_MACRO_PATTERNS = [
+    (re.compile(pattern, re.IGNORECASE), groups)
+    for pattern, groups in _MACRO_KEYWORD_SECTORS_RAW.items()
+]
+
+
+def _match_article_to_macro_sectors(title: str, description: str) -> list[str]:
+    """Match article to sector groups via macro keyword detection.
+
+    Returns list of matched sector group names. Only used as fallback
+    when _match_article_to_symbols returns empty.
+    """
+    text = f"{title} {description}"
+    matched = set()
+    for pattern, groups in _MACRO_PATTERNS:
+        if pattern.search(text):
+            matched.update(groups)
+    return list(matched)
+
+
+def _expand_sectors_to_symbols(sector_groups: list[str],
+                               active_symbols: list[str],
+                               max_symbols: int = 20) -> list[str]:
+    """Expand sector group names to individual symbols from the watch list."""
+    from src.analysis.sector_limits import _ensure_loaded, _sector_config
+    _ensure_loaded()
+    if not _sector_config:
+        return []
+    groups = _sector_config.get('groups', {})
+    active_set = set(s.upper() for s in active_symbols)
+    expanded = []
+    for group_name in sector_groups:
+        for sym in groups.get(group_name, {}).get('symbols', []):
+            sym_str = str(sym).upper()
+            if sym_str in active_set and sym_str not in expanded:
+                expanded.append(sym_str)
+                if len(expanded) >= max_symbols:
+                    return expanded
+    return expanded
+
+
 RSS_FEEDS = [
     {'url': 'https://feeds.reuters.com/reuters/businessNews', 'category': 'financial'},
     {'url': 'https://feeds.bloomberg.com/markets/news.rss', 'category': 'financial'},
@@ -338,6 +393,10 @@ RSS_FEEDS = [
     {'url': 'https://bitcoinmagazine.com/feed', 'category': 'kol'},
     {'url': 'https://www.trumpstruth.org/feed', 'category': 'kol'},
     {'url': 'https://vitalik.eth.limo/feed.xml', 'category': 'kol'},
+    # Layer D — Macro policy feeds (government/regulatory not covered above)
+    {'url': 'https://www.cftc.gov/PressRoom/PressReleases/rss.xml', 'category': 'regulatory'},
+    {'url': 'https://news.google.com/rss/search?q=White+House+executive+order+OR+tariff+OR+sanctions+when:1d&hl=en-US&gl=US&ceid=US:en', 'category': 'regulatory'},
+    {'url': 'https://news.google.com/rss/search?q=Treasury+Department+sanctions+OR+debt+OR+%22interest+rate%22+when:1d&hl=en-US&gl=US&ceid=US:en', 'category': 'regulatory'},
     # Layer E — Asia-Pacific market feeds (English-language)
     {'url': 'https://asia.nikkei.com/rss/feed/nar', 'category': 'asia'},
     {'url': 'https://www.scmp.com/rss/5/feed', 'category': 'asia'},
@@ -889,10 +948,24 @@ def collect_news_sentiment(symbols):
     symbol_articles = {symbol: [] for symbol in symbols}
     archive_rows = []
 
+    macro_routing_enabled = news_config.get('macro_routing', {}).get('enabled', True)
+    macro_max = news_config.get('macro_routing', {}).get('max_symbols_per_article', 20)
+    macro_routed_count = 0
+
     for article in all_articles:
         title = article.get('title', '')
         description = article.get('description', '')
         matched_symbols = _match_article_to_symbols(title, description, symbols)
+
+        # Macro routing fallback: unmatched articles with macro keywords
+        # get routed to all symbols in the relevant sector group(s).
+        if not matched_symbols and macro_routing_enabled:
+            macro_sectors = _match_article_to_macro_sectors(title, description)
+            if macro_sectors:
+                matched_symbols = _expand_sectors_to_symbols(
+                    macro_sectors, symbols, max_symbols=macro_max)
+                if matched_symbols:
+                    macro_routed_count += 1
 
         if not matched_symbols:
             continue

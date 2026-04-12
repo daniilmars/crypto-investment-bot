@@ -78,6 +78,11 @@ settings:
     rsi_buy_veto_threshold: 70
     rsi_sell_veto_threshold: 30
     adx_min_threshold: 20
+    sma_override:
+      enabled: true
+      min_confidence: 0.75       # Gemini raw confidence before freshness modulation
+      required_freshness: breaking  # only override for breaking catalysts
+      penalty_pct: 0.25           # reduce signal strength by 25% when overriding SMA
 
   # Per-symbol cooldown (hours) after a stop-loss exit before re-entering.
   stoploss_cooldown_hours: 24
@@ -157,6 +162,9 @@ settings:
     # Use Google Search grounding (disabled — flash token costs too high at CHF 1.50/day).
     # RSS+scraping always runs; falls back to analyze_news_impact (Vertex AI flash-lite).
     use_grounded_search: false
+    macro_routing:
+      enabled: true
+      max_symbols_per_article: 20
     # Web scraping supplements RSS feeds with direct page content
     web_scraping:
       enabled: true

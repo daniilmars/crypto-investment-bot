@@ -49,6 +49,23 @@ def _age_tag(collected_at: str | None) -> str:
     except Exception:
         return '?'
 
+_SUPPLY_SIDE_REASONING = (
+    "SUPPLY-SIDE vs DEMAND-SIDE REASONING (critical for commodity-linked assets):\n"
+    "When war, sanctions, or natural disasters DISRUPT SUPPLY of a commodity:\n"
+    "- PRODUCERS of that commodity are BULLISH (higher prices = higher revenue)\n"
+    "- CONSUMERS of that commodity are BEARISH (higher input costs)\n"
+    "Do NOT confuse 'war is bad' with 'bad for the stock.' Think about WHO PROFITS.\n"
+    "Examples:\n"
+    "- 'Iran war disrupts oil supply' → BULLISH for XOM, CVX, OXY, Shell, BP "
+    "(oil producers profit from higher prices)\n"
+    "  → BEARISH for airlines, shipping consumers (higher fuel costs)\n"
+    "- 'Chip export ban to China' → BEARISH for NVDA, AMD (lose market access)\n"
+    "  → BULLISH for domestic alternatives\n"
+    "- 'Tariff on Chinese goods' → BEARISH for importers/retailers\n"
+    "  → BULLISH for domestic manufacturers competing with Chinese imports\n"
+    "Always ask: 'Does this event INCREASE or DECREASE this company's revenue?'\n"
+)
+
 # TODO(2026-06): Migrate from vertexai SDK to google.genai SDK before June 2026 deadline.
 # analyze_news_with_search() already uses google.genai; score_articles_batch() and
 # analyze_news_impact() still use the legacy vertexai SDK.
@@ -220,7 +237,8 @@ def _score_single_batch(model, articles: list) -> list | None:
         "Reserve high scores for news where you'd bet your own capital.\n"
         "5. SECOND-ORDER EFFECTS — An AI chip export ban isn't just about NVDA. "
         "Think about who benefits, who gets hurt, supply chain effects.\n"
-        "6. CONTRARIAN CHECK — When everyone is bearish on something, that's often "
+        f"6. {_SUPPLY_SIDE_REASONING}"
+        "7. CONTRARIAN CHECK — When everyone is bearish on something, that's often "
         "the bottom. Extreme consensus = lower magnitude, not higher.\n\n"
         "SCORE CALIBRATION:\n"
         "- |score| 0.7-1.0: I WOULD TRADE THIS NOW — concrete catalyst, surprise factor, "
@@ -487,7 +505,8 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
             "set catalyst_freshness='stale' and cap confidence at 0.3. Use web search "
             "to verify when events actually happened if unsure.\n"
             "7. Consider YTD performance — a catalyst on a -27% YTD asset fighting a strong "
-            "downtrend deserves lower confidence than the same catalyst on a +15% YTD asset\n\n"
+            "downtrend deserves lower confidence than the same catalyst on a +15% YTD asset\n"
+            f"8. {_SUPPLY_SIDE_REASONING}\n"
             f"--- Symbols to analyze: {symbols_str} ---\n\n"
             f"{collected_context}\n\n"
             "Now search the web for any additional news about these assets, then respond "
@@ -719,6 +738,7 @@ def analyze_news_impact(headlines_by_symbol: dict, current_prices: dict,
             "- If expected move > 5% → high confidence (if catalyst is concrete)\n"
             "- For correlated assets: if BTC news drives the move, altcoins follow with "
             "higher beta — flag this in cross_asset_theme\n\n"
+            f"STEP 6 — {_SUPPLY_SIDE_REASONING}\n"
             f"--- Headlines by Symbol ---\n{headlines_text}\n\n"
             "Respond ONLY with valid JSON:\n"
             "{\n"
