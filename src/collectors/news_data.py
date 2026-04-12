@@ -213,7 +213,7 @@ SYMBOL_KEYWORDS = {
 # a non-word character (e.g. "Disney+", "Amazon.com"). These lookarounds
 # test the character just outside the match, so any transition to a
 # non-word character (or string boundary) counts as a boundary.
-_LEFT_GUARD  = r'(?:(?<=^)|(?<=[^A-Za-z0-9_]))'
+_LEFT_GUARD = r'(?:(?<=^)|(?<=[^A-Za-z0-9_]))'
 _RIGHT_GUARD = r'(?:(?=$)|(?=[^A-Za-z0-9_]))'
 
 # All-caps ticker shape: 2-6 alphanumerics, optional .XX or -X suffix.
