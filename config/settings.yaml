@@ -625,6 +625,11 @@ settings:
 
   # -- Live Dashboard Settings --
   # Replaces periodic messages with a single auto-updating pinned dashboard.
+  periodic_summary:
+    enabled: true
+    interval_hours: 4
+    startup_delay_minutes: 10
+
   live_dashboard:
     enabled: true
     daily_recap_hour_utc: 22

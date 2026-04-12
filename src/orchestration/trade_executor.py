@@ -24,6 +24,23 @@ from src.orchestration.pre_trade_gates import (
 from src.config import app_config
 
 
+def _hold_duration(entry_timestamp) -> str:
+    """Format hold duration from entry timestamp to now."""
+    if not entry_timestamp:
+        return ""
+    try:
+        s = str(entry_timestamp).replace('Z', '').split('+')[0].split('.')[0]
+        dt = datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
+        delta = datetime.now(timezone.utc) - dt
+        days = delta.days
+        hours = delta.seconds // 3600
+        if days > 0:
+            return f"{days}d {hours}h"
+        return f"{hours}h"
+    except Exception:
+        return ""
+
+
 def _set_cooldown(symbol, signal_type, cooldown_hours, is_auto):
     """Set signal cooldown via bot_state (auto vs manual)."""
     expires = datetime.now(timezone.utc) + timedelta(hours=cooldown_hours)
@@ -169,13 +186,35 @@ async def process_trade_signal(
                 dynamic_tp_pct=dynamic_tp_pct)
             _set_cooldown(symbol, "BUY", signal_cooldown_hours, is_auto)
 
-            # Consume defensive mode after trade executes
+            # Consume defensive mode + send alerts after trade executes
             if result and result.get('order_id'):
                 _record_trade_attribution(
                     symbol, signal, result['order_id'], trading_strategy)
                 if streak_cfg.get('enabled') and \
                    bot_state.strategy_get_streak_state(trading_strategy).get('in_defensive_mode'):
                     bot_state.strategy_consume_defensive_mode(trading_strategy)
+                # Enhanced trade alert
+                try:
+                    from src.notify.telegram_periodic_summary import send_trade_alert
+                    ga = signal.get('gemini_assessment') or {}
+                    await send_trade_alert(
+                        action="BUY", symbol=symbol,
+                        trading_strategy=trading_strategy,
+                        entry_price=current_price,
+                        quantity=result.get('quantity', 0),
+                        signal_strength=signal.get('signal_strength', 0),
+                        gemini_direction=signal.get('gemini_direction', ''),
+                        gemini_confidence=signal.get('gemini_confidence', 0),
+                        catalyst_freshness=signal.get('catalyst_freshness', ''),
+                        catalyst_type=signal.get('catalyst_type', ''),
+                        key_headline=ga.get('key_headline', ''),
+                        reason=signal.get('reason', ''),
+                        macro_multiplier=macro_multiplier,
+                        streak_multiplier=streak_mult,
+                        sma_override=signal.get('sma_override', False),
+                    )
+                except Exception:
+                    pass
             return result
         else:
             # Check if rotation is possible when max positions blocked
@@ -443,8 +482,21 @@ async def execute_sell(
         result = place_order(symbol, "SELL", qty, current_price,
                              existing_order_id=order_id, exit_reason='signal_sell', **order_kw)
         bot_state.strategy_clear_trailing_stop(order_id, trading_strategy)
-        pnl_pct = (current_price - position['entry_price']) / position['entry_price']
+        entry_price = position['entry_price']
+        pnl_pct = (current_price - entry_price) / entry_price
+        pnl_dollar = (current_price - entry_price) * qty
         bot_state.strategy_record_trade_outcome(trading_strategy, is_win=(pnl_pct > 0))
+        try:
+            from src.notify.telegram_periodic_summary import send_trade_alert
+            hold = _hold_duration(position.get('entry_timestamp'))
+            await send_trade_alert(
+                action="SELL", symbol=symbol,
+                trading_strategy=trading_strategy,
+                entry_price=entry_price, exit_price=current_price,
+                quantity=qty, pnl=pnl_dollar, pnl_pct=pnl_pct * 100,
+                hold_duration=hold, exit_reason='signal_sell')
+        except Exception:
+            pass
         return result
 
     # Manual trading

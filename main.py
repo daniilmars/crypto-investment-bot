@@ -24,14 +24,10 @@ from src.database import (initialize_database,
 from src.execution.circuit_breaker import (resolve_stale_circuit_breaker_events,
                                            load_session_peaks)
 from src.logger import log
-from src.analysis.market_alerts import generate_daily_digest
 from src.notify.telegram_bot import (start_bot,
                                      register_execute_callback,
-                                     cleanup_expired_signals,
-                                     send_market_event_alert)
-from src.notify.telegram_live_dashboard import (
-    load_dashboard_state, send_daily_recap,
-)
+                                     cleanup_expired_signals)
+from src.notify.telegram_live_dashboard import load_dashboard_state
 from src.orchestration import bot_state
 from src.orchestration.trade_executor import execute_confirmed_signal
 from src.orchestration.cycle_runner import (
@@ -68,24 +64,21 @@ async def bot_loop():
         await asyncio.sleep(run_interval_minutes * 60)
 
 
-async def daily_recap_loop():
-    """Sends a daily recap at the configured hour (UTC)."""
-    cfg = app_config.get('settings', {}).get('live_dashboard', {})
-    if not cfg.get('enabled', True):
+async def periodic_summary_loop():
+    """Sends a consolidated 4-hour summary."""
+    summary_cfg = app_config.get('settings', {}).get('periodic_summary', {})
+    if not summary_cfg.get('enabled', True):
         return
-    target_hour = cfg.get('daily_recap_hour_utc', 22)
+    interval = summary_cfg.get('interval_hours', 4) * 3600
+    startup_delay = summary_cfg.get('startup_delay_minutes', 10) * 60
+    await asyncio.sleep(startup_delay)
     while True:
-        now = datetime.now(timezone.utc)
-        next_run = now.replace(hour=target_hour, minute=0, second=0, microsecond=0)
-        if next_run <= now:
-            next_run += timedelta(days=1)
-        wait_seconds = (next_run - now).total_seconds()
-        await asyncio.sleep(wait_seconds)
         try:
-            if application:
-                await send_daily_recap(application)
+            from src.notify.telegram_periodic_summary import send_periodic_summary
+            await send_periodic_summary()
         except Exception as e:
-            log.error(f"Daily recap error: {e}", exc_info=True)
+            log.error(f"Periodic summary error: {e}", exc_info=True)
+        await asyncio.sleep(interval)
 
 
 async def _signal_cleanup_loop():
@@ -96,28 +89,6 @@ async def _signal_cleanup_loop():
         except Exception as e:
             log.error(f"Error in signal cleanup loop: {e}", exc_info=True)
         await asyncio.sleep(60)
-
-
-async def daily_digest_loop():
-    """Sends a daily market calendar digest at the configured hour (UTC)."""
-    alerts_cfg = app_config.get('settings', {}).get('market_alerts', {})
-    if not alerts_cfg.get('enabled', True):
-        return
-    target_hour = alerts_cfg.get('daily_digest_hour_utc', 8)
-    while True:
-        now = datetime.now(timezone.utc)
-        next_run = now.replace(hour=target_hour, minute=0, second=0, microsecond=0)
-        if next_run <= now:
-            next_run += timedelta(days=1)
-        wait_seconds = (next_run - now).total_seconds()
-        await asyncio.sleep(wait_seconds)
-        try:
-            digest = await asyncio.to_thread(generate_daily_digest)
-            if digest:
-                await send_market_event_alert(digest)
-                log.info("Daily market digest sent.")
-        except Exception as e:
-            log.error(f"Daily digest error: {e}", exc_info=True)
 
 
 async def daily_sector_review_loop():
@@ -136,10 +107,9 @@ async def daily_sector_review_loop():
         try:
             from src.analysis.sector_review import run_sector_review
             result = await asyncio.to_thread(run_sector_review)
-            if result and sector_cfg.get('telegram_digest', True):
-                from src.notify.telegram_bot import send_sector_review_digest
-                await send_sector_review_digest(result)
-                log.info("Daily sector review digest sent.")
+            if result:
+                log.info(f"Daily sector review complete: "
+                         f"{len(result.get('sectors', {}))} sectors scored.")
 
             # Check for conviction spikes requiring midweek thesis refresh
             try:
@@ -404,12 +374,8 @@ async def startup_event():
     _background_tasks.append(asyncio.create_task(bot_loop()))
     _background_tasks.append(asyncio.create_task(_signal_cleanup_loop()))
 
-    alerts_cfg = app_config.get('settings', {}).get('market_alerts', {})
-    if alerts_cfg.get('enabled', True):
-        _background_tasks.append(asyncio.create_task(daily_digest_loop()))
-        log.info("Daily market digest loop started.")
-
-    _background_tasks.append(asyncio.create_task(daily_recap_loop()))
+    _background_tasks.append(asyncio.create_task(periodic_summary_loop()))
+    log.info("4h periodic summary loop started.")
 
     sector_review_cfg = app_config.get('settings', {}).get('sector_review', {})
     if sector_review_cfg.get('enabled', True):

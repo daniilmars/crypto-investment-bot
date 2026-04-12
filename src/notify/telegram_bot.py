@@ -626,39 +626,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /help command."""
     help_text = (
-        "🤖 *Crypto Investment Bot Help*\n\n"
-        "*Overview:*\n"
-        "`/dashboard` - Portfolio overview with drill-downs\n"
-        "`/status` - AI market summary\n"
-        "`/market_analysis` - On-demand Gemini analysis\n\n"
-        "*Trading:*\n"
-        "`/positions` - Open crypto trades\n"
-        "`/stocks` - Open stock positions\n"
-        "`/buy SYMBOL [AMT]` - Buy (confirmation required)\n"
-        "`/sell SYMBOL` - Sell (confirmation required)\n"
-        "`/close_all [crypto|stocks|all]` - Close positions\n\n"
-        "*Market:*\n"
-        "`/regime` - Macro regime + signals\n"
-        "`/sectors` - Sector exposure\n"
-        "`/events` - Upcoming FOMC/CPI\n"
-        "`/market_hours` - NYSE open/closed\n\n"
-        "*Portfolio:*\n"
-        "`/performance` - Win rate + PnL report\n"
-        "`/stock_balance` - Stock account balance\n"
-        "`/livebalance` - Binance balance\n"
-        "`/auto_status` - Auto-bot status\n"
-        "`/circuitbreaker` - Circuit breaker\n"
-        "`/pdt` - PDT rule status\n\n"
-        "*Bot Control:*\n"
-        "`/trading_mode` - Current mode\n"
-        "`/pause` / `/resume` - Trading control\n\n"
-        "*Sources:*\n"
-        "`/sources` - News source registry\n"
-        "`/source_stats` - Source performance\n"
-        "`/attribution` - Signal attribution\n\n"
-        "*System:*\n"
-        "`/db_stats` - Database statistics\n"
-        "`/gcosts` - GCP billing"
+        "*Bot Commands*\n\n"
+        "`/dashboard` — Portfolio overview\n"
+        "`/help` — This message\n\n"
+        "The bot sends a summary every 4 hours and alerts when trades execute."
     )
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
@@ -1852,40 +1823,23 @@ async def start_bot() -> Application:
         log.info("Starting Telegram bot...")
         application = Application.builder().token(TOKEN).build()
         handlers = [
-            CommandHandler("start", start), CommandHandler("help", help_command),
-            CommandHandler("status", status), CommandHandler("db_stats", db_stats),
-            CommandHandler("positions", positions), CommandHandler("performance", performance),
-            CommandHandler("pause", pause), CommandHandler("resume", resume),
-            CommandHandler("gcosts", gcosts), CommandHandler("db_schema", db_schema),
-            CommandHandler("trading_mode", trading_mode_cmd),
+            # Primary commands (in /help)
+            CommandHandler("start", start),
+            CommandHandler("help", help_command),
+            CommandHandler("dashboard", _dashboard_cmd),
+            # Hidden commands (work but not advertised)
+            CommandHandler("regime", regime_cmd),
+            CommandHandler("market_analysis", market_analysis_cmd),
+            CommandHandler("performance", performance),
+            CommandHandler("positions", positions),
+            CommandHandler("stocks", stocks_cmd),
+            CommandHandler("status", status),
             CommandHandler("livebalance", livebalance),
             CommandHandler("circuitbreaker", circuitbreaker_cmd),
-            CommandHandler("stocks", stocks_cmd),
-            CommandHandler("stock_balance", stock_balance_cmd),
-            CommandHandler("pdt", pdt_cmd),
-            CommandHandler("market_hours", market_hours_cmd),
-            CommandHandler("auto_status", auto_status_cmd),
-            CommandHandler("auto_postmortem", auto_postmortem_cmd),
-            CommandHandler("regime", regime_cmd),
             CommandHandler("sectors", sectors_cmd),
             CommandHandler("events", events_cmd),
-            CommandHandler("sources", sources_cmd),
-            CommandHandler("source_stats", source_stats_cmd),
-            CommandHandler("attribution", attribution_cmd),
-            CommandHandler("discover_sources", discover_sources_cmd),
-            CommandHandler("tune_status", tune_status_cmd),
-            CommandHandler("tune_run", tune_run_cmd),
-            CommandHandler("tune_revert", tune_revert_cmd),
-            CommandHandler("experiments", experiments_cmd),
-            CommandHandler("learning_report", learning_report_cmd),
-            CommandHandler("dashboard", _dashboard_cmd),
-            CommandHandler("market_analysis", market_analysis_cmd),
-            CommandHandler("sell", sell_cmd),
-            CommandHandler("buy", buy_cmd),
-            CommandHandler("close_all", close_all_cmd),
-            CommandHandler("clearchat", _clearchat_cmd),
-            CommandHandler("watchlist", _watchlist_cmd),
-            CommandHandler("backtest", backtest_cmd),
+            CommandHandler("stock_balance", stock_balance_cmd),
+            # Callback + chat handlers
             CallbackQueryHandler(_dispatch_callback),
             MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_chat_message),
         ]

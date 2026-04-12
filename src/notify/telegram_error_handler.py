@@ -17,14 +17,27 @@ class TelegramErrorHandler(logging.Handler):
     MIN_INTERVAL = 60  # seconds between Telegram sends
     MAX_BATCH = 10     # max errors per message
 
-    # Known recurring errors that are noise — suppress from Telegram alerts
+    # Only forward CRITICAL trading errors to Telegram. Everything else stays in logs.
+    CRITICAL_PATTERNS = [
+        'Circuit breaker',
+        'circuit_breaker',
+        'CIRCUIT_BREAKER',
+        'trade execution',
+        'order failed',
+        'place_order',
+        'ResourceExhausted',
+        'quota exceeded',
+        'RATE_LIMIT',
+    ]
+
+    # Known noise — always suppress even if it matches critical patterns
     IGNORE_PATTERNS = [
-        'KASUSDT',           # Kaspa not on Binance
-        'ALPACA_API_KEY',    # Alpaca not configured
-        'Invalid symbol',    # generic invalid symbol noise
-        'Failed to parse Gemini grounded news response as JSON',  # empty responses (expected)
-        'Gemini grounded search returned empty',  # batch empty response (expected, retried next cycle)
-        'database is locked',  # SQLite contention — WAL + busy_timeout handle this, rare transients are noise
+        'KASUSDT',
+        'ALPACA_API_KEY',
+        'Invalid symbol',
+        'Failed to parse Gemini',
+        'Gemini grounded search returned empty',
+        'database is locked',
     ]
 
     def __init__(self, token: str, chat_id: str, level=logging.ERROR):
@@ -41,10 +54,21 @@ class TelegramErrorHandler(logging.Handler):
         try:
             msg = self.format(record)
 
-            # Skip known recurring noise
+            # Skip known noise
             for pattern in self.IGNORE_PATTERNS:
                 if pattern in msg:
                     return
+
+            # Only forward messages matching critical patterns
+            is_critical = any(p in msg for p in self.CRITICAL_PATTERNS)
+            if not is_critical:
+                # Track non-critical errors for the periodic summary count
+                try:
+                    from src.notify.telegram_periodic_summary import increment_error_count
+                    increment_error_count()
+                except Exception:
+                    pass
+                return
 
             # Deduplicate by first 120 chars (ignore timestamps)
             dedup_key = msg[:120]

@@ -89,7 +89,6 @@ async def monitor_position(
     # --- Trailing stop (disabled for strategic trades) ---
     if trailing_stop_enabled and pnl_pct >= trailing_stop_activation:
         if drawdown >= trailing_stop_distance:
-            locked_gain = (peak_price - entry_price) / entry_price
             log.info(f"[{mode_label}] Trailing stop triggered for {symbol}. "
                      f"Peak: ${peak_price:,.2f}, Current: ${current_price:,.2f}")
             place_order(symbol, "SELL", qty, current_price,
@@ -102,11 +101,10 @@ async def monitor_position(
                     log.info(f"PDT: recorded day trade for {symbol}")
             _resolve_trade_attribution(order_id, pnl_pct, entry_price,
                                        current_price, 'trailing_stop')
-            if not is_auto:
-                await _send_exit_alert(symbol, current_price, asset_type,
-                                       f"Trailing stop hit (peak ${peak_price:,.2f}, "
-                                       f"locked ~{locked_gain * 100:.1f}% gain).")
             bot_state.strategy_record_trade_outcome(trading_strategy, is_win=(pnl_pct > 0))
+            await _send_trade_exit_alert(
+                symbol, trading_strategy, entry_price, current_price,
+                qty, pnl_pct, position.get('entry_timestamp'), 'trailing_stop')
             return 'trailing_stop'
 
     # --- Stop-loss (catastrophic SL for strategic trades) ---
@@ -132,9 +130,9 @@ async def monitor_position(
                 await save_stoploss_cooldown(symbol, expires_at)
                 log.info(f"[{symbol}] Stop-loss cooldown set for {stoploss_cooldown_hours}h")
         bot_state.strategy_record_trade_outcome(trading_strategy, is_win=False)
-        if not is_auto:
-            await _send_exit_alert(symbol, current_price, asset_type,
-                                   f"{sl_label} hit ({stop_loss_pct * 100:.1f}% loss).")
+        await _send_trade_exit_alert(
+            symbol, trading_strategy, entry_price, current_price,
+            qty, pnl_pct, position.get('entry_timestamp'), 'stop_loss')
         return 'stop_loss'
 
     # --- Take profit (disabled for strategic trades via 999% threshold) ---
@@ -151,9 +149,9 @@ async def monitor_position(
         _resolve_trade_attribution(order_id, pnl_pct, entry_price,
                                    current_price, 'take_profit')
         bot_state.strategy_record_trade_outcome(trading_strategy, is_win=True)
-        if not is_auto:
-            await _send_exit_alert(symbol, current_price, asset_type,
-                                   f"Take-profit hit ({take_profit_pct * 100:.2f}% gain).")
+        await _send_trade_exit_alert(
+            symbol, trading_strategy, entry_price, current_price,
+            qty, pnl_pct, position.get('entry_timestamp'), 'take_profit')
         return 'take_profit'
 
     return 'none'
@@ -185,7 +183,7 @@ def _resolve_trade_attribution(order_id, pnl_pct, entry_price, exit_price,
 
 async def _send_exit_alert(symbol: str, current_price: float,
                            asset_type: str, reason: str):
-    """Send a SELL alert via Telegram for manual positions."""
+    """Send a SELL alert via Telegram for manual positions (legacy)."""
     alert = {
         "signal": "SELL", "symbol": symbol,
         "current_price": current_price, "reason": reason,
@@ -193,3 +191,31 @@ async def _send_exit_alert(symbol: str, current_price: float,
     if asset_type == 'stock':
         alert['asset_type'] = 'stock'
     await send_telegram_alert(alert)
+
+
+async def _send_trade_exit_alert(symbol, strategy, entry_price, exit_price,
+                                 qty, pnl_pct, entry_timestamp, exit_reason):
+    """Send enhanced exit alert for all strategies."""
+    try:
+        from src.notify.telegram_periodic_summary import send_trade_alert
+        pnl_dollar = (exit_price - entry_price) * qty
+        # Compute hold duration
+        hold = ""
+        if entry_timestamp:
+            try:
+                from datetime import datetime, timezone
+                s = str(entry_timestamp).replace('Z', '').split('+')[0].split('.')[0]
+                dt = datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
+                delta = datetime.now(timezone.utc) - dt
+                days = delta.days
+                hours = delta.seconds // 3600
+                hold = f"{days}d {hours}h" if days > 0 else f"{hours}h"
+            except Exception:
+                pass
+        await send_trade_alert(
+            action="SELL", symbol=symbol, trading_strategy=strategy,
+            entry_price=entry_price, exit_price=exit_price,
+            quantity=qty, pnl=pnl_dollar, pnl_pct=pnl_pct * 100,
+            hold_duration=hold, exit_reason=exit_reason)
+    except Exception:
+        pass
