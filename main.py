@@ -19,7 +19,8 @@ from telegram import Update
 from src.config import app_config
 from src.database import (initialize_database,
                           load_trailing_stop_peaks,
-                          load_stoploss_cooldowns, load_signal_cooldowns)
+                          load_stoploss_cooldowns, load_signal_cooldowns,
+                          load_bot_state)
 from src.execution.circuit_breaker import (resolve_stale_circuit_breaker_events,
                                            load_session_peaks)
 from src.logger import log
@@ -323,6 +324,17 @@ async def startup_event():
         log.info(f"Loaded {len(manual_cd)} manual + {len(auto_cd)} auto signal cooldowns from database.")
     except Exception as e:
         log.warning(f"Could not load signal cooldowns: {e}")
+
+    # Restore streak sizing state from database (survives restarts)
+    try:
+        import json as _json
+        for _sn in ('auto', 'momentum', 'conservative', 'longterm'):
+            _stored = load_bot_state(f'streak_state:{_sn}')
+            if _stored:
+                bot_state.strategy_load_streak_state(_sn, _json.loads(_stored))
+        log.info("Loaded streak sizing state from database.")
+    except Exception as e:
+        log.warning(f"Could not load streak state: {e}")
 
     # Resolve stale circuit breaker events from previous runs
     try:

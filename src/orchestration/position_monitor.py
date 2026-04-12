@@ -106,6 +106,7 @@ async def monitor_position(
                 await _send_exit_alert(symbol, current_price, asset_type,
                                        f"Trailing stop hit (peak ${peak_price:,.2f}, "
                                        f"locked ~{locked_gain * 100:.1f}% gain).")
+            bot_state.strategy_record_trade_outcome(trading_strategy, is_win=(pnl_pct > 0))
             return 'trailing_stop'
 
     # --- Stop-loss (catastrophic SL for strategic trades) ---
@@ -130,6 +131,7 @@ async def monitor_position(
                 bot_state.set_stoploss_cooldown(symbol, expires_at)
                 await save_stoploss_cooldown(symbol, expires_at)
                 log.info(f"[{symbol}] Stop-loss cooldown set for {stoploss_cooldown_hours}h")
+        bot_state.strategy_record_trade_outcome(trading_strategy, is_win=False)
         if not is_auto:
             await _send_exit_alert(symbol, current_price, asset_type,
                                    f"{sl_label} hit ({stop_loss_pct * 100:.1f}% loss).")
@@ -148,6 +150,7 @@ async def monitor_position(
                 log.info(f"PDT: recorded day trade for {symbol}")
         _resolve_trade_attribution(order_id, pnl_pct, entry_price,
                                    current_price, 'take_profit')
+        bot_state.strategy_record_trade_outcome(trading_strategy, is_win=True)
         if not is_auto:
             await _send_exit_alert(symbol, current_price, asset_type,
                                    f"Take-profit hit ({take_profit_pct * 100:.2f}% gain).")

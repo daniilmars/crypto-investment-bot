@@ -150,17 +150,32 @@ async def process_trade_signal(
             asset_type=asset_type, label=label)
 
         if allowed:
+            # Streak-based position sizing
+            streak_cfg = (strategy_config or {}).get('streak_sizing', {})
+            streak_mult = bot_state.strategy_get_streak_multiplier(
+                trading_strategy, streak_cfg)
+            if streak_mult != 1.0:
+                streak_state = bot_state.strategy_get_streak_state(trading_strategy)
+                log.info(f"[{label}] Streak sizing: "
+                         f"{streak_state.get('consecutive_wins', 0)} wins "
+                         f"-> {streak_mult:.1f}x for {symbol}")
+
             result = await execute_buy(
                 symbol, signal, current_price, balance,
-                risk_pct, size_mult,
+                risk_pct, size_mult * streak_mult,
                 asset_type=asset_type, trading_strategy=trading_strategy,
                 broker=broker, label=label,
                 dynamic_sl_pct=dynamic_sl_pct,
                 dynamic_tp_pct=dynamic_tp_pct)
             _set_cooldown(symbol, "BUY", signal_cooldown_hours, is_auto)
+
+            # Consume defensive mode after trade executes
             if result and result.get('order_id'):
                 _record_trade_attribution(
                     symbol, signal, result['order_id'], trading_strategy)
+                if streak_cfg.get('enabled') and \
+                   bot_state.strategy_get_streak_state(trading_strategy).get('in_defensive_mode'):
+                    bot_state.strategy_consume_defensive_mode(trading_strategy)
             return result
         else:
             # Check if rotation is possible when max positions blocked
@@ -428,6 +443,8 @@ async def execute_sell(
         result = place_order(symbol, "SELL", qty, current_price,
                              existing_order_id=order_id, exit_reason='signal_sell', **order_kw)
         bot_state.strategy_clear_trailing_stop(order_id, trading_strategy)
+        pnl_pct = (current_price - position['entry_price']) / position['entry_price']
+        bot_state.strategy_record_trade_outcome(trading_strategy, is_win=(pnl_pct > 0))
         return result
 
     # Manual trading

@@ -31,6 +31,7 @@ _strategy_signal_cds: dict[str, dict[str, datetime]] = {}
 _strategy_analyst_runs: dict[str, dict] = {}
 _strategy_flash_runs: dict[str, dict] = {}
 _strategy_rotation_cds: dict[str, dict[str, datetime]] = {}
+_strategy_streak_state: dict[str, dict] = {}
 
 # --- Last Cycle Timestamp (hung task detection) ---
 _last_cycle_at: datetime | None = None
@@ -364,6 +365,73 @@ def load_signal_cooldown_state(manual: dict, auto: dict):
     _get_store(_strategy_signal_cds, 'auto').update(auto)
 
 
+# --- Streak-Based Position Sizing ---
+
+def strategy_get_streak_state(strategy: str) -> dict:
+    """Returns {'consecutive_wins': int, 'in_defensive_mode': bool}."""
+    state = _strategy_streak_state.get(strategy, {})
+    return {
+        'consecutive_wins': state.get('consecutive_wins', 0),
+        'in_defensive_mode': state.get('in_defensive_mode', False),
+    }
+
+
+def strategy_record_trade_outcome(strategy: str, is_win: bool,
+                                  min_streak_for_defense: int = 3):
+    """Update streak counter after a trade closes."""
+    state = _strategy_streak_state.get(strategy, {
+        'consecutive_wins': 0, 'in_defensive_mode': False})
+
+    if is_win:
+        state['consecutive_wins'] = state.get('consecutive_wins', 0) + 1
+        state['in_defensive_mode'] = False
+    else:
+        was_in_streak = state.get('consecutive_wins', 0) >= min_streak_for_defense
+        state['in_defensive_mode'] = was_in_streak
+        state['consecutive_wins'] = 0
+
+    _strategy_streak_state[strategy] = state
+    _persist_streak_state(strategy, state)
+
+
+def strategy_get_streak_multiplier(strategy: str, config: dict) -> float:
+    """Compute position size multiplier from streak state and config."""
+    if not config.get('enabled', False):
+        return 1.0
+    state = strategy_get_streak_state(strategy)
+    if state.get('in_defensive_mode'):
+        return config.get('defense_multiplier', 0.7)
+    min_wins = config.get('min_consecutive_wins', 3)
+    if state.get('consecutive_wins', 0) >= min_wins:
+        boost = config.get('boost_multiplier', 1.3)
+        cap = config.get('max_boost_multiplier', 1.5)
+        return min(boost, cap)
+    return 1.0
+
+
+def strategy_consume_defensive_mode(strategy: str):
+    """Clear defensive mode after one trade. Called after a BUY executes."""
+    state = _strategy_streak_state.get(strategy)
+    if state and state.get('in_defensive_mode'):
+        state['in_defensive_mode'] = False
+        _persist_streak_state(strategy, state)
+
+
+def strategy_load_streak_state(strategy: str, state: dict):
+    """Load streak state from DB on startup."""
+    _strategy_streak_state[strategy] = state
+
+
+def _persist_streak_state(strategy: str, state: dict):
+    """Best-effort persist to bot_state_kv."""
+    try:
+        import json
+        from src.database import save_bot_state
+        save_bot_state(f'streak_state:{strategy}', json.dumps(state))
+    except Exception:
+        pass
+
+
 def clear_all():
     """Clears all state. For tests.
 
@@ -373,7 +441,8 @@ def clear_all():
     global _last_cycle_at
     for store in (_strategy_trailing_peaks, _strategy_stoploss_cds,
                   _strategy_signal_cds, _strategy_analyst_runs,
-                  _strategy_flash_runs, _strategy_rotation_cds):
+                  _strategy_flash_runs, _strategy_rotation_cds,
+                  _strategy_streak_state):
         for sub_dict in store.values():
             sub_dict.clear()
     _last_cycle_at = None

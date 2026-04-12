@@ -421,6 +421,8 @@ async def _handle_analyst_sell(
         place_order(symbol, "SELL", position['quantity'], current_price,
                     existing_order_id=order_id, exit_reason=exit_reason,
                     trading_strategy=trading_strategy, **order_kw)
+        pnl_pct = (current_price - position['entry_price']) / position['entry_price']
+        bot_state.strategy_record_trade_outcome(trading_strategy, is_win=(pnl_pct > 0))
         if is_auto:
             bot_state.auto_clear_trailing_stop(order_id)
             bot_state.remove_auto_analyst_last_run(order_id)
