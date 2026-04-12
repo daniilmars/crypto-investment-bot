@@ -387,6 +387,102 @@ class TestMatchArticleToSymbols:
         assert result == []
 
 
+class TestLegacySubstringFalsePositives:
+    """Regression tests for the audited DIS false positives."""
+
+    def test_dis_not_matched_on_distribution(self):
+        result = _match_article_to_symbols(
+            'US government moves bitcoin possibly linked to steroid distribution conspiracy',
+            '', ['DIS', 'BTC'])
+        assert 'DIS' not in result
+        assert 'BTC' in result
+
+    def test_dis_not_matched_on_nordisk(self):
+        result = _match_article_to_symbols(
+            'Eli Lilly market share drops, Novo Nordisk holds firm as generic '
+            'weight-loss drugs flood India',
+            '', ['DIS', 'LLY'])
+        assert 'DIS' not in result
+        assert 'LLY' in result
+
+    def test_dis_not_matched_on_distribution_etf(self):
+        result = _match_article_to_symbols(
+            'Roundhill AMZN WeeklyPay ETF announces weekly distribution of $0.3305',
+            '', ['DIS', 'AMZN'])
+        assert 'DIS' not in result
+        assert 'AMZN' in result
+
+    def test_dis_not_matched_on_discloses(self):
+        result = _match_article_to_symbols(
+            'Bitcoin Depot discloses $3.7M BTC theft in cybersecurity breach',
+            '', ['DIS', 'BTC'])
+        assert 'DIS' not in result
+        assert 'BTC' in result
+
+
+class TestShortTickerCoOccurrence:
+    """Short tickers like DIS/LLY/BA should only match with company context."""
+
+    def test_dis_matches_real_disney_headline(self):
+        assert 'DIS' in _match_article_to_symbols(
+            'Disney reports Q4 earnings beat, streaming subs rise', '', ['DIS'])
+
+    def test_dis_matches_walt_disney_headline(self):
+        assert 'DIS' in _match_article_to_symbols(
+            'Walt Disney Company announces new park in Texas', '', ['DIS'])
+
+    def test_bare_dis_with_disney_context_matches(self):
+        # DIS ticker with Disney co-occurrence → match via required-context path
+        assert 'DIS' in _match_article_to_symbols(
+            'DIS upgraded to buy: Disney stock now a top pick', '', ['DIS'])
+
+    def test_bare_dis_without_company_context_rejects(self):
+        # DIS ticker alone without any Disney word → no match
+        assert 'DIS' not in _match_article_to_symbols(
+            'DIS token launches on new DEX', '', ['DIS'])
+
+    def test_bare_lly_with_eli_lilly_context_matches(self):
+        assert 'LLY' in _match_article_to_symbols(
+            'LLY jumps on Eli Lilly weight loss pill launch', '', ['LLY'])
+
+    def test_bare_lly_without_company_context_rejects(self):
+        assert 'LLY' not in _match_article_to_symbols(
+            'LLY is a local acronym for local labs', '', ['LLY'])
+
+
+class TestCaseSensitiveTickers:
+    """All-caps tickers should match case-sensitively to avoid noise."""
+
+    def test_lowercase_btc_does_not_match(self):
+        # 'btc' substring (lowercase) is common in many words
+        result = _match_article_to_symbols(
+            'the btc abbreviation is common in boats', '', ['BTC'])
+        assert result == []
+
+    def test_uppercase_btc_matches(self):
+        assert 'BTC' in _match_article_to_symbols(
+            'BTC price rallies to new all time high', '', ['BTC'])
+
+    def test_company_name_still_case_insensitive(self):
+        # 'Bitcoin' is a company-name keyword, case-insensitive.
+        assert 'BTC' in _match_article_to_symbols(
+            'bitcoin surges overnight on ETF inflows', '', ['BTC'])
+
+
+class TestTrailingPunctuationKeyword:
+    """Keywords ending in + or . must match with lookaround guards."""
+
+    def test_disney_plus_matches(self):
+        result = _match_article_to_symbols(
+            'Disney+ adds 5M subs in Q4', '', ['DIS'])
+        assert 'DIS' in result
+
+    def test_amazon_com_matches(self):
+        result = _match_article_to_symbols(
+            'Amazon.com beats Q3 revenue expectations', '', ['AMZN'])
+        assert 'AMZN' in result
+
+
 class TestFetchRSSFeeds:
     @patch('src.collectors.news_data.feedparser.parse')
     def test_parses_rss_entries(self, mock_parse):

@@ -74,7 +74,7 @@ SYMBOL_KEYWORDS = {
     # Healthcare
     'UNH': ['UnitedHealth', 'UnitedHealth Group'],
     'JNJ': ['Johnson & Johnson', 'Johnson and Johnson'],
-    'LLY': ['Eli Lilly'],  # "LLY" too short
+    'LLY': ['Eli Lilly', 'Lilly stock'],  # bare LLY gated by SYMBOL_REQUIRED_CONTEXT
     'PFE': ['Pfizer stock', 'Pfizer Inc'],
     'ABBV': ['ABBV', 'AbbVie stock', 'AbbVie Inc'],
     'MRK': ['Merck stock', 'Merck & Co'],
@@ -100,7 +100,7 @@ SYMBOL_KEYWORDS = {
     'HON': ['Honeywell stock', 'Honeywell International'],  # "HON" too short
     'RTX': ['RTX Corp', 'Raytheon'],
     # Communication
-    'DIS': ['Disney stock', 'Walt Disney'],  # "DIS" too short
+    'DIS': ['Disney', 'Walt Disney', 'Disney+'],  # bare DIS gated by SYMBOL_REQUIRED_CONTEXT
     'NFLX': ['NFLX', 'Netflix stock', 'Netflix Inc'],
     'CMCSA': ['CMCSA', 'Comcast stock', 'Comcast Corp'],
     # Utilities
@@ -209,13 +209,83 @@ SYMBOL_KEYWORDS = {
     'D05.SI': ['DBS Group stock', 'DBS Bank'],
 }
 
-# Pre-compile regex patterns for each keyword (word-boundary matching)
-_KEYWORD_PATTERNS = {}
-for _sym, _kws in SYMBOL_KEYWORDS.items():
-    _KEYWORD_PATTERNS[_sym] = [
-        re.compile(r'\b' + re.escape(kw) + r'\b', re.IGNORECASE)
-        for kw in _kws
-    ]
+# Boundary guards using lookaround: `\b...\b` breaks when a keyword ends in
+# a non-word character (e.g. "Disney+", "Amazon.com"). These lookarounds
+# test the character just outside the match, so any transition to a
+# non-word character (or string boundary) counts as a boundary.
+_LEFT_GUARD  = r'(?:(?<=^)|(?<=[^A-Za-z0-9_]))'
+_RIGHT_GUARD = r'(?:(?=$)|(?=[^A-Za-z0-9_]))'
+
+# All-caps ticker shape: 2-6 alphanumerics, optional .XX or -X suffix.
+_ALL_CAPS_TICKER_RE = re.compile(r'^[A-Z0-9]{2,6}(?:[.\-][A-Z0-9]{1,4})?$')
+
+
+def _compile_keyword(kw: str) -> re.Pattern:
+    """Compile a keyword pattern. All-caps tickers are case-sensitive; any
+    keyword with a lowercase letter (company name) is case-insensitive. Uses
+    lookaround guards so keywords ending in `+`, `.`, etc. match correctly."""
+    flags = 0 if _ALL_CAPS_TICKER_RE.match(kw) else re.IGNORECASE
+    return re.compile(_LEFT_GUARD + re.escape(kw) + _RIGHT_GUARD, flags)
+
+
+_KEYWORD_PATTERNS = {
+    sym: [_compile_keyword(kw) for kw in kws]
+    for sym, kws in SYMBOL_KEYWORDS.items()
+}
+
+# Short / ambiguous tickers that are only allowed to match when the text
+# ALSO contains a disambiguating company-name phrase. Anchors are
+# case-sensitive (because they're all-caps tickers); context phrases are
+# matched case-insensitively via _compile_keyword. Bare short tickers
+# without this entry cannot match at all.
+SYMBOL_REQUIRED_CONTEXT = {
+    'DIS': {
+        'anchor': _compile_keyword('DIS'),
+        'context': [_compile_keyword('Disney'), _compile_keyword('Walt Disney')],
+    },
+    'BA': {
+        'anchor': _compile_keyword('BA'),
+        'context': [_compile_keyword('Boeing')],
+    },
+    'GE': {
+        'anchor': _compile_keyword('GE'),
+        'context': [_compile_keyword('General Electric'),
+                    _compile_keyword('GE Aerospace')],
+    },
+    'HD': {
+        'anchor': _compile_keyword('HD'),
+        'context': [_compile_keyword('Home Depot')],
+    },
+    'KO': {
+        'anchor': _compile_keyword('KO'),
+        'context': [_compile_keyword('Coca-Cola'), _compile_keyword('Coca Cola')],
+    },
+    'MA': {
+        'anchor': _compile_keyword('MA'),
+        'context': [_compile_keyword('Mastercard')],
+    },
+    'V': {
+        'anchor': _compile_keyword('V'),
+        'context': [_compile_keyword('Visa Inc'), _compile_keyword('Visa stock')],
+    },
+    'SO': {
+        'anchor': _compile_keyword('SO'),
+        'context': [_compile_keyword('Southern Company'),
+                    _compile_keyword('Southern Co')],
+    },
+    'GS': {
+        'anchor': _compile_keyword('GS'),
+        'context': [_compile_keyword('Goldman Sachs')],
+    },
+    'MS': {
+        'anchor': _compile_keyword('MS'),
+        'context': [_compile_keyword('Morgan Stanley')],
+    },
+    'LLY': {
+        'anchor': _compile_keyword('LLY'),
+        'context': [_compile_keyword('Eli Lilly')],
+    },
+}
 
 RSS_FEEDS = [
     {'url': 'https://feeds.reuters.com/reuters/businessNews', 'category': 'financial'},
@@ -600,39 +670,63 @@ def _deduplicate_articles(articles):
 def _match_article_to_symbols(title, description, symbols):
     """Matches an article to symbols using word-boundary regex matching.
 
-    Prioritises the primary subject: if a symbol matches in the title,
-    it ranks higher than one matching only in the description.  When
-    multiple symbols match, the one appearing earliest in the title wins
-    the "primary" spot, which is returned first.
+    Two paths:
+    - Regular keyword match via SYMBOL_KEYWORDS (word-bounded, case-sensitive
+      for all-caps tickers, case-insensitive for company names).
+    - Short/ambiguous ticker co-occurrence via SYMBOL_REQUIRED_CONTEXT: the
+      bare ticker is allowed to match only if a disambiguating company name
+      also appears in the same text block.
 
-    Only matches against keywords defined in SYMBOL_KEYWORDS with pre-compiled
-    regex patterns. Symbols without keyword entries are skipped (they rely on
-    RSS feeds for coverage instead of text matching).
+    Prioritises the primary subject: if a symbol matches in the title, it
+    ranks higher than one matching only in the description. When multiple
+    symbols match in the title, the one appearing earliest wins. Uses the
+    globally-earliest match position across ALL patterns for a symbol (not
+    the first pattern that matched).
     """
     title_matches = []   # (position_in_title, symbol)
     desc_only = []
+    matched_symbols = set()
 
     for symbol in symbols:
+        # Path A: required-context (short-ticker co-occurrence)
+        ctx = SYMBOL_REQUIRED_CONTEXT.get(symbol)
+        if ctx is not None:
+            anchor_m = ctx['anchor'].search(title)
+            if anchor_m and any(p.search(title) for p in ctx['context']):
+                title_matches.append((anchor_m.start(), symbol))
+                matched_symbols.add(symbol)
+                continue
+            anchor_m_d = ctx['anchor'].search(description)
+            if anchor_m_d and any(p.search(description) for p in ctx['context']):
+                if symbol not in matched_symbols:
+                    desc_only.append(symbol)
+                    matched_symbols.add(symbol)
+            # Short tickers with a required-context entry rely entirely on
+            # this path — skip the keyword path even if SYMBOL_KEYWORDS has
+            # company-name entries for them (those would double-match).
+
+        # Path B: regular keyword patterns (find the globally-earliest
+        # title position across all patterns for this symbol).
         patterns = _KEYWORD_PATTERNS.get(symbol)
         if not patterns:
             continue
-        # Check title first
-        title_pos = None
+        earliest_title_pos = None
         for pattern in patterns:
             m = pattern.search(title)
-            if m:
-                title_pos = m.start()
-                break
-        if title_pos is not None:
-            title_matches.append((title_pos, symbol))
+            if m and (earliest_title_pos is None or m.start() < earliest_title_pos):
+                earliest_title_pos = m.start()
+        if earliest_title_pos is not None:
+            if symbol not in matched_symbols:
+                title_matches.append((earliest_title_pos, symbol))
+                matched_symbols.add(symbol)
             continue
-        # Fallback: check description
         for pattern in patterns:
             if pattern.search(description):
-                desc_only.append(symbol)
+                if symbol not in matched_symbols:
+                    desc_only.append(symbol)
+                    matched_symbols.add(symbol)
                 break
 
-    # Sort title matches by position (earliest mention = primary subject)
     title_matches.sort(key=lambda x: x[0])
     return [sym for _, sym in title_matches] + desc_only
 

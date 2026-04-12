@@ -16,6 +16,27 @@ def _ph(is_pg):
     return "%s" if is_pg else "?"
 
 
+def build_attribution_articles(symbol, hours=24, limit=20):
+    """Fetch recent articles with title_hash+source for attribution linkage.
+
+    Returns [{'title_hash': str, 'source': str}] — the only fields attribution needs.
+    Safe: returns [] on any error.
+    """
+    try:
+        from src.database import get_recent_articles
+        # get_recent_articles is @async_db-wrapped; call .sync for sync context.
+        fetch = getattr(get_recent_articles, 'sync', get_recent_articles)
+        rows = fetch(symbol, hours=hours, limit=limit)
+        return [
+            {'title_hash': r.get('title_hash', ''), 'source': r.get('source', '')}
+            for r in rows
+            if r.get('title_hash') and r.get('source')
+        ]
+    except Exception as e:
+        log.debug(f"build_attribution_articles failed for {symbol}: {e}")
+        return []
+
+
 def record_signal_attribution(signal, articles=None, gemini_assessment=None):
     """Record which articles/sources contributed to a signal.
 

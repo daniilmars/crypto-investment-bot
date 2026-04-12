@@ -24,6 +24,7 @@ class TelegramErrorHandler(logging.Handler):
         'Invalid symbol',    # generic invalid symbol noise
         'Failed to parse Gemini grounded news response as JSON',  # empty responses (expected)
         'Gemini grounded search returned empty',  # batch empty response (expected, retried next cycle)
+        'database is locked',  # SQLite contention — WAL + busy_timeout handle this, rare transients are noise
     ]
 
     def __init__(self, token: str, chat_id: str, level=logging.ERROR):

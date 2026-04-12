@@ -33,6 +33,38 @@ def _set_cooldown(symbol, signal_type, cooldown_hours, is_auto):
         bot_state.set_signal_cooldown(symbol, signal_type, expires)
 
 
+def _record_trade_attribution(symbol, signal, order_id, trading_strategy):
+    """Fire-and-forget attribution write. Never blocks, never raises.
+
+    Called right after a successful BUY so each trade has a 1-to-1 row
+    in signal_attribution with article_hashes, source_names, and
+    trade_order_id populated.
+    """
+    try:
+        from src.analysis.signal_attribution import (
+            build_attribution_articles,
+            link_attribution_to_order,
+            record_signal_attribution,
+        )
+        articles = build_attribution_articles(symbol)
+        gemini = None
+        if signal.get('gemini_confidence') is not None:
+            gemini = {
+                'direction': signal.get('gemini_direction'),
+                'confidence': signal.get('gemini_confidence'),
+                'catalyst_type': signal.get('catalyst_type'),
+            }
+        attr_id = record_signal_attribution(
+            signal, articles=articles, gemini_assessment=gemini)
+        if attr_id:
+            link_attribution_to_order(attr_id, order_id)
+            log.info(
+                f"Attribution #{attr_id} -> order {order_id} "
+                f"({trading_strategy}/{symbol}, {len(articles)} articles)")
+    except Exception as e:
+        log.warning(f"Attribution recording failed for {symbol}/{order_id}: {e}")
+
+
 async def process_trade_signal(
     symbol: str,
     signal: dict,
@@ -126,6 +158,9 @@ async def process_trade_signal(
                 dynamic_sl_pct=dynamic_sl_pct,
                 dynamic_tp_pct=dynamic_tp_pct)
             _set_cooldown(symbol, "BUY", signal_cooldown_hours, is_auto)
+            if result and result.get('order_id'):
+                _record_trade_attribution(
+                    symbol, signal, result['order_id'], trading_strategy)
             return result
         else:
             # Check if rotation is possible when max positions blocked

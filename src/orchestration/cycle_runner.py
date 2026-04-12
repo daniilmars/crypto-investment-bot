@@ -52,7 +52,6 @@ from src.orchestration.trade_executor import process_trade_signal
 from src.orchestration.news_pipeline import (
     collect_and_analyze_news, run_proactive_market_alerts,
 )
-from src.analysis.signal_attribution import record_signal_attribution
 from src.analysis.strategy_weights import compute_effective_strength
 from src.config import get_strategy_configs
 
@@ -445,21 +444,15 @@ async def run_bot_cycle():
         )
         log.info(f"Generated Signal for {symbol}: {signal}")
 
-        # Enrich signal with Gemini metadata for decision tracking
+        # Enrich signal with Gemini metadata for decision tracking +
+        # post-order attribution linkage.
         if ga and signal.get('signal') != 'HOLD':
             signal['gemini_confidence'] = ga.get('confidence')
+            signal['gemini_direction'] = ga.get('direction')
+            signal['catalyst_type'] = ga.get('catalyst_type')
             signal['catalyst_freshness'] = ga.get('catalyst_freshness')
 
         await save_signal(signal)
-
-        # Record signal attribution for non-HOLD signals
-        if signal.get('signal') not in ('HOLD', None):
-            try:
-                sym_articles = news_per_symbol.get(symbol, {}).get('articles', [])
-                record_signal_attribution(
-                    signal, articles=sym_articles, gemini_assessment=ga)
-            except Exception as _attr_err:
-                log.debug(f"Attribution recording skipped: {_attr_err}")
 
         # --- 4. Trade Execution (Paper & Live) with Dynamic Sizing ---
         # Preserve original signal before manual path can mutate it
@@ -1023,9 +1016,12 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
         signal['asset_type'] = 'stock'
         log.info(f"Generated Stock Signal for {symbol}: {signal}")
 
-        # Enrich signal with Gemini metadata for decision tracking
+        # Enrich signal with Gemini metadata for decision tracking +
+        # post-order attribution linkage.
         if ga and signal.get('signal') != 'HOLD':
             signal['gemini_confidence'] = ga.get('confidence')
+            signal['gemini_direction'] = ga.get('direction')
+            signal['catalyst_type'] = ga.get('catalyst_type')
             signal['catalyst_freshness'] = ga.get('catalyst_freshness')
 
         await save_signal(signal)

@@ -70,17 +70,34 @@ def promote_new_listings(settings: dict) -> list:
         current_tickers.add(ticker)
         mark_ipo_watchlist_added(event['id'])
 
-        # Add to SYMBOL_KEYWORDS at runtime for news matching
+        # Add to SYMBOL_KEYWORDS at runtime for news matching. Short tickers
+        # (<4 chars) must go through SYMBOL_REQUIRED_CONTEXT co-occurrence
+        # gating to prevent substring false positives.
         try:
-            from src.collectors.news_data import SYMBOL_KEYWORDS, _KEYWORD_PATTERNS
-            company = event.get('company_name', ticker)
-            if ticker not in SYMBOL_KEYWORDS:
-                keywords = [ticker, f"{company} stock"]
+            from src.collectors.news_data import (
+                SYMBOL_KEYWORDS, SYMBOL_REQUIRED_CONTEXT,
+                _KEYWORD_PATTERNS, _compile_keyword,
+            )
+            company = (event.get('company_name') or '').strip()
+            if ticker in SYMBOL_KEYWORDS or ticker in SYMBOL_REQUIRED_CONTEXT:
+                pass  # already registered
+            elif company and len(company) >= 4:
+                keywords = [company, f"{company} stock"]
                 SYMBOL_KEYWORDS[ticker] = keywords
-                _KEYWORD_PATTERNS[ticker] = [
-                    re.compile(r'\b' + re.escape(kw) + r'\b', re.IGNORECASE)
-                    for kw in keywords
-                ]
+                _KEYWORD_PATTERNS[ticker] = [_compile_keyword(kw) for kw in keywords]
+                if len(ticker) < 4:
+                    # Short ticker: allow bare ticker only with company context
+                    SYMBOL_REQUIRED_CONTEXT[ticker] = {
+                        'anchor': _compile_keyword(ticker),
+                        'context': [_compile_keyword(company)],
+                    }
+            elif len(ticker) >= 4:
+                # Long ticker, no usable company name: register ticker alone
+                SYMBOL_KEYWORDS[ticker] = [ticker]
+                _KEYWORD_PATTERNS[ticker] = [_compile_keyword(ticker)]
+            else:
+                log.info(f"[IPO] Skipping keyword registration for short "
+                         f"ticker {ticker!r} with no usable company name.")
         except Exception as e:
             log.debug(f"[IPO] Could not add keywords for {ticker}: {e}")
 

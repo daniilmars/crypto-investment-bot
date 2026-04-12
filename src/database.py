@@ -122,8 +122,13 @@ def get_db_connection(db_url=None):
     db_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
     db_path = os.path.join(db_dir, 'crypto_data.db')
     os.makedirs(db_dir, exist_ok=True)
-    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn = sqlite3.connect(db_path, check_same_thread=False, timeout=30.0)
     conn.row_factory = sqlite3.Row
+    # WAL mode lets readers proceed while a writer holds the lock;
+    # busy_timeout backs off instead of failing on brief contention.
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA synchronous = NORMAL")
     return conn
 
 
@@ -1584,7 +1589,8 @@ def get_recent_articles(symbol: str, hours: int = 24, limit: int = 20) -> list:
     """
     Returns recent archived articles for a symbol, ordered by newest first.
 
-    Returns list of dicts with keys: title, source, vader_score, collected_at.
+    Returns list of dicts with keys: title, title_hash, source, vader_score,
+    collected_at, source_url, description, category, gemini_score.
     """
     conn = None
     try:
@@ -1593,7 +1599,7 @@ def get_recent_articles(symbol: str, hours: int = 24, limit: int = 20) -> list:
         with _cursor(conn) as cursor:
             if is_postgres_conn:
                 query = '''
-                    SELECT title, source, vader_score, collected_at,
+                    SELECT title, title_hash, source, vader_score, collected_at,
                            source_url, description, category, gemini_score
                     FROM scraped_articles
                     WHERE symbol = %s AND collected_at >= NOW() - INTERVAL '%s hours'
@@ -1602,7 +1608,7 @@ def get_recent_articles(symbol: str, hours: int = 24, limit: int = 20) -> list:
                 cursor.execute(query, (symbol, hours, limit))
             else:
                 query = '''
-                    SELECT title, source, vader_score, collected_at,
+                    SELECT title, title_hash, source, vader_score, collected_at,
                            source_url, description, category, gemini_score
                     FROM scraped_articles
                     WHERE symbol = ? AND collected_at >= datetime('now', ? || ' hours')
