@@ -14,6 +14,139 @@ from src.logger import log
 
 _error_count: int = 0
 
+# Ticker → short readable name. Derived from SYMBOL_KEYWORDS at first call.
+_ticker_names: dict[str, str] = {}
+
+
+def _get_name(ticker: str) -> str:
+    """Return a human-readable short name for a ticker."""
+    if not _ticker_names:
+        _build_ticker_names()
+    return _ticker_names.get(ticker, ticker)
+
+
+_FALLBACK_NAMES = {
+    # Tickers not in SYMBOL_KEYWORDS (match via sector groups, not articles)
+    '1299.HK': 'AIA Group', '2318.HK': 'Ping An', '0388.HK': 'HKEX',
+    '0005.HK': 'HSBC HK', '2020.HK': 'Anta Sports', '9999.HK': 'NetEase',
+    '3968.HK': 'CMB', '2269.HK': 'WuXi Bio', '2382.HK': 'Sunny Optical',
+    'BBVA.MC': 'BBVA', 'SAN.MC': 'Santander', 'ITX.MC': 'Inditex',
+    'IBE.MC': 'Iberdrola', 'NESTE.HE': 'Neste', 'UPM.HE': 'UPM',
+    'NOKIA.HE': 'Nokia', 'KNEBV.HE': 'Kone', 'DANSKE.CO': 'Danske Bank',
+    'ORSTED.CO': 'Orsted', 'NOVO-B.CO': 'Novo Nordisk', 'MAERSK-B.CO': 'Maersk',
+    'VOLV-B.ST': 'Volvo', 'ERIC-B.ST': 'Ericsson', 'ABB.ST': 'ABB',
+    'SAND.ST': 'Sandvik', 'ATCO-A.ST': 'Atlas Copco', 'SAAB-B.ST': 'Saab',
+    'IHG.L': 'IHG Hotels', 'BAES.L': 'BAE Systems', 'BARC.L': 'Barclays',
+    'LLOY.L': 'Lloyds', 'LSEG.L': 'LSE Group', 'AAL.L': 'Anglo American',
+    'GLEN.L': 'Glencore', 'PRU.L': 'Prudential', 'NG.L': 'National Grid',
+    'DGE.L': 'Diageo', 'VOD.L': 'Vodafone', 'WPP.L': 'WPP',
+    'FLTR.L': 'Flutter', 'EXPN.L': 'Experian', 'RKT.L': 'Reckitt',
+    'BATS.L': 'BAT', 'RIO.L': 'Rio Tinto', 'ULVR.L': 'Unilever',
+    'HO.PA': 'Thales', 'LDO.MI': 'Leonardo', 'RACE.MI': 'Ferrari',
+    'STLAM.MI': 'Stellantis', 'ENI.MI': 'ENI', 'ENEL.MI': 'Enel',
+    'UCG.MI': 'UniCredit', 'ISP.MI': 'Intesa', 'EL.PA': 'EssilorLuxottica',
+    'KER.PA': 'Kering', 'RMS.PA': 'Hermes', 'DSY.PA': 'Dassault',
+    'CS.PA': 'AXA', 'AI.PA': 'Air Liquide', 'SU.PA': 'Schneider',
+    'MC.PA': 'LVMH', 'OR.PA': "L'Oreal", 'BNP.PA': 'BNP Paribas',
+    'SAF.PA': 'Safran', 'AIR.PA': 'Airbus', 'TTE.PA': 'TotalEnergies',
+    'SAN.PA': 'Sanofi', 'ADYEN.AS': 'Adyen', 'INGA.AS': 'ING',
+    'PHIA.AS': 'Philips', 'WKL.AS': 'Wolters Kluwer', 'AD.AS': 'Ahold',
+    'ASML.AS': 'ASML', 'NESN.SW': 'Nestle', 'ROG.SW': 'Roche',
+    'NOVN.SW': 'Novartis', 'UBSG.SW': 'UBS', 'ZURN.SW': 'Zurich Ins.',
+    'ALV.DE': 'Allianz', 'MUV2.DE': 'Munich Re', 'FRE.DE': 'Fresenius',
+    'DB1.DE': 'Deutsche Boerse', 'RHM.DE': 'Rheinmetall', 'HEN3.DE': 'Henkel',
+    'ADS.DE': 'adidas', 'IFX.DE': 'Infineon', 'BAS.DE': 'BASF',
+    'MBG.DE': 'Mercedes', 'BMW.DE': 'BMW', 'VOW3.DE': 'Volkswagen',
+    'SIE.DE': 'Siemens', 'SAP.DE': 'SAP', 'DTE.DE': 'Deutsche Telekom',
+    'EQNR.OL': 'Equinor',
+    '7203.T': 'Toyota', '6758.T': 'Sony', '6861.T': 'Keyence',
+    '8306.T': 'MUFG', '8035.T': 'Tokyo Electron', '7267.T': 'Honda',
+    '6501.T': 'Hitachi', '6367.T': 'Daikin', '6954.T': 'Fanuc',
+    '6098.T': 'Recruit', '9983.T': 'Uniqlo', '4502.T': 'Takeda',
+    '4519.T': 'Chugai Pharma', '7741.T': 'HOYA', '9432.T': 'NTT',
+    '6902.T': 'Denso', '6273.T': 'SMC', '4568.T': 'Astellas',
+    '7974.T': 'Nintendo', '8058.T': 'Mitsubishi', '8001.T': 'ITOCHU',
+    '005930.KS': 'Samsung', '000660.KS': 'SK Hynix', '373220.KS': 'LG Energy',
+    '005380.KS': 'Hyundai', '051910.KS': 'LG Chem', '066570.KS': 'LG Electronics',
+    '035420.KS': 'Naver', '028260.KS': 'Samsung C&T',
+    '2330.TW': 'TSMC', '2317.TW': 'Foxconn', '2454.TW': 'MediaTek',
+    '2308.TW': 'Delta Electronics', '2603.TW': 'Evergreen Marine',
+    'D05.SI': 'DBS Bank', 'O39.SI': 'OCBC', 'U11.SI': 'UOB',
+    'BHP.AX': 'BHP', 'CBA.AX': 'CommBank', 'CSL.AX': 'CSL',
+    'FMG.AX': 'Fortescue', 'NAB.AX': 'NAB', 'MQG.AX': 'Macquarie',
+    'WBC.AX': 'Westpac', 'WDS.AX': 'Woodside', 'ALL.AX': 'Aristocrat',
+    'RELIANCE.NS': 'Reliance', 'TCS.NS': 'TCS', 'INFY.NS': 'Infosys',
+    'HDFCBANK.NS': 'HDFC Bank', 'ICICIBANK.NS': 'ICICI Bank',
+    'WIPRO.NS': 'Wipro', 'BAJFINANCE.NS': 'Bajaj Finance',
+    'LT.NS': 'L&T', 'HINDUNILVR.NS': 'HUL', 'SBIN.NS': 'SBI',
+    # US stocks not in SYMBOL_KEYWORDS
+    'UBER': 'Uber', 'ABNB': 'Airbnb', 'RIVN': 'Rivian',
+    'SHOP': 'Shopify', 'MELI': 'MercadoLibre', 'COIN': 'Coinbase',
+    'SOFI': 'SoFi', 'APP': 'AppLovin', 'SPOT': 'Spotify',
+    'RBLX': 'Roblox', 'QCOM': 'Qualcomm', 'MU': 'Micron',
+    'TXN': 'Texas Instruments', 'ADI': 'Analog Devices',
+    'NOW': 'ServiceNow', 'ABT': 'Abbott', 'CL': 'Colgate',
+    'MDLZ': 'Mondelez', 'MPC': 'Marathon Petrol', 'VLO': 'Valero',
+    'ECL': 'Ecolab', 'NEM': 'Newmont', 'NUE': 'Nucor',
+    'EQIX': 'Equinix', 'O': 'Realty Income', 'GEV': 'GE Vernova',
+    'VST': 'Vistra', 'GD': 'General Dynamics', 'NOC': 'Northrop Grumman',
+    'LHX': 'L3Harris', 'HII': 'Huntington Ingalls', 'HAL': 'Halliburton',
+    'CEG': 'Constellation Energy', 'SMR': 'NuScale Power', 'OKLO': 'Oklo',
+    'CCJ': 'Cameco', 'FRO': 'Frontline', 'STNG': 'Scorpio Tankers',
+    'EURN': 'Euronav', 'GOLD': 'Barrick Gold', 'ALB': 'Albemarle',
+    'URA': 'Uranium ETF', 'GLD': 'Gold ETF', 'SLV': 'Silver ETF',
+    'USO': 'Oil ETF', 'COPX': 'Copper ETF', 'TLT': 'Treasury ETF',
+    'HYG': 'High Yield ETF', 'LQD': 'Corp Bond ETF',
+    'T': 'AT&T', 'VZ': 'Verizon', 'SCHW': 'Schwab', 'BLK': 'BlackRock',
+    'C': 'Citigroup', 'PG': 'Procter & Gamble', 'PM': 'Philip Morris',
+    'HD': 'Home Depot', 'LOW': "Lowe's", 'TJX': 'TJX', 'CMG': 'Chipotle',
+    'BKNG': 'Booking', 'NEE': 'NextEra', 'SO': 'Southern Co.',
+    'DUK': 'Duke Energy', 'AMT': 'American Tower', 'PLD': 'Prologis',
+    'CCI': 'Crown Castle', 'LIN': 'Linde', 'APD': 'Air Products',
+    'SHW': 'Sherwin-Williams', 'FCX': 'Freeport-McMoRan',
+    'UPS': 'UPS', 'DE': 'Deere', 'HON': 'Honeywell',
+    'CAT': 'Caterpillar', 'BA': 'Boeing', 'GE': 'GE Aerospace',
+    'LMT': 'Lockheed Martin', 'RTX': 'RTX/Raytheon',
+    'LRCX': 'Lam Research', 'KLAC': 'KLA Corp', 'AMAT': 'Applied Materials',
+    'SNPS': 'Synopsys', 'CDNS': 'Cadence', 'MRVL': 'Marvell',
+    'DDOG': 'Datadog', 'ZS': 'Zscaler', 'FTNT': 'Fortinet',
+    'TTD': 'The Trade Desk', 'XYZ': 'Block',
+    # Crypto
+    'HNT': 'Helium', 'ONDO': 'Ondo Finance', 'PENDLE': 'Pendle',
+    'ENA': 'Ethena', 'ETHFI': 'Ether.fi', 'ALGO': 'Algorand',
+    'DYDX': 'dYdX', 'TAO': 'Bittensor', 'RENDER': 'Render',
+    'CHZ': 'Chiliz', 'FET': 'Fetch.ai', 'JUP': 'Jupiter',
+    'WLD': 'Worldcoin', 'STX': 'Stacks',
+}
+
+
+def _build_ticker_names():
+    """Build the ticker→name map once from SYMBOL_KEYWORDS + fallback."""
+    _ticker_names.update(_FALLBACK_NAMES)
+    try:
+        from src.collectors.news_data import SYMBOL_KEYWORDS
+        for sym, keywords in SYMBOL_KEYWORDS.items():
+            # Find the best human-readable name from the keywords list.
+            # Skip the ticker itself and entries ending in "stock"/"Inc"/"Corp".
+            best = sym
+            for kw in keywords:
+                if kw == sym or kw == sym.upper():
+                    continue
+                # Strip suffixes to get clean company name
+                clean = kw
+                for suffix in (' stock', ' Inc', ' Corp', ' Ltd', ' plc',
+                               ' SA', ' SE', ' AG', ' NV', ' Holdings',
+                               ' Group', ' crypto', ' coin', ' Protocol'):
+                    if clean.endswith(suffix):
+                        clean = clean[:-len(suffix)]
+                        break
+                if len(clean) >= 2 and clean != sym:
+                    best = clean
+                    break
+            _ticker_names[sym] = best
+    except Exception:
+        pass
+
 
 def increment_error_count():
     """Called by error handler to track critical errors between summaries."""
@@ -146,15 +279,10 @@ async def send_periodic_summary():
                 f"{open_count} open ${u_s} unrl | streak {sk}")
 
             if pos_details:
-                pos_line = "  "
                 for sym, pp in pos_details:
-                    entry = f"{sym} {pp:+.1f}%"
-                    if len(pos_line) + len(entry) > 45:
-                        rows.append(pos_line)
-                        pos_line = "  "
-                    pos_line += entry + "  "
-                if pos_line.strip():
-                    rows.append(pos_line)
+                    name = _get_name(sym)
+                    icon = "+" if pp >= 0 else ""
+                    rows.append(f"  {name} {icon}{pp:.1f}%")
 
         parts.append("\n".join(rows))
 
@@ -185,14 +313,15 @@ async def send_periodic_summary():
                 st = r[1] if isinstance(r, (list, tuple)) else r['trading_strategy']
                 ep = float(r[2] if isinstance(r, (list, tuple)) else r['entry_price'])
                 qty = float(r[3] if isinstance(r, (list, tuple)) else r['quantity'])
-                trade_lines.append(f"  + {sym} ({st}) ${ep * qty:.0f}")
+                trade_lines.append(f"  + {_get_name(sym)} ({st}) ${ep * qty:.0f}")
             for r in closed:
                 sym = r[0] if isinstance(r, (list, tuple)) else r['symbol']
                 st = r[1] if isinstance(r, (list, tuple)) else r['trading_strategy']
                 pnl = float((r[2] if isinstance(r, (list, tuple)) else r['pnl']) or 0)
                 reason = r[3] if isinstance(r, (list, tuple)) else r['exit_reason']
                 tag = "+" if pnl >= 0 else ""
-                trade_lines.append(f"  - {sym} {tag}${pnl:.2f} ({reason})")
+                trade_lines.append(
+                    f"  - {_get_name(sym)} {tag}${pnl:.2f} ({reason})")
             parts.append("\n<b>Last 4h:</b>\n" + "\n".join(trade_lines))
         else:
             parts.append("\n<i>No trades in last 4h</i>")
@@ -251,9 +380,11 @@ async def send_trade_alert(
     if not token or not chat_id:
         return
 
+    name = _get_name(symbol)
+
     if action == "BUY":
         cost = entry_price * quantity
-        lines = [f"<b>BUY {_esc(symbol)}</b> ({_esc(trading_strategy)})"]
+        lines = [f"<b>BUY {_esc(name)}</b> ({_esc(trading_strategy)})"]
         lines.append(f"${entry_price:,.2f} x {quantity:.4f} (${cost:.0f})")
 
         if gemini_direction and gemini_confidence:
@@ -275,7 +406,7 @@ async def send_trade_alert(
             lines.append(f"Strength: {signal_strength:.2f}{mod_str}")
 
     elif action == "SELL":
-        lines = [f"<b>SELL {_esc(symbol)}</b> ({_esc(trading_strategy)})"]
+        lines = [f"<b>SELL {_esc(name)}</b> ({_esc(trading_strategy)})"]
         if entry_price and exit_price:
             lines.append(
                 f"${entry_price:,.2f} → ${exit_price:,.2f} | "
@@ -285,7 +416,7 @@ async def send_trade_alert(
         elif exit_reason:
             lines.append(exit_reason)
     else:
-        lines = [f"<b>{_esc(action)} {_esc(symbol)}</b> ({_esc(trading_strategy)})"]
+        lines = [f"<b>{_esc(action)} {_esc(name)}</b> ({_esc(trading_strategy)})"]
         if reason:
             lines.append(_esc(reason[:150]))
 
