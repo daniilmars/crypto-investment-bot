@@ -110,18 +110,53 @@ async def send_periodic_summary():
 
             streak = bot_state.strategy_get_streak_state(strat)
             cw = streak.get('consecutive_wins', 0)
-            sk = f"{cw}W" if cw > 0 else " -"
+            sk = f"{cw}W" if cw > 0 else "-"
+
+            # Build per-position detail lines
+            pos_details = []
+            try:
+                conn_p = get_db_connection()
+                with _cursor(conn_p) as cur_p:
+                    for p in positions:
+                        cur_p.execute(
+                            f"SELECT price FROM market_prices "
+                            f"WHERE symbol={ph} ORDER BY id DESC LIMIT 1",
+                            (p['symbol'],))
+                        row = cur_p.fetchone()
+                        if row:
+                            price = float(
+                                row[0] if isinstance(row, (list, tuple))
+                                else row['price'])
+                            pp = (price - p['entry_price']) / p['entry_price'] * 100
+                            pos_details.append((p['symbol'], pp))
+                        else:
+                            pos_details.append((p['symbol'], 0.0))
+                release_db_connection(conn_p)
+            except Exception:
+                pos_details = [(p['symbol'], 0.0) for p in positions]
+
+            # Sort by PnL% descending
+            pos_details.sort(key=lambda x: x[1], reverse=True)
 
             short = strat[:4].upper()
             r_s = f"{realized:+.0f}" if realized else "0"
             u_s = f"{unrealized:+.0f}" if unrealized else "0"
-            rows.append(f" {short:<5} ${r_s:>5} {open_count:>3}  ${u_s:>5} {sk:>3}")
+            rows.append(
+                f"\n<b>{short}</b> realized ${r_s} | "
+                f"{open_count} open ${u_s} unrl | streak {sk}")
 
-        table = "<pre>"
-        table += f" {'':5} {'PnL':>6} {'Opn':>3}  {'Unrl':>6} {'Sk':>3}\n"
-        table += "\n".join(rows)
-        table += "</pre>"
-        parts.append(table)
+            if pos_details:
+                pos_line = "  "
+                for sym, pp in pos_details:
+                    entry = f"{sym} {pp:+.1f}%"
+                    if len(pos_line) + len(entry) > 45:
+                        rows.append(pos_line)
+                        pos_line = "  "
+                    pos_line += entry + "  "
+                if pos_line.strip():
+                    rows.append(pos_line)
+
+        parts.append("\n".join(rows))
 
     except Exception:
         parts.append("<i>Strategy data unavailable</i>\n")
@@ -161,36 +196,6 @@ async def send_periodic_summary():
             parts.append("\n<b>Last 4h:</b>\n" + "\n".join(trade_lines))
         else:
             parts.append("\n<i>No trades in last 4h</i>")
-    except Exception:
-        pass
-
-    # --- Top/worst open positions ---
-    try:
-        from src.execution.binance_trader import get_open_positions
-        all_pos = get_open_positions.sync(asset_type='all', trading_strategy='all')
-        if all_pos and len(all_pos) > 0:
-            scored = []
-            conn4 = get_db_connection()
-            with _cursor(conn4) as cur4:
-                for p in all_pos:
-                    cur4.execute(
-                        f"SELECT price FROM market_prices WHERE symbol={ph} "
-                        f"ORDER BY id DESC LIMIT 1", (p['symbol'],))
-                    row = cur4.fetchone()
-                    if row:
-                        price = float(row[0] if isinstance(row, (list, tuple))
-                                      else row['price'])
-                        pct = (price - p['entry_price']) / p['entry_price'] * 100
-                        scored.append((p['symbol'], pct))
-            release_db_connection(conn4)
-
-            if len(scored) >= 2:
-                scored.sort(key=lambda x: x[1], reverse=True)
-                top = ", ".join(f"{s} {p:+.1f}%" for s, p in scored[:3])
-                worst = ", ".join(f"{s} {p:+.1f}%" for s, p in
-                                 sorted(scored, key=lambda x: x[1])[:3])
-                parts.append(f"\nBest: {_esc(top)}")
-                parts.append(f"Worst: {_esc(worst)}")
     except Exception:
         pass
 
