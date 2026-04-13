@@ -1,7 +1,7 @@
 """4-hour periodic summary + enhanced trade alerts.
 
-Replaces: morning_briefing, portfolio_digest, daily_recap, sector_review_digest.
-Uses plain text (no Markdown) to avoid parse errors.
+Uses HTML parse_mode for reliable formatting (monospace tables via <pre>,
+bold headers via <b>). HTML only needs &lt; &gt; &amp; escaping.
 """
 
 from datetime import datetime, timezone, timedelta
@@ -21,20 +21,13 @@ def increment_error_count():
     _error_count += 1
 
 
-def _ph():
-    """Placeholder for SQL queries."""
-    try:
-        import psycopg2
-        conn = get_db_connection()
-        is_pg = isinstance(conn, psycopg2.extensions.connection)
-        release_db_connection(conn)
-        return "%s" if is_pg else "?"
-    except Exception:
-        return "?"
+def _esc(text) -> str:
+    """Escape HTML special characters."""
+    return str(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
 
 async def send_periodic_summary():
-    """Build and send the consolidated 4-hour summary (plain text)."""
+    """Build and send the consolidated 4-hour summary."""
     global _error_count
 
     tg_cfg = app_config.get('notification_services', {}).get('telegram', {})
@@ -44,9 +37,10 @@ async def send_periodic_summary():
         return
 
     now = datetime.now(timezone.utc)
-    ph = "?"  # SQLite default
-    lines = [f"== 4H Summary ({now.strftime('%H:%M UTC')}) =="]
-    lines.append("")
+    ph = "?"
+    parts = []
+
+    parts.append(f"<b>4H Summary</b> ({now.strftime('%H:%M UTC')})\n")
 
     # --- Macro regime ---
     try:
@@ -54,22 +48,20 @@ async def send_periodic_summary():
         regime = get_macro_regime()
         r_name = regime.get('regime', '?')
         r_score = regime.get('score', 0)
-        vix = regime.get('indicators', {}).get('vix', {}).get('current', '?')
-        lines.append(f"Regime: {r_name} ({r_score:+.1f}) | VIX {vix}")
+        vix_raw = regime.get('indicators', {}).get('vix', {}).get('current')
+        vix = f"{vix_raw:.1f}" if isinstance(vix_raw, (int, float)) else '?'
+        parts.append(f"Regime: <b>{r_name}</b> ({r_score:+.1f}) | VIX {vix}\n")
     except Exception:
-        lines.append("Regime: unavailable")
-    lines.append("")
+        parts.append("Regime: unavailable\n")
 
-    # --- Per-strategy table ---
+    # --- Per-strategy table (monospace) ---
     try:
         from src.execution.binance_trader import get_open_positions
         from src.orchestration import bot_state
         import psycopg2
 
         strategies = ['auto', 'momentum', 'conservative', 'longterm']
-        header = f"{'Strategy':<13}{'PnL':>7}{'Open':>5}{'Unreal':>8}{'Strk':>5}"
-        lines.append(header)
-        lines.append("-" * len(header))
+        rows = []
 
         for strat in strategies:
             realized = 0
@@ -83,8 +75,9 @@ async def send_periodic_summary():
                         f"WHERE status='CLOSED' AND trading_strategy={ph}",
                         (strat,))
                     row = cur.fetchone()
-                    realized = (row[0] if isinstance(row, (list, tuple))
-                                else row['coalesce']) or 0
+                    realized = float(row[0] if isinstance(row, (list, tuple))
+                                     else (row.get('coalesce') or row.get('sum')
+                                           or 0)) or 0
                 release_db_connection(conn)
             except Exception:
                 pass
@@ -108,8 +101,8 @@ async def send_periodic_summary():
                             (p['symbol'],))
                         row = cur2.fetchone()
                         if row:
-                            price = (row[0] if isinstance(row, (list, tuple))
-                                     else row['price'])
+                            price = float(row[0] if isinstance(row, (list, tuple))
+                                          else row['price'])
                             unrealized += (price - p['entry_price']) * p['quantity']
                 release_db_connection(conn2)
             except Exception:
@@ -117,17 +110,21 @@ async def send_periodic_summary():
 
             streak = bot_state.strategy_get_streak_state(strat)
             cw = streak.get('consecutive_wins', 0)
-            streak_str = f"{cw}W" if cw > 0 else "-"
+            sk = f"{cw}W" if cw > 0 else " -"
 
-            r_str = f"${realized:+.0f}" if realized != 0 else "$0"
-            u_str = f"${unrealized:+.0f}" if unrealized != 0 else "$0"
-            lines.append(
-                f"{strat:<13}{r_str:>7}{open_count:>5}{u_str:>8}{streak_str:>5}")
+            short = strat[:4].upper()
+            r_s = f"{realized:+.0f}" if realized else "0"
+            u_s = f"{unrealized:+.0f}" if unrealized else "0"
+            rows.append(f" {short:<5} ${r_s:>5} {open_count:>3}  ${u_s:>5} {sk:>3}")
 
-    except Exception as e:
-        lines.append(f"(strategy data unavailable: {e})")
+        table = "<pre>"
+        table += f" {'':5} {'PnL':>6} {'Opn':>3}  {'Unrl':>6} {'Sk':>3}\n"
+        table += "\n".join(rows)
+        table += "</pre>"
+        parts.append(table)
 
-    lines.append("")
+    except Exception:
+        parts.append("<i>Strategy data unavailable</i>\n")
 
     # --- Trades since last summary (4h) ---
     try:
@@ -139,7 +136,6 @@ async def send_periodic_summary():
                 f"FROM trades WHERE status='OPEN' AND entry_timestamp >= {ph} "
                 f"ORDER BY entry_timestamp", (cutoff,))
             opened = cur3.fetchall()
-
             cur3.execute(
                 f"SELECT symbol, trading_strategy, pnl, exit_reason "
                 f"FROM trades WHERE status='CLOSED' AND exit_timestamp >= {ph} "
@@ -148,21 +144,23 @@ async def send_periodic_summary():
         release_db_connection(conn3)
 
         if opened or closed:
-            lines.append("Since last 4h:")
+            trade_lines = []
             for r in opened:
                 sym = r[0] if isinstance(r, (list, tuple)) else r['symbol']
-                strat = r[1] if isinstance(r, (list, tuple)) else r['trading_strategy']
-                ep = r[2] if isinstance(r, (list, tuple)) else r['entry_price']
-                qty = r[3] if isinstance(r, (list, tuple)) else r['quantity']
-                lines.append(f"  BUY {sym} ({strat}) ${ep * qty:.0f}")
+                st = r[1] if isinstance(r, (list, tuple)) else r['trading_strategy']
+                ep = float(r[2] if isinstance(r, (list, tuple)) else r['entry_price'])
+                qty = float(r[3] if isinstance(r, (list, tuple)) else r['quantity'])
+                trade_lines.append(f"  + {sym} ({st}) ${ep * qty:.0f}")
             for r in closed:
                 sym = r[0] if isinstance(r, (list, tuple)) else r['symbol']
-                strat = r[1] if isinstance(r, (list, tuple)) else r['trading_strategy']
-                pnl = (r[2] if isinstance(r, (list, tuple)) else r['pnl']) or 0
+                st = r[1] if isinstance(r, (list, tuple)) else r['trading_strategy']
+                pnl = float((r[2] if isinstance(r, (list, tuple)) else r['pnl']) or 0)
                 reason = r[3] if isinstance(r, (list, tuple)) else r['exit_reason']
-                lines.append(f"  SELL {sym} ${pnl:+.2f} ({reason})")
+                tag = "+" if pnl >= 0 else ""
+                trade_lines.append(f"  - {sym} {tag}${pnl:.2f} ({reason})")
+            parts.append("\n<b>Last 4h:</b>\n" + "\n".join(trade_lines))
         else:
-            lines.append("No trades in last 4h")
+            parts.append("\n<i>No trades in last 4h</i>")
     except Exception:
         pass
 
@@ -170,7 +168,7 @@ async def send_periodic_summary():
     try:
         from src.execution.binance_trader import get_open_positions
         all_pos = get_open_positions.sync(asset_type='all', trading_strategy='all')
-        if all_pos:
+        if all_pos and len(all_pos) > 0:
             scored = []
             conn4 = get_db_connection()
             with _cursor(conn4) as cur4:
@@ -180,36 +178,42 @@ async def send_periodic_summary():
                         f"ORDER BY id DESC LIMIT 1", (p['symbol'],))
                     row = cur4.fetchone()
                     if row:
-                        price = (row[0] if isinstance(row, (list, tuple))
-                                 else row['price'])
-                        pnl_pct = (price - p['entry_price']) / p['entry_price'] * 100
-                        scored.append((p['symbol'], pnl_pct))
+                        price = float(row[0] if isinstance(row, (list, tuple))
+                                      else row['price'])
+                        pct = (price - p['entry_price']) / p['entry_price'] * 100
+                        scored.append((p['symbol'], pct))
             release_db_connection(conn4)
 
-            if scored:
+            if len(scored) >= 2:
                 scored.sort(key=lambda x: x[1], reverse=True)
-                top = scored[:3]
-                worst = sorted(scored, key=lambda x: x[1])[:3]
-                lines.append("")
-                lines.append("Best: " + ", ".join(
-                    f"{s} {p:+.1f}%" for s, p in top))
-                lines.append("Worst: " + ", ".join(
-                    f"{s} {p:+.1f}%" for s, p in worst))
+                top = ", ".join(f"{s} {p:+.1f}%" for s, p in scored[:3])
+                worst = ", ".join(f"{s} {p:+.1f}%" for s, p in
+                                 sorted(scored, key=lambda x: x[1])[:3])
+                parts.append(f"\nBest: {_esc(top)}")
+                parts.append(f"Worst: {_esc(worst)}")
     except Exception:
         pass
 
     # --- Errors ---
     if _error_count > 0:
-        lines.append(f"\n{_error_count} error(s) since last summary")
+        parts.append(f"\n<i>{_error_count} error(s) since last summary</i>")
         _error_count = 0
 
-    text = "\n".join(lines)
+    text = "\n".join(parts)
     try:
         bot = Bot(token=token)
-        await bot.send_message(chat_id=chat_id, text=text)
+        await bot.send_message(chat_id=chat_id, text=text, parse_mode='HTML')
         log.info("4h periodic summary sent.")
     except Exception as e:
         log.warning(f"Failed to send periodic summary: {e}")
+        # Fallback: try plain text
+        try:
+            import re
+            plain = re.sub(r'<[^>]+>', '', text)
+            await bot.send_message(chat_id=chat_id, text=plain)
+            log.info("4h summary sent (plain text fallback).")
+        except Exception:
+            pass
 
 
 async def send_trade_alert(
@@ -235,7 +239,7 @@ async def send_trade_alert(
     streak_multiplier: float = 1.0,
     sma_override: bool = False,
 ):
-    """Send a concise trade execution alert (plain text, no Markdown)."""
+    """Send a concise trade execution alert."""
     tg_cfg = app_config.get('notification_services', {}).get('telegram', {})
     token = tg_cfg.get('token')
     chat_id = tg_cfg.get('chat_id')
@@ -244,44 +248,45 @@ async def send_trade_alert(
 
     if action == "BUY":
         cost = entry_price * quantity
-        lines = [f">> BUY {symbol} ({trading_strategy})"]
-        lines.append(f"   ${entry_price:,.2f} x {quantity:.4f} (${cost:.0f})")
+        lines = [f"<b>BUY {_esc(symbol)}</b> ({_esc(trading_strategy)})"]
+        lines.append(f"${entry_price:,.2f} x {quantity:.4f} (${cost:.0f})")
 
         if gemini_direction and gemini_confidence:
             lines.append(
-                f"   Gemini: {gemini_direction} {gemini_confidence:.2f} "
-                f"({catalyst_freshness or 'N/A'})")
+                f"Gemini: {gemini_direction} {gemini_confidence:.2f} "
+                f"({catalyst_freshness or '?'})")
         if key_headline:
-            lines.append(f'   "{key_headline[:100]}"')
+            lines.append(f"<i>{_esc(key_headline[:100])}</i>")
+
+        mods = []
+        if macro_multiplier != 1.0:
+            mods.append(f"macro {macro_multiplier:.1f}x")
+        if streak_multiplier != 1.0:
+            mods.append(f"streak {streak_multiplier:.1f}x")
+        if sma_override:
+            mods.append("SMA override")
         if signal_strength:
-            mods = []
-            if macro_multiplier != 1.0:
-                mods.append(f"macro {macro_multiplier:.1f}x")
-            if streak_multiplier != 1.0:
-                mods.append(f"streak {streak_multiplier:.1f}x")
-            if sma_override:
-                mods.append("SMA override")
             mod_str = f" | {', '.join(mods)}" if mods else ""
-            lines.append(f"   Strength: {signal_strength:.2f}{mod_str}")
+            lines.append(f"Strength: {signal_strength:.2f}{mod_str}")
 
     elif action == "SELL":
-        lines = [f"<< SELL {symbol} ({trading_strategy})"]
+        lines = [f"<b>SELL {_esc(symbol)}</b> ({_esc(trading_strategy)})"]
         if entry_price and exit_price:
             lines.append(
-                f"   ${entry_price:,.2f} -> ${exit_price:,.2f} | "
+                f"${entry_price:,.2f} → ${exit_price:,.2f} | "
                 f"{pnl_pct:+.1f}% | ${pnl:+.2f}")
-        if hold_duration:
-            lines.append(f"   Hold: {hold_duration} | {exit_reason}")
+        if hold_duration and exit_reason:
+            lines.append(f"{hold_duration} | {exit_reason}")
         elif exit_reason:
-            lines.append(f"   Exit: {exit_reason}")
+            lines.append(exit_reason)
     else:
-        lines = [f"{action} {symbol} ({trading_strategy})"]
+        lines = [f"<b>{_esc(action)} {_esc(symbol)}</b> ({_esc(trading_strategy)})"]
         if reason:
-            lines.append(f"   {reason[:150]}")
+            lines.append(_esc(reason[:150]))
 
     text = "\n".join(lines)
     try:
         bot = Bot(token=token)
-        await bot.send_message(chat_id=chat_id, text=text)
+        await bot.send_message(chat_id=chat_id, text=text, parse_mode='HTML')
     except Exception as e:
         log.warning(f"Failed to send trade alert: {e}")
