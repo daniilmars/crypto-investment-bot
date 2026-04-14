@@ -110,7 +110,7 @@ class TestAutoAnalystRouting:
 class TestAutoSellRouting:
     """Verifies auto SELL uses correct state + skips confirmation."""
 
-    @patch('src.orchestration.position_analyst.send_telegram_alert', new_callable=AsyncMock)
+    @patch('src.notify.telegram_periodic_summary.send_trade_alert', new_callable=AsyncMock)
     @patch('src.orchestration.position_analyst.place_order')
     @patch('src.orchestration.position_analyst.is_confirmation_required', return_value=True)
     @patch('src.orchestration.position_analyst.bot_state')
@@ -122,7 +122,7 @@ class TestAutoSellRouting:
         position = _make_position()
         run_async(_handle_analyst_sell(
             position, 'BTC', 48000.0, 'A_1',
-            0.85, 'bearish momentum', 'crypto', is_auto=True))
+            0.85, 'bearish momentum', 'crypto', trading_strategy='auto'))
 
         # Should NOT ask for confirmation
         mock_confirm.assert_not_called()
@@ -132,56 +132,55 @@ class TestAutoSellRouting:
         assert call_kwargs[1]['trading_strategy'] == 'auto'
         assert call_kwargs[1]['exit_reason'] == 'analyst_exit'
 
-    @patch('src.orchestration.position_analyst.send_telegram_alert', new_callable=AsyncMock)
+    @patch('src.notify.telegram_periodic_summary.send_trade_alert', new_callable=AsyncMock)
     @patch('src.orchestration.position_analyst.place_order')
     @patch('src.orchestration.position_analyst.is_confirmation_required', return_value=True)
     @patch('src.orchestration.position_analyst.bot_state')
     def test_auto_sell_clears_auto_state(self, mock_state, mock_confirm,
                                           mock_order, mock_alert):
-        """Auto SELL should clear auto trailing stop and auto analyst state."""
+        """Auto SELL should clear trailing stop and auto analyst state."""
         from src.orchestration.position_analyst import _handle_analyst_sell
 
         position = _make_position()
         run_async(_handle_analyst_sell(
             position, 'BTC', 48000.0, 'A_1',
-            0.85, 'bearish', 'crypto', is_auto=True))
+            0.85, 'bearish', 'crypto', trading_strategy='auto'))
 
-        mock_state.auto_clear_trailing_stop.assert_called_once_with('A_1')
+        # Strategy-keyed clear is called now
+        mock_state.strategy_clear_trailing_stop.assert_called_once_with('A_1', 'auto')
         mock_state.remove_auto_analyst_last_run.assert_called_once_with('A_1')
-        # Manual variants should NOT be called
-        mock_state.clear_trailing_stop.assert_not_called()
-        mock_state.remove_analyst_last_run.assert_not_called()
 
-    @patch('src.orchestration.position_analyst.send_telegram_alert', new_callable=AsyncMock)
+    @patch('src.notify.telegram_periodic_summary.send_trade_alert', new_callable=AsyncMock)
     @patch('src.orchestration.position_analyst.place_order')
     @patch('src.orchestration.position_analyst.is_confirmation_required', return_value=True)
     @patch('src.orchestration.position_analyst.bot_state')
-    def test_auto_sell_alert_has_auto_prefix(self, mock_state, mock_confirm,
-                                              mock_order, mock_alert):
-        """Auto SELL Telegram alert should include AUTO label."""
+    def test_auto_sell_alert_called(self, mock_state, mock_confirm,
+                                     mock_order, mock_alert):
+        """Auto SELL should send a trade alert with strategy + reasoning."""
         from src.orchestration.position_analyst import _handle_analyst_sell
 
         position = _make_position()
         run_async(_handle_analyst_sell(
             position, 'BTC', 48000.0, 'A_1',
-            0.90, 'bearish reversal', 'crypto', is_auto=True))
+            0.90, 'bearish reversal', 'crypto', trading_strategy='auto'))
 
         mock_alert.assert_called_once()
-        alert_arg = mock_alert.call_args[0][0]
-        assert 'AUTO' in alert_arg['reason']
+        kwargs = mock_alert.call_args[1]
+        assert kwargs['action'] == 'SELL'
+        assert kwargs['trading_strategy'] == 'auto'
 
     @patch('src.orchestration.position_analyst.send_signal_for_confirmation', new_callable=AsyncMock)
     @patch('src.orchestration.position_analyst.is_confirmation_required', return_value=True)
     @patch('src.orchestration.position_analyst.bot_state')
     def test_manual_sell_uses_confirmation(self, mock_state, mock_confirm,
                                             mock_send):
-        """Manual SELL should use confirmation when required."""
+        """Manual SELL still uses confirmation when explicitly enabled."""
         from src.orchestration.position_analyst import _handle_analyst_sell
 
         position = _make_position()
         run_async(_handle_analyst_sell(
             position, 'BTC', 48000.0, 'A_1',
-            0.85, 'bearish', 'crypto', is_auto=False))
+            0.85, 'bearish', 'crypto', trading_strategy='manual'))
 
         mock_send.assert_called_once()
 

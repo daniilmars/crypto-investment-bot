@@ -41,7 +41,7 @@ async def run_position_analyst(
     entry_price = position['entry_price']
     pnl_pct = (current_price - entry_price) / entry_price
     order_id = position['order_id']
-    is_auto = trading_strategy == 'auto'
+    is_auto = trading_strategy != 'manual'
 
     analyst_cfg = settings.get('position_analyst', {})
     if analyst_cfg.get('enabled', False):
@@ -52,6 +52,7 @@ async def run_position_analyst(
                 position, symbol, current_price, entry_price, pnl_pct,
                 order_id, market_price_data, analyst_cfg, settings,
                 trailing_stop_activation, asset_type, is_auto,
+                trading_strategy=trading_strategy,
             )
             if flash_result == 'exit':
                 return 'sell'
@@ -61,6 +62,7 @@ async def run_position_analyst(
             position, symbol, current_price, entry_price, pnl_pct,
             order_id, market_price_data, analyst_cfg, settings,
             trailing_stop_activation, asset_type, is_auto,
+            trading_strategy=trading_strategy,
         )
 
     # Fallback: legacy position_monitor
@@ -78,6 +80,7 @@ async def _run_investment_analyst(
     position, symbol, current_price, entry_price, pnl_pct,
     order_id, market_price_data, analyst_cfg, settings,
     trailing_stop_activation, asset_type, is_auto=False,
+    trading_strategy='manual',
 ) -> str | None:
     """Run the Gemini investment analyst (tri-state: HOLD/INCREASE/SELL)."""
     now = datetime.now(timezone.utc)
@@ -170,7 +173,8 @@ async def _run_investment_analyst(
         elif rec == 'sell' and confidence >= exit_threshold:
             await _handle_analyst_sell(
                 position, symbol, current_price, order_id,
-                confidence, reasoning, asset_type, is_auto)
+                confidence, reasoning, asset_type,
+                trading_strategy=trading_strategy)
 
         else:
             log.info(f"[{symbol}] Position analyst: {rec} "
@@ -190,6 +194,7 @@ async def _run_flash_analyst(
     position, symbol, current_price, entry_price, pnl_pct,
     order_id, market_price_data, analyst_cfg, settings,
     trailing_stop_activation, asset_type, is_auto=False,
+    trading_strategy='manual',
 ) -> str | None:
     """Run the Flash analyst (exit-only, every 4h, uses gemini-2.5-flash)."""
     now = datetime.now(timezone.utc)
@@ -258,7 +263,8 @@ async def _run_flash_analyst(
             await _handle_analyst_sell(
                 position, symbol, current_price, order_id,
                 confidence, f"Flash: {reasoning}",
-                asset_type, is_auto, exit_reason='flash_analyst_exit',
+                asset_type, trading_strategy=trading_strategy,
+                exit_reason='flash_analyst_exit',
             )
             return 'exit'
 
@@ -400,11 +406,12 @@ async def _handle_increase(
 
 async def _handle_analyst_sell(
     position, symbol, current_price, order_id,
-    confidence, reasoning, asset_type, is_auto=False,
+    confidence, reasoning, asset_type,
+    trading_strategy='manual',
     exit_reason='analyst_exit',
 ):
     """Handle a SELL recommendation from the analyst."""
-    trading_strategy = 'auto' if is_auto else 'manual'
+    is_auto = trading_strategy != 'manual'
     if not is_auto and is_confirmation_required("SELL"):
         await send_signal_for_confirmation({
             'signal': 'SELL', 'symbol': symbol,
@@ -414,32 +421,51 @@ async def _handle_analyst_sell(
             'asset_type': asset_type,
             'position': position,
         })
+        return
+
+    order_kw = {}
+    if asset_type == 'stock':
+        order_kw['asset_type'] = 'stock'
+    place_order(symbol, "SELL", position['quantity'], current_price,
+                existing_order_id=order_id, exit_reason=exit_reason,
+                trading_strategy=trading_strategy, **order_kw)
+    qty = position['quantity']
+    entry_price = position['entry_price']
+    pnl_pct = (current_price - entry_price) / entry_price
+    pnl_dollar = (current_price - entry_price) * qty
+    bot_state.strategy_record_trade_outcome(trading_strategy, is_win=(pnl_pct > 0))
+
+    bot_state.strategy_clear_trailing_stop(order_id, trading_strategy)
+    if is_auto:
+        bot_state.remove_auto_analyst_last_run(order_id)
+        bot_state.remove_auto_flash_analyst_last_run(order_id)
     else:
-        order_kw = {}
-        if asset_type == 'stock':
-            order_kw['asset_type'] = 'stock'
-        place_order(symbol, "SELL", position['quantity'], current_price,
-                    existing_order_id=order_id, exit_reason=exit_reason,
-                    trading_strategy=trading_strategy, **order_kw)
-        pnl_pct = (current_price - position['entry_price']) / position['entry_price']
-        bot_state.strategy_record_trade_outcome(trading_strategy, is_win=(pnl_pct > 0))
-        if is_auto:
-            bot_state.auto_clear_trailing_stop(order_id)
-            bot_state.remove_auto_analyst_last_run(order_id)
-            bot_state.remove_auto_flash_analyst_last_run(order_id)
-        else:
-            bot_state.clear_trailing_stop(order_id)
-            bot_state.remove_analyst_last_run(order_id)
-            bot_state.remove_flash_analyst_last_run(order_id)
-        mode_label = 'AUTO ' if is_auto else ''
-        alert = {
-            "signal": "SELL", "symbol": symbol,
-            "current_price": current_price,
-            "reason": f"{mode_label}Position analyst sell ({confidence:.0%}): {reasoning}",
-        }
-        if asset_type == 'stock':
-            alert['asset_type'] = 'stock'
-        await send_telegram_alert(alert)
+        bot_state.remove_analyst_last_run(order_id)
+        bot_state.remove_flash_analyst_last_run(order_id)
+
+    try:
+        from src.notify.telegram_periodic_summary import send_trade_alert
+        # Compute hold duration
+        hold = ""
+        entry_ts = position.get('entry_timestamp')
+        if entry_ts:
+            try:
+                dt = _parse_entry_timestamp(entry_ts)
+                delta = datetime.now(timezone.utc) - dt
+                days = delta.days
+                hours = delta.seconds // 3600
+                hold = f"{days}d {hours}h" if days > 0 else f"{hours}h"
+            except Exception:
+                pass
+        await send_trade_alert(
+            action="SELL", symbol=symbol,
+            trading_strategy=trading_strategy,
+            entry_price=entry_price, exit_price=current_price,
+            quantity=qty, pnl=pnl_dollar, pnl_pct=pnl_pct * 100,
+            hold_duration=hold, exit_reason=exit_reason,
+            reason=f"Analyst {confidence:.0%}: {reasoning}")
+    except Exception:
+        pass
 
 
 def _parse_entry_timestamp(entry_ts) -> datetime:
