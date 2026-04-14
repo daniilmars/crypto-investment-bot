@@ -514,7 +514,20 @@ async def execute_sell(
                 if _is_same_day_trade(position):
                     _record_day_trade()
                     log.info(f"PDT: recorded day trade for {symbol}")
-                await send_telegram_alert(signal)
+                try:
+                    from src.notify.telegram_periodic_summary import send_trade_alert
+                    entry_price = position['entry_price']
+                    pnl_pct = (current_price - entry_price) / entry_price
+                    pnl_dollar = (current_price - entry_price) * qty
+                    hold = _hold_duration(position.get('entry_timestamp'))
+                    await send_trade_alert(
+                        action="SELL", symbol=symbol,
+                        trading_strategy=trading_strategy,
+                        entry_price=entry_price, exit_price=current_price,
+                        quantity=qty, pnl=pnl_dollar, pnl_pct=pnl_pct * 100,
+                        hold_duration=hold, exit_reason='signal_sell')
+                except Exception:
+                    pass
             else:
                 log.warning(f"SELL order for {symbol} failed: {order_result.get('message')}")
             return order_result
@@ -539,7 +552,20 @@ async def execute_sell(
                 if _is_same_day_trade(position):
                     _record_day_trade()
                     log.info(f"PDT: recorded day trade for {symbol}")
-            await send_telegram_alert(signal)
+            try:
+                from src.notify.telegram_periodic_summary import send_trade_alert
+                entry_price = position['entry_price']
+                pnl_pct = (current_price - entry_price) / entry_price
+                pnl_dollar = (current_price - entry_price) * qty
+                hold = _hold_duration(position.get('entry_timestamp'))
+                await send_trade_alert(
+                    action="SELL", symbol=symbol,
+                    trading_strategy=trading_strategy,
+                    entry_price=entry_price, exit_price=current_price,
+                    quantity=qty, pnl=pnl_dollar, pnl_pct=pnl_pct * 100,
+                    hold_duration=hold, exit_reason='signal_sell')
+            except Exception:
+                pass
         else:
             log.warning(f"SELL order for {symbol} failed: {order_result}")
         return order_result

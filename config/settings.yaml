@@ -227,10 +227,9 @@ settings:
   # Require manual Telegram approval before executing BUY/SELL trades.
   # Protective exits (SL/TP/trailing) are NEVER gated by confirmation.
   signal_confirmation:
-    enabled: true
+    enabled: false
     timeout_minutes: 30
-    require_confirmation_for:
-      - "SELL"
+    require_confirmation_for: []
 
   # -- News Scraper Daemon Settings --
   # Continuous scraper with tiered intervals (replaces launchd batch approach)
@@ -540,7 +539,7 @@ settings:
     daily_digest_hour_utc: 8
     daily_digest_lookahead_hours: 72
     breaking_news:
-      enabled: true
+      enabled: false
       min_confidence: 0.7
       catalyst_types: [regulatory, hack_exploit, macro, etf]
       cooldown_hours: 4

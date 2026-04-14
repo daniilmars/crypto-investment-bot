@@ -22,8 +22,7 @@ from src.collectors.alpha_vantage_data import (get_company_overview,
 from src.collectors.binance_data import get_current_price, get_all_prices, get_klines
 from src.config import app_config
 from src.analysis.macro_regime import get_macro_regime
-from src.analysis.event_calendar import (get_event_warnings_for_positions,
-                                         get_upcoming_macro_events)
+from src.analysis.event_calendar import get_upcoming_macro_events
 from src.database import (get_historical_prices,
                           get_trade_history_stats,
                           save_signal, save_macro_regime)
@@ -228,8 +227,6 @@ async def run_bot_cycle():
 
     _cached_auto_positions = _cached_strategy_positions.get('auto', [])  # used by dashboard
 
-    open_positions = _cached_crypto_positions
-
     # Risk management config for position monitor
     risk_cfg = dict(
         stop_loss_pct=stop_loss_percentage,
@@ -339,7 +336,6 @@ async def run_bot_cycle():
                     if result != 'none':
                         _cached_crypto_positions = await asyncio.to_thread(
                             get_open_positions, trading_strategy='manual')
-                        open_positions = _cached_crypto_positions
 
         # --- Pause Check ---
         if not bot_is_running.is_set():
@@ -606,26 +602,6 @@ async def run_bot_cycle():
 
         # Update backward compat alias after strategy loop
         _cached_auto_positions = _cached_strategy_positions.get('auto', [])
-
-    # --- Event warnings for open positions ---
-    try:
-        all_strategy_positions = [p for positions in _cached_strategy_positions.values() for p in positions]
-        all_open = open_positions + all_strategy_positions
-        event_warnings = await asyncio.to_thread(get_event_warnings_for_positions, all_open)
-        for warn in event_warnings:
-            sym = warn['symbol']
-            log.info(f"Event warning: {sym} — {warn['event_type']} in {warn['hours_until']:.0f}h")
-            asset_type = warn.get('asset_type', 'crypto')
-            price = warn.get('current_price', 0)
-            await send_telegram_alert({
-                'signal': 'INFO', 'symbol': sym,
-                'current_price': price,
-                'asset_type': asset_type,
-                'reason': f"Upcoming {warn['event_type']} in {warn['hours_until']:.0f}h — "
-                          f"consider reducing exposure.",
-            })
-    except Exception as e:
-        log.warning(f"Event warnings failed: {e}")
 
     # --- Run Stock Trading Cycle ---
     stock_prices = await run_stock_cycle(

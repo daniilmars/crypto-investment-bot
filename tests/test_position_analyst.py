@@ -514,13 +514,13 @@ class TestPositionAnalystConfig:
         assert analyst_cfg.get('check_interval_minutes') == 1440
         assert analyst_cfg.get('max_position_multiplier') == 3.0
 
-    def test_sell_in_confirmation_signals(self):
-        """Manual BUY/INCREASE disabled — only SELL requires confirmation."""
+    def test_signal_confirmation_disabled(self):
+        """All trades are auto-executed now — confirmation entirely disabled."""
         from src.config import app_config
         settings = app_config.get('settings', {})
         confirm_cfg = settings.get('signal_confirmation', {})
+        assert confirm_cfg.get('enabled') is False
         signals = confirm_cfg.get('require_confirmation_for', [])
-        assert 'SELL' in signals
         assert 'BUY' not in signals
 
 

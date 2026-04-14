@@ -197,7 +197,8 @@ class TestSellAlertTiming:
         mock_state.clear_trailing_stop.assert_not_called()
 
     @patch('src.orchestration.trade_executor.bot_state')
-    @patch('src.orchestration.trade_executor.send_telegram_alert', new_callable=AsyncMock)
+    @patch('src.notify.telegram_periodic_summary.send_trade_alert',
+           new_callable=AsyncMock)
     @patch('src.orchestration.trade_executor.is_confirmation_required', return_value=False)
     @patch('src.orchestration.trade_executor.place_order')
     @patch('src.orchestration.trade_executor.app_config')
@@ -210,7 +211,7 @@ class TestSellAlertTiming:
         mock_order.return_value = {'status': 'CLOSED', 'pnl': 50.0}
 
         position = {'symbol': 'BTC', 'order_id': 'P_1', 'quantity': 0.01,
-                     'status': 'OPEN', 'entry_price': 50000}
+                    'status': 'OPEN', 'entry_price': 50000}
         signal = {'signal': 'SELL', 'symbol': 'BTC', 'current_price': 55000}
 
         run_async(execute_sell("BTC", signal, position, 55000.0))
