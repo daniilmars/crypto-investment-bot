@@ -95,3 +95,61 @@ def compute_sma(prices: list[float], period: int) -> float | None:
     if len(prices) < period:
         return None
     return sum(prices[-period:]) / period
+
+
+def _tf_aligned(closes: list[float] | None, period: int, direction: str) -> bool | None:
+    """Return True if the latest close on this timeframe agrees with direction.
+
+    None means insufficient data (timeframe is skipped — does not penalize).
+    """
+    if not closes or len(closes) < period:
+        return None
+    sma = sum(closes[-period:]) / period
+    last = closes[-1]
+    if direction == 'bullish':
+        return last > sma
+    if direction == 'bearish':
+        return last < sma
+    return None
+
+
+def compute_trend_alignment(
+    daily_closes: list[float],
+    direction: str,
+    weekly_closes: list[float] | None = None,
+    monthly_closes: list[float] | None = None,
+    daily_period: int = 20,
+    weekly_period: int = 20,
+    monthly_period: int = 10,
+) -> dict:
+    """Score how many of daily/weekly/monthly trends agree with `direction`.
+
+    Returns a dict with:
+      - score: float in [0, 1] — fraction of evaluated timeframes that agree.
+      - agreement_count: int — how many timeframes agree.
+      - timeframes_evaluated: int — how many had enough data.
+      - details: per-timeframe alignment booleans (or None if skipped).
+
+    A timeframe with insufficient data is skipped (not counted as miss).
+    If no timeframes can be evaluated, score defaults to 1.0 (do not penalize).
+    """
+    details = {
+        'daily': _tf_aligned(daily_closes, daily_period, direction),
+        'weekly': _tf_aligned(weekly_closes, weekly_period, direction),
+        'monthly': _tf_aligned(monthly_closes, monthly_period, direction),
+    }
+    evaluated = [v for v in details.values() if v is not None]
+    if not evaluated:
+        return {
+            'score': 1.0,
+            'agreement_count': 0,
+            'timeframes_evaluated': 0,
+            'details': details,
+        }
+    agree = sum(1 for v in evaluated if v)
+    return {
+        'score': agree / len(evaluated),
+        'agreement_count': agree,
+        'timeframes_evaluated': len(evaluated),
+        'details': details,
+    }

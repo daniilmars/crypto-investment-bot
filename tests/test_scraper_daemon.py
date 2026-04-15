@@ -254,8 +254,9 @@ class TestMetrics:
         d = m.to_dict()
         expected_keys = {
             'started_at', 'articles_total', 'rss_cycles', 'web_cycles',
-            'deep_cycles', 'cleanup_cycles', 'last_rss_success',
-            'last_web_success', 'last_deep_success', 'dedup_cache_size',
+            'deep_cycles', 'cleanup_cycles', 'filings_cycles',
+            'last_rss_success', 'last_web_success', 'last_deep_success',
+            'last_filings_success', 'dedup_cache_size',
             'last_errors', 'chrome_mcp_successes', 'chrome_mcp_failures',
             'last_chrome_mcp_source',
         }

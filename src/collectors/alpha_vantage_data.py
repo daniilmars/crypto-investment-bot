@@ -339,6 +339,46 @@ def get_batch_daily_prices(symbols):
         return {}
 
 
+def get_batch_higher_tf_prices(symbols, interval='1wk', period='2y'):
+    """Fetch weekly or monthly closes for stocks in one yfinance batch call.
+
+    Args:
+        symbols: list of ticker strings
+        interval: '1wk' for weekly or '1mo' for monthly
+        period: yfinance period string ('2y' is plenty for 20-week / 10-month SMA)
+
+    Returns:
+        dict {symbol: [float closes oldest-to-newest]}
+    """
+    if not _HAS_YFINANCE or not symbols:
+        return {}
+
+    try:
+        data = yf.download(symbols, period=period, interval=interval,
+                           group_by="ticker", threads=True, progress=False)
+        if data.empty:
+            return {}
+
+        results = {}
+        for sym in symbols:
+            try:
+                sym_data = data if len(symbols) == 1 else data[sym]
+                if sym_data.empty:
+                    continue
+                closes = sym_data['Close'].dropna()
+                if len(closes) < 5:
+                    continue
+                results[sym] = closes.tolist()
+            except (KeyError, IndexError, TypeError):
+                continue
+
+        log.info(f"[yfinance batch {interval}] Fetched for {len(results)}/{len(symbols)} stocks.")
+        return results
+    except Exception as e:
+        log.error(f"[yfinance batch {interval}] Error: {e}")
+        return {}
+
+
 def get_company_overview(symbol):
     """
     Fetches company fundamental data. Cached for 24 hours.

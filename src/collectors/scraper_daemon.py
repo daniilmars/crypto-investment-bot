@@ -48,9 +48,11 @@ class DaemonMetrics:
     web_cycles: int = 0
     deep_cycles: int = 0
     cleanup_cycles: int = 0
+    filings_cycles: int = 0
     last_rss_success: str = ''
     last_web_success: str = ''
     last_deep_success: str = ''
+    last_filings_success: str = ''
     dedup_cache_size: int = 0
     chrome_mcp_successes: int = 0
     chrome_mcp_failures: int = 0
@@ -65,9 +67,11 @@ class DaemonMetrics:
             'web_cycles': self.web_cycles,
             'deep_cycles': self.deep_cycles,
             'cleanup_cycles': self.cleanup_cycles,
+            'filings_cycles': self.filings_cycles,
             'last_rss_success': self.last_rss_success,
             'last_web_success': self.last_web_success,
             'last_deep_success': self.last_deep_success,
+            'last_filings_success': self.last_filings_success,
             'dedup_cache_size': self.dedup_cache_size,
             'chrome_mcp_successes': self.chrome_mcp_successes,
             'chrome_mcp_failures': self.chrome_mcp_failures,
@@ -85,6 +89,14 @@ class ScraperDaemon:
         self.web_interval = config.get('web_interval_seconds', 900)
         self.deep_interval = config.get('deep_interval_seconds', 1800)
         self.dedup_cache_hours = config.get('dedup_cache_hours', 48)
+
+        # SEC filings (Form 4 + 13F) — slow-moving, hourly is plenty
+        sec_cfg = config.get('sec_filings', {})
+        self.sec_enabled = sec_cfg.get('enabled', False)
+        self.sec_interval = sec_cfg.get('interval_seconds', 3600)
+        self.sec_include_form4 = sec_cfg.get('include_form4', True)
+        self.sec_include_13f = sec_cfg.get('include_13f', True)
+        self.sec_min_form4_dollar = sec_cfg.get('min_form4_dollar', 100_000)
 
         # Chrome MCP config
         chrome_mcp_config = config.get('chrome_mcp', {})
@@ -129,6 +141,8 @@ class ScraperDaemon:
             ('deep', self._deep_loop),
             ('cleanup', self._cache_cleanup_loop),
         ]
+        if self.sec_enabled:
+            thread_targets.append(('filings', self._filings_loop))
 
         for name, target in thread_targets:
             t = threading.Thread(target=target, name=f'scraper-{name}', daemon=True)
@@ -330,6 +344,33 @@ class ScraperDaemon:
                 log.error(f"[Deep] Error: {e}")
                 self.metrics.errors.append(f"deep: {e}")
             self.shutdown_event.wait(timeout=self.deep_interval)
+
+    def _filings_loop(self):
+        """Hourly fetch of Form 4 + 13F institutional filings.
+
+        Synthetic articles are dedup-protected by the scraped_articles
+        UNIQUE INDEX on title_hash, so re-running is safe.
+        """
+        from src.collectors.sec_filings import collect_sec_filings
+
+        while not self.shutdown_event.is_set():
+            try:
+                log.info("[Filings] Fetching SEC filings (Form 4 + 13F)...")
+                articles = collect_sec_filings(
+                    STOCK_SYMBOLS,
+                    include_form4=self.sec_include_form4,
+                    include_13f=self.sec_include_13f,
+                    min_form4_dollar=self.sec_min_form4_dollar,
+                )
+                new_count = self._process_articles(articles, 'filings')
+                self.metrics.filings_cycles += 1
+                self.metrics.last_filings_success = datetime.now(timezone.utc).isoformat()
+                log.info(f"[Filings] Cycle {self.metrics.filings_cycles}: "
+                         f"{len(articles)} fetched, {new_count} new")
+            except Exception as e:
+                log.error(f"[Filings] Error: {e}")
+                self.metrics.errors.append(f"filings: {e}")
+            self.shutdown_event.wait(timeout=self.sec_interval)
 
     def _cache_cleanup_loop(self):
         """Evict old entries from the dedup cache."""

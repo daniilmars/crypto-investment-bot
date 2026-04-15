@@ -84,6 +84,22 @@ settings:
       required_freshness: breaking  # only override for breaking catalysts
       penalty_pct: 0.25           # reduce signal strength by 25% when overriding SMA
 
+    # -- Multi-timeframe trend alignment (daily + weekly + monthly SMA agreement) --
+    # When enabled, signal strength is multiplied by a [strength_floor..1.0] factor
+    # based on how many timeframes agree with the signal direction. Signals can also
+    # be hard-rejected if score falls below min_score (0.0 disables the hard gate).
+    trend_alignment:
+      enabled: true
+      daily_period: 20
+      weekly_period: 20
+      monthly_period: 10
+      weekly_lookback: 60        # number of weekly bars to fetch (crypto)
+      monthly_lookback: 24
+      weekly_cache_minutes: 360  # 6h — weekly bars only update once a week
+      monthly_cache_minutes: 1440  # 24h
+      strength_floor: 0.5        # multiplier when zero timeframes agree
+      min_score: 0.0             # 0.0 = no hard rejection; raise to filter weak alignment
+
   # Per-symbol cooldown (hours) after a stop-loss exit before re-entering.
   stoploss_cooldown_hours: 24
 
@@ -242,6 +258,14 @@ settings:
       enabled: true
       timeout_seconds: 180
       fallback_to_bs4: true
+    # SEC Form 4 (insider trades) + 13F (institutional holdings) — high-quality
+    # signal, slow-moving. Hourly fetch is plenty.
+    sec_filings:
+      enabled: true
+      interval_seconds: 3600         # 1 hour
+      include_form4: true
+      include_13f: true
+      min_form4_dollar: 100000       # ignore insider trades below $100K
 
   # -- Position Analyst Settings --
   # Tri-state investment analyst: HOLD / INCREASE / SELL

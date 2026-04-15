@@ -1,5 +1,6 @@
 from src.logger import log
 from src.analysis.technical_indicators import calculate_macd, calculate_bollinger_bands
+from src.analysis.trend_alignment import compute_trend_alignment
 
 
 def generate_stock_signal(symbol, market_data, volume_data=None, fundamental_data=None,
@@ -364,8 +365,43 @@ def _generate_stock_sentiment_signal(symbol, market_data, fundamental_data=None,
         log.info(f"[{symbol}] Stock SMA override penalty: strength {strength:.3f} "
                  f"(reduced by {penalty:.0%})")
 
+    # --- Step 5: Multi-timeframe trend alignment (strength modifier) ---
+    tf_cfg = sentiment_config.get('trend_alignment', {})
+    trend_alignment_meta = None
+    if tf_cfg.get('enabled', False):
+        daily_closes = market_data.get('daily_closes')
+        weekly_closes = market_data.get('weekly_closes')
+        monthly_closes = market_data.get('monthly_closes')
+        if daily_closes:
+            ta = compute_trend_alignment(
+                daily_closes, direction,
+                weekly_closes=weekly_closes,
+                monthly_closes=monthly_closes,
+                daily_period=tf_cfg.get('daily_period', 20),
+                weekly_period=tf_cfg.get('weekly_period', 20),
+                monthly_period=tf_cfg.get('monthly_period', 10),
+            )
+            min_score = tf_cfg.get('min_score', 0.0)
+            if ta['timeframes_evaluated'] > 0 and ta['score'] < min_score:
+                reason = (f"Trend alignment {ta['score']:.2f} < {min_score} "
+                          f"({ta['agreement_count']}/{ta['timeframes_evaluated']} "
+                          f"timeframes agree). {sentiment_reason}.")
+                log.info(f"[{symbol}] Stock HOLD: {reason}")
+                return {"signal": "HOLD", "symbol": symbol, "reason": reason,
+                        "current_price": current_price,
+                        "trend_alignment": ta}
+            floor = tf_cfg.get('strength_floor', 0.5)
+            multiplier = floor + (1.0 - floor) * ta['score']
+            strength *= multiplier
+            trend_alignment_meta = ta
+            log.info(f"[{symbol}] Stock trend alignment: {ta['agreement_count']}/"
+                     f"{ta['timeframes_evaluated']} agree (score={ta['score']:.2f}), "
+                     f"strength × {multiplier:.2f} → {strength:.3f}")
+
     result = {"signal": signal_type, "symbol": symbol, "reason": reason,
               "current_price": current_price, "signal_strength": strength}
     if sma_override_applied:
         result["sma_override"] = True
+    if trend_alignment_meta is not None:
+        result["trend_alignment"] = trend_alignment_meta
     return result

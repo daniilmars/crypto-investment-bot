@@ -54,9 +54,13 @@ from src.orchestration.news_pipeline import (
 from src.analysis.strategy_weights import compute_effective_strength
 from src.config import get_strategy_configs
 
-# --- Daily kline cache (Plan 2: Daily SMA + Plan 1: ATR) ---
+# --- Kline caches (daily for SMA/ATR, weekly/monthly for trend alignment) ---
 _daily_kline_cache: dict[str, list[dict]] = {}
 _daily_kline_cache_ts: float = 0
+_weekly_kline_cache: dict[str, list[dict]] = {}
+_weekly_kline_cache_ts: float = 0
+_monthly_kline_cache: dict[str, list[dict]] = {}
+_monthly_kline_cache_ts: float = 0
 
 
 async def _fetch_daily_klines_batch(
@@ -83,6 +87,50 @@ async def _fetch_daily_klines_batch(
     _daily_kline_cache = result
     _daily_kline_cache_ts = now
     log.info(f"Fetched daily klines for {len(result)}/{len(symbols)} crypto symbols.")
+    return result
+
+
+async def _fetch_higher_tf_klines_batch(
+    symbols: list[str],
+    interval: str,
+    limit: int,
+    cache_target: str,
+    cache_minutes: int = 360,
+) -> dict[str, list[dict]]:
+    """Fetch weekly ('1w') or monthly ('1M') klines with longer cache TTL.
+
+    cache_target: 'weekly' or 'monthly' (selects which module-level cache).
+    """
+    global _weekly_kline_cache, _weekly_kline_cache_ts
+    global _monthly_kline_cache, _monthly_kline_cache_ts
+
+    now = time.time()
+    if cache_target == 'weekly':
+        cache, ts = _weekly_kline_cache, _weekly_kline_cache_ts
+    else:
+        cache, ts = _monthly_kline_cache, _monthly_kline_cache_ts
+
+    if cache and (now - ts) < cache_minutes * 60:
+        log.debug(f"Using cached {cache_target} klines.")
+        return cache
+
+    result: dict[str, list[dict]] = {}
+    for sym in symbols:
+        api_sym = sym if sym.endswith("USDT") else f"{sym}USDT"
+        try:
+            klines = await asyncio.to_thread(get_klines, api_sym, interval, limit)
+            if klines:
+                result[sym] = klines
+        except Exception as e:
+            log.debug(f"Failed to fetch {cache_target} klines for {sym}: {e}")
+
+    if cache_target == 'weekly':
+        _weekly_kline_cache = result
+        _weekly_kline_cache_ts = now
+    else:
+        _monthly_kline_cache = result
+        _monthly_kline_cache_ts = now
+    log.info(f"Fetched {cache_target} klines for {len(result)}/{len(symbols)} crypto symbols.")
     return result
 
 
@@ -281,9 +329,25 @@ async def run_bot_cycle():
     kline_cache_min = trend_cfg.get('kline_cache_minutes', 60)
 
     daily_klines_batch: dict[str, list[dict]] = {}
+    weekly_klines_batch: dict[str, list[dict]] = {}
+    monthly_klines_batch: dict[str, list[dict]] = {}
     if use_daily_klines:
         daily_klines_batch = await _fetch_daily_klines_batch(
             watch_list, cache_minutes=kline_cache_min)
+
+    # --- Multi-timeframe trend alignment (weekly + monthly klines) ---
+    tf_align_cfg = settings.get('sentiment_signal', {}).get('trend_alignment', {})
+    if tf_align_cfg.get('enabled', False):
+        weekly_klines_batch = await _fetch_higher_tf_klines_batch(
+            watch_list, '1w',
+            tf_align_cfg.get('weekly_lookback', 60),
+            'weekly',
+            cache_minutes=tf_align_cfg.get('weekly_cache_minutes', 360))
+        monthly_klines_batch = await _fetch_higher_tf_klines_batch(
+            watch_list, '1M',
+            tf_align_cfg.get('monthly_lookback', 24),
+            'monthly',
+            cache_minutes=tf_align_cfg.get('monthly_cache_minutes', 1440))
 
     # --- Dynamic risk config ---
     dyn_risk_cfg = settings.get('dynamic_risk', {})
@@ -346,18 +410,29 @@ async def run_bot_cycle():
         log.info(f"Analyzing data for {symbol}...")
 
         market_price_data = {'current_price': current_price, 'sma': None, 'rsi': None,
-                             'sma50': None, 'sma200': None}
+                             'sma50': None, 'sma200': None,
+                             'daily_closes': None, 'weekly_closes': None,
+                             'monthly_closes': None}
 
         # Daily SMA from klines (trend filter) — falls back to 15-min snapshots
         daily_klines = daily_klines_batch.get(symbol)
         if daily_klines and len(daily_klines) >= daily_sma_period:
             daily_closes = [k['close'] for k in daily_klines]
+            market_price_data['daily_closes'] = daily_closes
             market_price_data['sma'] = calculate_sma(daily_closes, period=daily_sma_period)
             # Multi-timeframe SMAs for trend alignment
             if len(daily_closes) >= 50:
                 market_price_data['sma50'] = sum(daily_closes[-50:]) / 50
             if len(daily_closes) >= 200:
                 market_price_data['sma200'] = sum(daily_closes[-200:]) / 200
+
+        # Weekly + monthly closes for multi-timeframe trend alignment
+        weekly_klines = weekly_klines_batch.get(symbol)
+        if weekly_klines:
+            market_price_data['weekly_closes'] = [k['close'] for k in weekly_klines]
+        monthly_klines = monthly_klines_batch.get(symbol)
+        if monthly_klines:
+            market_price_data['monthly_closes'] = [k['close'] for k in monthly_klines]
         else:
             # Fallback: 15-min snapshot SMA (old behavior)
             price_limit = max(sma_period, rsi_period, 26) + 1
@@ -821,6 +896,17 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
     stock_batch_prices = await asyncio.to_thread(get_batch_stock_prices, watch_list) if not use_alpaca_data else {}
     stock_batch_daily = await asyncio.to_thread(get_batch_daily_prices, watch_list) if not use_alpaca_data else {}
 
+    # Multi-timeframe weekly/monthly closes (only if trend alignment enabled)
+    stock_batch_weekly: dict[str, list[float]] = {}
+    stock_batch_monthly: dict[str, list[float]] = {}
+    _tf_align_cfg = settings.get('sentiment_signal', {}).get('trend_alignment', {})
+    if _tf_align_cfg.get('enabled', False) and not use_alpaca_data:
+        from src.collectors.alpha_vantage_data import get_batch_higher_tf_prices
+        stock_batch_weekly = await asyncio.to_thread(
+            get_batch_higher_tf_prices, watch_list, '1wk', '2y')
+        stock_batch_monthly = await asyncio.to_thread(
+            get_batch_higher_tf_prices, watch_list, '1mo', '5y')
+
     # Cache open stock positions once per cycle
     _cached_stock_positions = await asyncio.to_thread(get_open_positions, asset_type='stock', trading_strategy='manual') if (paper_trading or is_live) else []
     _cached_alpaca_positions = await asyncio.to_thread(get_stock_positions) if broker == 'alpaca' else []
@@ -937,7 +1023,10 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
         sma_value = calculate_sma(prices, period=sma_period)
         rsi_value = calculate_rsi(prices, period=rsi_period)
 
-        market_data = {'current_price': current_price, 'sma': sma_value, 'rsi': rsi_value}
+        market_data = {'current_price': current_price, 'sma': sma_value, 'rsi': rsi_value,
+                       'daily_closes': prices,
+                       'weekly_closes': stock_batch_weekly.get(symbol),
+                       'monthly_closes': stock_batch_monthly.get(symbol)}
 
         volume_data = {}
         if volumes:
