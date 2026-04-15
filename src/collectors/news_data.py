@@ -924,7 +924,12 @@ def collect_news_sentiment(symbols):
             log.warning(f"Deep scraping failed, continuing with original articles: {e}")
 
     # 2c. Gemini per-article scoring (DB-cached, batched)
+    # Score every article whose title matches EITHER a specific symbol OR a
+    # macro sector keyword — macro-routed articles are archived either way,
+    # so skipping them here leaves them in the DB with gemini_score=NULL.
     use_gemini_scoring = news_config.get('use_gemini_scoring', True)
+    macro_routing_enabled = news_config.get('macro_routing', {}).get('enabled', True)
+    macro_max = news_config.get('macro_routing', {}).get('max_symbols_per_article', 20)
     gemini_article_scores = {}
     if use_gemini_scoring:
         articles_for_scoring = []
@@ -932,13 +937,18 @@ def collect_news_sentiment(symbols):
             title = article.get('title', '')
             if not title:
                 continue
-            title_hash = compute_title_hash(title)
-            matched = _match_article_to_symbols(title, article.get('description', ''), symbols)
+            description = article.get('description', '')
+            matched = _match_article_to_symbols(title, description, symbols)
+            if not matched and macro_routing_enabled:
+                macro_sectors = _match_article_to_macro_sectors(title, description)
+                if macro_sectors and _expand_sectors_to_symbols(
+                        macro_sectors, symbols, max_symbols=macro_max):
+                    matched = True  # will be archived via macro routing
             if matched:
                 articles_for_scoring.append({
                     'title': title,
-                    'description': article.get('description', ''),
-                    'title_hash': title_hash,
+                    'description': description,
+                    'title_hash': compute_title_hash(title),
                     'collected_at': article.get('published') or article.get('collected_at'),
                     'source': article.get('source', ''),
                 })
@@ -947,9 +957,6 @@ def collect_news_sentiment(symbols):
     # 3. Score each headline with Gemini, match to symbols
     symbol_articles = {symbol: [] for symbol in symbols}
     archive_rows = []
-
-    macro_routing_enabled = news_config.get('macro_routing', {}).get('enabled', True)
-    macro_max = news_config.get('macro_routing', {}).get('max_symbols_per_article', 20)
     macro_routed_count = 0
 
     for article in all_articles:
