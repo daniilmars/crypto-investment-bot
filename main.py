@@ -298,7 +298,7 @@ async def startup_event():
     # Restore streak sizing state from database (survives restarts)
     try:
         import json as _json
-        for _sn in ('auto', 'momentum', 'conservative', 'longterm'):
+        for _sn in ('auto', 'conservative', 'longterm'):
             _stored = load_bot_state(f'streak_state:{_sn}')
             if _stored:
                 bot_state.strategy_load_streak_state(_sn, _json.loads(_stored))

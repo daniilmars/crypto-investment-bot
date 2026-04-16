@@ -193,7 +193,7 @@ async def send_periodic_summary():
         from src.orchestration import bot_state
         import psycopg2
 
-        strategies = ['auto', 'momentum', 'conservative', 'longterm']
+        strategies = ['auto', 'conservative', 'longterm']
         rows = []
 
         for strat in strategies:

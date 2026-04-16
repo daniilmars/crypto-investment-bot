@@ -665,9 +665,10 @@ async def run_bot_cycle():
                             strat_signal['signal'], base_str, eff_str, ga)
                     except Exception:
                         pass
+                strat_risk_pct = strat_cfg.get('risk_params', {}).get('risk_pct', effective_risk_pct)
                 await process_trade_signal(
                     symbol, strat_signal, current_price, strat_open, strat_available,
-                    effective_risk_pct, signal_cooldown_hours, strat_max,
+                    strat_risk_pct, signal_cooldown_hours, strat_max,
                     strat_suppress, strat_macro_mult,
                     trading_strategy=strat_name, label=strat_label, is_auto=True,
                     current_prices=current_prices_dict,
@@ -1190,9 +1191,10 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                             strat_signal['signal'], base_str, eff_str, stock_ga)
                     except Exception:
                         pass
+                strat_risk_pct = strat_cfg.get('risk_params', {}).get('risk_pct', trade_risk_percentage)
                 await process_trade_signal(
                     symbol, strat_signal, current_price, strat_open, strat_available,
-                    trade_risk_percentage, signal_cooldown_hours, strat_max,
+                    strat_risk_pct, signal_cooldown_hours, strat_max,
                     strat_suppress, macro_multiplier,
                     asset_type='stock', trading_strategy=strat_name, label=strat_label, is_auto=True,
                     current_prices=stock_prices_dict,

@@ -61,7 +61,7 @@ class TestStreakStateTracking:
         for _ in range(5):
             bot_state.strategy_record_trade_outcome('auto', is_win=True)
         assert bot_state.strategy_get_streak_state('auto')['consecutive_wins'] == 5
-        assert bot_state.strategy_get_streak_state('momentum')['consecutive_wins'] == 0
+        assert bot_state.strategy_get_streak_state('conservative')['consecutive_wins'] == 0
 
 
 class TestStreakMultiplier:
