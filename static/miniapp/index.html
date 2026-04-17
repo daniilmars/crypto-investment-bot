@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Portfolio</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header>
+      <div id="portfolio-headline">
+        <div class="label">Portfolio PnL (USD)</div>
+        <div class="value" id="headline-total">—</div>
+        <div class="sub" id="headline-breakdown">realized — · unrealized —</div>
+      </div>
+      <div id="regime-pill" class="pill pill-neutral">REGIME —</div>
+    </header>
+
+    <section id="tiles">
+      <div class="tile">
+        <div class="tile-label">24h</div>
+        <div class="tile-value" id="tile-d1">—</div>
+      </div>
+      <div class="tile">
+        <div class="tile-label">7d</div>
+        <div class="tile-value" id="tile-d7">—</div>
+      </div>
+      <div class="tile">
+        <div class="tile-label">30d</div>
+        <div class="tile-value" id="tile-d30">—</div>
+      </div>
+      <div class="tile">
+        <div class="tile-label">Open</div>
+        <div class="tile-value" id="tile-open">—</div>
+      </div>
+    </section>
+
+    <section id="equity-section">
+      <div class="section-header">
+        <span>Equity curve</span>
+        <span class="range-toggle">
+          <button class="range-btn active" data-days="7">7d</button>
+          <button class="range-btn" data-days="30">30d</button>
+          <button class="range-btn" data-days="90">90d</button>
+        </span>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="equity-chart"></canvas>
+      </div>
+    </section>
+
+    <section id="positions-section">
+      <div class="section-header">
+        <span id="positions-title">Open positions</span>
+        <span class="sort-toggle">
+          <button class="sort-btn active" data-sort="pnl">by P&amp;L</button>
+          <button class="sort-btn" data-sort="age">by age</button>
+        </span>
+      </div>
+      <div id="positions-list"></div>
+    </section>
+
+    <div id="toast" class="toast hidden"></div>
+
+    <footer id="footer">
+      <span id="as-of">—</span>
+      <span class="sep">·</span>
+      <span id="fx-note">FX: current snapshot</span>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

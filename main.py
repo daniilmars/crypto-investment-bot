@@ -46,6 +46,15 @@ app = FastAPI()
 application = None
 _background_tasks = []
 
+# Mini App dashboard (dark-launched — dormant until MINIAPP_BASE_URL is set)
+try:
+    from src.api.miniapp_routes import router as _miniapp_router, mount_miniapp_static
+    app.include_router(_miniapp_router, prefix="/api/miniapp")
+    mount_miniapp_static(app)
+except Exception as _miniapp_err:  # pragma: no cover — scaffolding guard
+    import logging as _logging
+    _logging.getLogger(__name__).warning("Mini App routes not mounted: %s", _miniapp_err)
+
 
 # State is managed centrally in bot_state module
 

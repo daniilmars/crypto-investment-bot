@@ -71,7 +71,8 @@ def _get_price_sparkline(symbol: str, hours: int = 24, points: int = 10) -> str:
 
 
 def _dashboard_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
+    import os
+    rows = [
         [
             InlineKeyboardButton("Crypto", callback_data="dash:crypto"),
             InlineKeyboardButton("Stocks", callback_data="dash:stocks"),
@@ -80,7 +81,18 @@ def _dashboard_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("Auto", callback_data="dash:auto"),
             InlineKeyboardButton("Regime", callback_data="dash:regime"),
         ],
-    ])
+    ]
+    base = os.environ.get("MINIAPP_BASE_URL")
+    if base:
+        try:
+            from telegram import WebAppInfo
+            rows.append([InlineKeyboardButton(
+                "📊 Open Mini App",
+                web_app=WebAppInfo(url=f"{base.rstrip('/')}/miniapp/"),
+            )])
+        except Exception as e:  # pragma: no cover — WebAppInfo is in PTB 20+
+            log.debug("WebApp button not added: %s", e)
+    return InlineKeyboardMarkup(rows)
 
 
 def _back_keyboard() -> InlineKeyboardMarkup:
