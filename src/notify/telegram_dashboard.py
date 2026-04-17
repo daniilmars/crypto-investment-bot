@@ -122,9 +122,9 @@ def build_dashboard_message() -> str:
         crypto_positions = _enrich_positions(crypto_positions)
         stock_positions = _enrich_positions(stock_positions)
 
-        # Regime
+        # Regime — escape _ for Markdown-legacy (RISK_ON otherwise starts italic)
         regime = get_macro_regime()
-        regime_name = regime.get('regime', '?')
+        regime_name = regime.get('regime', '?').replace('_', r'\_')
         regime_mult = regime.get('position_size_multiplier', 1.0)
 
         # Circuit breaker
@@ -277,11 +277,12 @@ def build_regime_detail() -> str:
         regime = get_macro_regime()
         regime_emoji = {'RISK_ON': '🟢', 'CAUTION': '🟡', 'RISK_OFF': '🔴'}
         emoji = regime_emoji.get(regime['regime'], '⚪')
+        regime_label = regime['regime'].replace('_', r'\_')
         signals = regime.get('signals', {})
         indicators = regime.get('indicators', {})
 
         lines = [
-            f"{emoji} *Macro Regime: {regime['regime']}*\n",
+            f"{emoji} *Macro Regime: {regime_label}*\n",
             f"*Score:* {regime.get('score', 0)}",
             f"*Multiplier:* {regime['position_size_multiplier']:.1f}x",
             f"*Suppress BUYs:* {'Yes' if regime['suppress_buys'] else 'No'}\n",

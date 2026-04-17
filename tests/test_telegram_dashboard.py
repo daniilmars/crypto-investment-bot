@@ -98,7 +98,8 @@ class TestBuildDashboardMessage:
         msg = build_dashboard_message()
         assert 'DASHBOARD' in msg
         assert 'Portfolio' in msg
-        assert 'RISK_ON' in msg
+        # Underscore is backslash-escaped for Markdown-legacy parser
+        assert 'RISK\\_ON' in msg
         assert 'CB:' in msg
 
     @patch('src.notify.telegram_dashboard.get_last_signal')
@@ -173,7 +174,8 @@ class TestBuildRegimeDetail:
             'indicators': {'vix': 14.3},
         }
         msg = build_regime_detail()
-        assert 'RISK_ON' in msg
+        # Underscore is backslash-escaped for Markdown-legacy parser
+        assert 'RISK\\_ON' in msg
         assert 'VIX' in msg.upper() or 'vix' in msg.lower()
 
 
