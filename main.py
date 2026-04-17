@@ -218,6 +218,22 @@ async def db_cleanup_loop():
             log.error(f"DB cleanup error: {e}", exc_info=True)
 
 
+async def fx_refresh_loop():
+    """Refresh foreign-currency USD rates every 6 hours. Hydrates at startup."""
+    from src.analysis.fx import refresh_all_rates
+    # Initial hydrate on startup so to_usd() hits real rates, not the fallback map
+    try:
+        await asyncio.to_thread(refresh_all_rates)
+    except Exception as e:
+        log.error(f"FX initial refresh error: {e}", exc_info=True)
+    while True:
+        await asyncio.sleep(6 * 3600)
+        try:
+            await asyncio.to_thread(refresh_all_rates)
+        except Exception as e:
+            log.error(f"FX refresh error: {e}", exc_info=True)
+
+
 async def _chat_session_cleanup_loop():
     """Periodically cleans up expired AI chat sessions and watchlist items."""
     while True:
@@ -398,6 +414,7 @@ async def startup_event():
     _background_tasks.append(asyncio.create_task(db_cleanup_loop()))
     _background_tasks.append(asyncio.create_task(db_backup_loop()))
     _background_tasks.append(asyncio.create_task(_chat_session_cleanup_loop()))
+    _background_tasks.append(asyncio.create_task(fx_refresh_loop()))
 
     # Register SIGTERM handler for logging (Uvicorn triggers shutdown hooks)
     def _sigterm_handler(signum, frame):

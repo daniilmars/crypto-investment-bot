@@ -40,7 +40,7 @@ def _cursor(conn):
 # --- Connection Pool (for PostgreSQL) ---
 _pg_pool = None
 
-ALLOWED_TABLES = frozenset({"market_prices", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles", "stoploss_cooldowns", "position_additions", "ipo_events", "macro_regime_history", "source_registry", "signal_attribution", "experiment_log", "tuning_history", "session_peaks", "watchlist_items", "bot_state_kv", "signal_decisions", "sector_convictions", "gemini_assessments", "strategy_scores", "longterm_thesis"})
+ALLOWED_TABLES = frozenset({"market_prices", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles", "stoploss_cooldowns", "position_additions", "ipo_events", "macro_regime_history", "source_registry", "signal_attribution", "experiment_log", "tuning_history", "session_peaks", "watchlist_items", "bot_state_kv", "signal_decisions", "sector_convictions", "gemini_assessments", "strategy_scores", "longterm_thesis", "fx_rates"})
 
 # --- Database Connection Management ---
 
@@ -973,6 +973,20 @@ def initialize_database(db_url=None):
                 generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )'''
         cursor.execute(longterm_thesis_sql)
+
+        # FX Rates (USD-per-unit for foreign-currency ticker normalization)
+        fx_rates_sql = '''
+            CREATE TABLE IF NOT EXISTS fx_rates (
+                currency TEXT PRIMARY KEY,
+                usd_per_unit REAL NOT NULL,
+                fetched_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )''' if is_postgres_conn else '''
+            CREATE TABLE IF NOT EXISTS fx_rates (
+                currency TEXT PRIMARY KEY,
+                usd_per_unit REAL NOT NULL,
+                fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )'''
+        cursor.execute(fx_rates_sql)
 
         # --- Performance indexes ---
         perf_indexes = [
