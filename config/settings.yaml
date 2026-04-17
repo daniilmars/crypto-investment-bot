@@ -128,7 +128,7 @@ settings:
   # -- Risk Management Settings --
   # Optimized via SL/TP sweep on 23-day dataset (Jan 12 – Feb 5, 2026).
   # SL=3.5%/TP=8%: +30.6% return, 55.7% win rate, Sharpe 2.15.
-  trade_risk_percentage: 0.03
+  trade_risk_percentage: 0.05
   stop_loss_percentage: 0.10
   take_profit_percentage: 0.50
   min_trade_notional: 5.00
@@ -334,7 +334,6 @@ settings:
         allow_transition_trading: true
         transition_min_signal_strength: 0.80
       risk_params:
-        risk_pct: 0.03              # 3% of capital per trade (before multipliers)
         stop_loss_percentage: 0.10
         take_profit_percentage: 0.50
         trailing_stop_enabled: true
@@ -400,7 +399,6 @@ settings:
         ignore_risk_off: false
         caution_strength_boost: 0.05
       risk_params:
-        risk_pct: 0.02              # 2% of capital — stays cautious
         stop_loss_percentage: 0.07
         take_profit_percentage: 0.50
         trailing_stop_enabled: true
@@ -429,7 +427,6 @@ settings:
         ignore_risk_off: true
         caution_strength_boost: 0.0
       risk_params:
-        risk_pct: 0.03              # 3% of capital per trade
         stop_loss_percentage: 0.25
         take_profit_percentage: 9.99
         trailing_stop_enabled: false
