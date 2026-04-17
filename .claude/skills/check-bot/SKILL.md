@@ -7,15 +7,18 @@ Check the performance of the deployed crypto-investment-bot on GCE. Run all chec
 
 ## Steps
 
-1. **Health check** — curl the health endpoint:
+1. **VM status + IP** — look up the current external IP dynamically (the ephemeral IP rotates across preemptions/restarts):
    ```
-   curl -s --max-time 10 http://35.198.169.161:8080/health
+   gcloud compute instances describe crypto-bot-eu --zone=europe-west3-a \
+     --format="value(status,networkInterfaces[0].accessConfigs[0].natIP)"
    ```
+   Status first, IP second. If status is not RUNNING, stop here and offer a restart (see bottom).
 
-2. **VM status** — check if the GCE instance is running:
+2. **Health check** — curl the health endpoint at the IP from step 1:
    ```
-   gcloud compute instances describe crypto-bot-eu --zone=europe-west3-a --format="value(status)"
+   curl -s --max-time 10 http://<IP>:8080/health
    ```
+   A single 503 is not a fault — the bot returns 503 during the ~10s active-cycle window every 15 min. Retry once if the first call fails.
 
 3. **GitHub Actions status** — check recent workflow runs:
    ```

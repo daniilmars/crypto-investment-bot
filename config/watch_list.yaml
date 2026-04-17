@@ -273,7 +273,6 @@ stocks:
   # Shipping (3)
   - FRO
   - STNG
-  - EURN
 
 # --- Commodity & Fixed Income ETFs ---
 stocks_macro:
@@ -403,7 +402,6 @@ stocks_europe:
   - RKT.L
   - WPP.L
   - AD.AS
-  - NZYM-B.CO
   - FLTR.L
   - KNEBV.HE
   - IHG.L

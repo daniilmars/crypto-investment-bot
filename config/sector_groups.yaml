@@ -219,7 +219,7 @@ groups:
 
   shipping_tankers:
     max_positions: 1
-    symbols: [FRO, STNG, EURN, MAERSK-B.CO]
+    symbols: [FRO, STNG, MAERSK-B.CO]
 
   automotive:
     max_positions: 2
@@ -273,7 +273,7 @@ groups:
 
   materials:
     max_positions: 2
-    symbols: [LIN, APD, SHW, FCX, GOLD, ALB, NEM, NUE, ECL, BAS.DE, AI.PA, GLEN.L, AAL.L, RIO.L, UPM.HE, NZYM-B.CO, 4063.T, "051910.KS", BHP.AX, FMG.AX]
+    symbols: [LIN, APD, SHW, FCX, GOLD, ALB, NEM, NUE, ECL, BAS.DE, AI.PA, GLEN.L, AAL.L, RIO.L, UPM.HE, 4063.T, "051910.KS", BHP.AX, FMG.AX]
 
   it_services:
     max_positions: 2

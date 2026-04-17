@@ -31,7 +31,11 @@ def _get_alpaca_client():
     api_secret = app_config.get('api_keys', {}).get('alpaca', {}).get('api_secret')
 
     if not api_key or not api_secret:
-        log.error("ALPACA_API_KEY and ALPACA_API_SECRET must be set for stock trading.")
+        broker = app_config.get('settings', {}).get('stock_trading', {}).get('broker', 'paper_only')
+        if broker == 'alpaca':
+            log.error("ALPACA_API_KEY and ALPACA_API_SECRET must be set for stock trading.")
+        else:
+            log.debug("Alpaca keys unset; stock_trading.broker=%s — skipping live client init.", broker)
         return None
 
     stock_settings = app_config.get('settings', {}).get('stock_trading', {})

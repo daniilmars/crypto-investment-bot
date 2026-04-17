@@ -45,10 +45,23 @@ jobs:
             --zone=${{ env.ZONE }} \
             --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
           echo "VM IP: $EXTERNAL_IP"
-          RESPONSE=$(curl -sf --max-time 15 "http://${EXTERNAL_IP}:8080/health" || true)
+
+          # The bot returns 503 for ~10s during each 15-min cycle while it
+          # holds DB connections. Retry once after 30s to ride out that window.
+          # Accept any response with a "status" field as proof of life;
+          # only fail if both attempts return no valid JSON body.
+          check() {
+            curl -s --max-time 15 "http://${EXTERNAL_IP}:8080/health" 2>&1
+          }
+          RESPONSE=$(check)
+          if ! echo "$RESPONSE" | grep -q '"status"'; then
+            echo "First attempt returned no valid body — retrying in 30s"
+            sleep 30
+            RESPONSE=$(check)
+          fi
           if echo "$RESPONSE" | grep -q '"status"'; then
-            echo "Bot is healthy: $RESPONSE"
+            echo "Bot is alive: $RESPONSE"
           else
-            echo "::error::Health check failed — bot may be down (IP: $EXTERNAL_IP)"
+            echo "::error::Health check failed after retry — bot may be down (IP: $EXTERNAL_IP)"
             exit 1
           fi
