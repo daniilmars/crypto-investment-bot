@@ -12,7 +12,6 @@ import time
 from pathlib import Path
 
 from fastapi import APIRouter, Depends
-from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.api.miniapp_auth import miniapp_auth
