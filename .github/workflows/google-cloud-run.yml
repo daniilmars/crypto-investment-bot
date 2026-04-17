@@ -76,6 +76,9 @@ jobs:
           GCP_BILLING_ACCOUNT_ID=${{ secrets.GCP_BILLING_ACCOUNT_ID }}
           SERVICE_URL=${{ secrets.SERVICE_URL }}
           ENABLE_FILE_LOGGING=true
+          MINIAPP_BASE_URL=${{ secrets.MINIAPP_BASE_URL }}
+          MINIAPP_AUTH_MAX_AGE_SEC=86400
+          MINIAPP_API_CACHE_TTL_SEC=20
           EOF
           sed -i 's/^[[:space:]]*//' .env
 
