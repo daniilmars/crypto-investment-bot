@@ -21,18 +21,54 @@ from src.analysis.macro_regime import get_macro_regime
 from src.database import get_last_signal, get_price_history_since
 
 
+def _latest_price_from_db(symbol: str) -> float | None:
+    """Read the most recent price for a symbol from market_prices (no HTTP)."""
+    import psycopg2
+    from src.database import get_db_connection, release_db_connection, _cursor
+    conn = None
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return None
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        placeholder = "%s" if is_pg else "?"
+        with _cursor(conn) as cur:
+            cur.execute(
+                f"SELECT price FROM market_prices WHERE symbol = {placeholder} "
+                f"ORDER BY timestamp DESC LIMIT 1",
+                (symbol,),
+            )
+            row = cur.fetchone()
+        if not row:
+            return None
+        return float(row[0]) if not isinstance(row, dict) else float(row.get("price") or 0)
+    except Exception as e:
+        log.debug("DB price lookup failed for %s: %s", symbol, e)
+        return None
+    finally:
+        if conn is not None:
+            try:
+                release_db_connection(conn)
+            except Exception:
+                pass
+
+
 def _get_position_price(symbol):
-    """Gets current price for a position, using the appropriate data source."""
-    stock_watch_list = app_config.get('settings', {}).get(
-        'stock_trading', {}).get('watch_list', [])
-    if symbol in stock_watch_list:
-        from src.collectors.alpha_vantage_data import get_stock_price
-        price_data = get_stock_price(symbol)
-        return price_data.get('price', 0) if price_data else 0
-    else:
-        from src.collectors.binance_data import get_current_price
-        price_data = get_current_price(f"{symbol}USDT")
-        return float(price_data.get('price', 0)) if price_data else 0
+    """Get a current-ish price for dashboard display.
+
+    Reads from the market_prices table populated each cycle. Avoids per-call
+    HTTPS fetches (Alpha Vantage fallback to yfinance was 10-20s each, which
+    hung the /dashboard command for minutes on a 24-position portfolio).
+    """
+    # Try exact symbol first (stocks: "NVDA", crypto: "BTC" after strip)
+    price = _latest_price_from_db(symbol)
+    if price is not None:
+        return price
+    # Crypto stored in market_prices with USDT suffix
+    price = _latest_price_from_db(f"{symbol}USDT")
+    if price is not None:
+        return price
+    return 0
 
 
 def _enrich_positions(positions: list) -> list:
