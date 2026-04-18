@@ -239,6 +239,20 @@ settings:
     earnings_growth_sell_threshold: -10
     volume_spike_multiplier: 1.5
 
+    # First market-open cycle after an idle gap (weekend, holiday, outage)
+    # prioritizes symbols with high-confidence Gemini signals accumulated
+    # during the gap. Order-only — does NOT bypass any existing gate.
+    fast_path:
+      enabled: true
+      dry_run: true              # PR 1: log only, no reorder. Flip false after verify.
+      lookback_hours: 72
+      min_effective_confidence: 0.35
+      max_priority_symbols: 10
+      catalyst_half_life_hours: 72
+      idle_gap_hours: 2
+      alert_telegram: true
+      exclude_symbols: []
+
   # -- Signal Confirmation Settings --
   # Require manual Telegram approval before executing BUY/SELL trades.
   # Protective exits (SL/TP/trailing) are NEVER gated by confirmation.

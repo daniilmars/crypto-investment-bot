@@ -921,6 +921,12 @@ def initialize_database(db_url=None):
             "CREATE INDEX IF NOT EXISTS idx_gemini_assess_symbol "
             "ON gemini_assessments (symbol, created_at)"
         )
+        # Supports fast_path lookback: "WHERE created_at >= now - Nh
+        # AND confidence >= X" — created_at-leading index for the range scan.
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_gemini_assess_created_conf "
+            "ON gemini_assessments (created_at, confidence)"
+        )
 
         # Strategy Scores (per-strategy effective strength for backtesting)
         strategy_scores_sql = '''

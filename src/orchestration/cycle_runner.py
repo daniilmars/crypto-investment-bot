@@ -857,6 +857,54 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
         log.info("NYSE is closed. Skipping stock cycle.")
         return {}
 
+    # --- Fast-path: prioritize high-confidence Gemini signals accumulated
+    # during the previous idle gap (weekend/holiday/outage). Order-only —
+    # all gates (RSI/SMA, cooldown, circuit breaker, sector limits) still apply.
+    fast_path_cfg = stock_settings.get('fast_path', {})
+    if fast_path_cfg.get('enabled', False):
+        try:
+            from src.orchestration.fast_path import (
+                check_and_build_priority_list, persist_trigger,
+                format_alert_message, apply_priority_order,
+            )
+            priority_info, idle_h = await asyncio.to_thread(
+                check_and_build_priority_list, watch_list, fast_path_cfg)
+            if priority_info:
+                priority_symbols = [p['symbol'] for p in priority_info]
+                dry = fast_path_cfg.get('dry_run', False)
+                if not dry:
+                    watch_list = apply_priority_order(priority_symbols, watch_list)
+                    log.info(
+                        f"Fast-path activated: prioritizing "
+                        f"{len(priority_symbols)} symbols after {idle_h:.1f}h "
+                        f"idle gap: {priority_symbols}"
+                    )
+                else:
+                    log.info(
+                        f"Fast-path DRY-RUN: would prioritize "
+                        f"{priority_symbols} after {idle_h:.1f}h idle gap"
+                    )
+                for p in priority_info:
+                    log.debug(
+                        f"  {p['symbol']}: eff={p['eff']:.2f} "
+                        f"raw={p['raw']:.2f} age={p['age_h']:.1f}h "
+                        f"catalyst={p['catalyst_type']}"
+                    )
+                if fast_path_cfg.get('alert_telegram', True):
+                    try:
+                        from src.notify.telegram_bot import send_telegram_alert
+                        await send_telegram_alert({
+                            'signal': 'INFO', 'symbol': 'FAST_PATH',
+                            'reason': format_alert_message(
+                                priority_info, idle_h, dry_run=dry),
+                            'asset_type': 'system',
+                        })
+                    except Exception as e:
+                        log.debug(f"Fast-path Telegram alert failed: {e}")
+                await asyncio.to_thread(persist_trigger)
+        except Exception as e:
+            log.error(f"Fast-path error (non-fatal): {e}", exc_info=True)
+
     log.info(f"--- Starting stock trading cycle for {len(watch_list)} symbols (broker={broker}) ---")
 
     # Load stock-specific settings
@@ -1199,6 +1247,14 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                     strategy_config=strat_cfg)
 
     log.info("--- Stock trading cycle complete ---")
+
+    # Persist cycle-complete timestamp so fast_path can detect idle gaps
+    # on the NEXT cycle after a weekend/holiday/outage.
+    try:
+        from src.orchestration.fast_path import persist_cycle_complete
+        await asyncio.to_thread(persist_cycle_complete)
+    except Exception as e:
+        log.debug(f"fast_path cycle-complete persist failed (non-fatal): {e}")
 
     # Return stock prices for dashboard enrichment
     return {sym: stock_batch_prices[sym]['price']
