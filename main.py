@@ -543,7 +543,12 @@ async def handle_webhook(request: Request):
     try:
         data = await request.json()
         update = Update.de_json(data, application.bot)
-        await application.process_update(update)
+        if update is None:
+            return {"status": "ignored"}
+        # Enqueue and return 200 immediately. Telegram times out the POST at
+        # ~60s; during a cycle, handlers like /dashboard can exceed that.
+        # The application worker processes the update off the request path.
+        await application.update_queue.put(update)
         return {"status": "ok"}
     except Exception as e:
         log.error(f"Error processing webhook: {e}", exc_info=True)
