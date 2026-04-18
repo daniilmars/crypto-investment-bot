@@ -237,17 +237,7 @@
 
   // ------------------------------------------------------------ refresh loop
 
-  function setDebug(text) {
-    const banner = document.getElementById('debug-banner');
-    if (banner) banner.textContent = `debug: ${text}`;
-    const el = document.getElementById('as-of');
-    if (el) el.textContent = text;
-  }
-
-  setDebug(`boot: tg=${!!tg} initData=${state.initData.length}ch ua=${navigator.userAgent.slice(0,50)}`);
-
   async function refreshAll() {
-    setDebug(`tg=${!!tg} initData=${state.initData.length}ch — fetching…`);
     try {
       const [summary, positions, equity] = await Promise.all([
         api('/api/miniapp/summary'),
@@ -258,16 +248,10 @@
       renderPositions(positions);
       renderEquity(equity);
     } catch (err) {
-      toast(`Update failed: ${err.message}`, 0);
-      setDebug(`ERR: ${err.message}`);
+      toast(`Update failed: ${err.message}`);
       console.error('refreshAll error', err);
     }
   }
-
-  window.addEventListener('error', (e) => {
-    const el = document.getElementById('as-of');
-    if (el) el.textContent = `JS err: ${e.message}`;
-  });
 
   function startTimer() {
     stopTimer();
