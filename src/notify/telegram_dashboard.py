@@ -310,14 +310,21 @@ def build_regime_detail() -> str:
 
 async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /dashboard command."""
+    import asyncio
     try:
-        msg = build_dashboard_message()
+        # build_dashboard_message is synchronous and does many DB queries + HTTP
+        # price fetches. Run it on a thread so the asyncio event loop stays
+        # responsive for other handlers and the /webhook request path.
+        msg = await asyncio.to_thread(build_dashboard_message)
         await update.message.reply_text(
             msg, parse_mode='Markdown', reply_markup=_dashboard_keyboard()
         )
     except Exception as e:
         log.error(f"Error in /dashboard: {e}", exc_info=True)
-        await update.message.reply_text("Error loading dashboard.")
+        try:
+            await update.message.reply_text("Error loading dashboard.")
+        except Exception:
+            pass
 
 
 async def handle_dashboard_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
