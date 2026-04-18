@@ -188,8 +188,9 @@ def build_dashboard_message() -> str:
             lines.append("*Top Movers:*")
             for pos in top_movers:
                 symbol = pos.get('symbol', '?')
-                sparkline = _get_price_sparkline(symbol)
-                lines.append(f"  {format_position_line(symbol, pos['pnl_pct'], pos['current_price'], sparkline)}")
+                # Sparklines skipped — each pulled 5k+ price rows and
+                # serialized /dashboard replies. The Mini App has charts.
+                lines.append(f"  {format_position_line(symbol, pos['pnl_pct'], pos['current_price'], '')}")
             lines.append("")
 
         if last_signal:
