@@ -1847,11 +1847,18 @@ async def start_bot() -> Application:
         application.add_error_handler(_error_handler)
         await application.initialize()
         await application.start()
-        log.info("Deleting any existing webhooks...")
-        await application.bot.delete_webhook()
-        log.info("Calling application.updater.start_polling...")
-        await application.updater.start_polling(drop_pending_updates=True)
-        log.info("Telegram bot started successfully and polling initiated.")
+        # Polling vs webhook: skip polling if SERVICE_URL is set, the webhook
+        # will be configured later in main.startup() and Telegram will POST
+        # updates to /webhook. Polling on an e2-micro is starved by the cycle.
+        import os as _os
+        if _os.environ.get("SERVICE_URL"):
+            log.info("SERVICE_URL set — skipping polling, using webhook mode.")
+        else:
+            log.info("Deleting any existing webhooks...")
+            await application.bot.delete_webhook()
+            log.info("Calling application.updater.start_polling...")
+            await application.updater.start_polling(drop_pending_updates=True)
+            log.info("Telegram bot started successfully and polling initiated.")
         return application
     except Exception as e:
         log.error(f"Failed to start Telegram bot: {e}", exc_info=True)
