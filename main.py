@@ -243,6 +243,47 @@ async def fx_refresh_loop():
             log.error(f"FX refresh error: {e}", exc_info=True)
 
 
+async def source_review_loop():
+    """Daily news-source review: recomputes reliability scores, deactivates
+    stale/error-prone feeds, promotes high-performers. All the logic lives in
+    feedback_loop.run_daily_source_review — this just schedules it."""
+    fb_cfg = app_config.get('settings', {}).get('autonomous_bot', {}).get(
+        'feedback_loop', {})
+    if not fb_cfg.get('enabled', False):
+        log.info("source_review_loop: feedback_loop disabled in config, not scheduling")
+        return
+    target_hour = fb_cfg.get('daily_review_hour_utc', 3)
+    while True:
+        now = datetime.now(timezone.utc)
+        next_run = now.replace(hour=target_hour, minute=0, second=0, microsecond=0)
+        if next_run <= now:
+            next_run += timedelta(days=1)
+        wait_seconds = (next_run - now).total_seconds()
+        await asyncio.sleep(wait_seconds)
+        try:
+            from src.analysis.feedback_loop import run_daily_source_review
+            result = await asyncio.to_thread(run_daily_source_review)
+            if result and not result.get('skipped'):
+                log.info(
+                    f"Daily source review: {result.get('scores_updated', 0)} scores "
+                    f"updated, {len(result.get('promoted', []))} promoted, "
+                    f"{len(result.get('deactivated', []))} deactivated"
+                )
+                # Alert on significant deactivations
+                deactivated = result.get('deactivated', [])
+                if deactivated:
+                    from src.notify.telegram_bot import send_telegram_alert
+                    await send_telegram_alert({
+                        'signal': 'INFO', 'symbol': 'SOURCES',
+                        'reason': f"Deactivated {len(deactivated)} feed(s): "
+                                  f"{', '.join(deactivated[:5])}"
+                                  f"{' …' if len(deactivated) > 5 else ''}",
+                        'asset_type': 'system',
+                    })
+        except Exception as e:
+            log.error(f"Source review error: {e}", exc_info=True)
+
+
 async def _chat_session_cleanup_loop():
     """Periodically cleans up expired AI chat sessions and watchlist items."""
     while True:
@@ -424,6 +465,7 @@ async def startup_event():
     _background_tasks.append(asyncio.create_task(db_backup_loop()))
     _background_tasks.append(asyncio.create_task(_chat_session_cleanup_loop()))
     _background_tasks.append(asyncio.create_task(fx_refresh_loop()))
+    _background_tasks.append(asyncio.create_task(source_review_loop()))
 
     # Register SIGTERM handler for logging (Uvicorn triggers shutdown hooks)
     def _sigterm_handler(signum, frame):

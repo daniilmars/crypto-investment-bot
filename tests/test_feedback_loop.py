@@ -194,3 +194,150 @@ def test_daily_review_disabled():
     result = run_daily_source_review()
     assert result.get('skipped') is True
     assert 'disabled' in result.get('reason', '')
+
+
+# -------- stale-feed deactivation --------
+
+from datetime import datetime, timezone, timedelta
+
+
+def test_parse_ts_handles_iso_string_and_none():
+    from src.analysis.feedback_loop import _parse_ts
+    assert _parse_ts(None) is None
+    dt = _parse_ts("2026-04-10T12:00:00+00:00")
+    assert dt is not None and dt.tzinfo is not None
+    # Naive string gets UTC tz attached
+    dt2 = _parse_ts("2026-04-10 12:00:00")
+    assert dt2 is not None and dt2.tzinfo is not None
+
+
+def test_is_stale_when_older_than_cutoff():
+    from src.analysis.feedback_loop import _is_stale
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=14)
+    old = (now - timedelta(days=30)).isoformat()
+    recent = (now - timedelta(days=2)).isoformat()
+    assert _is_stale(old, cutoff) is True
+    assert _is_stale(recent, cutoff) is False
+
+
+def test_is_stale_returns_true_for_unknown_last_article():
+    from src.analysis.feedback_loop import _is_stale
+    cutoff = datetime.now(timezone.utc) - timedelta(days=14)
+    assert _is_stale(None, cutoff) is True
+
+
+def test_days_since():
+    from src.analysis.feedback_loop import _days_since
+    now = datetime.now(timezone.utc)
+    assert _days_since((now - timedelta(days=5)).isoformat(), now) == 5
+    assert _days_since(None, now) is None
+
+
+@patch('src.analysis.feedback_loop.app_config', {
+    'settings': {'autonomous_bot': {
+        'feedback_loop': {
+            'enabled': True, 'min_trades_for_scoring': 5,
+            'stale_days_threshold': 14,
+        },
+        'source_discovery': {
+            'promotion_threshold': 0.6, 'demotion_threshold': 0.2,
+        },
+    }}
+})
+@patch('src.analysis.feedback_loop._log_experiment')
+@patch('src.analysis.feedback_loop._calculate_reliability_score')
+def test_run_daily_review_deactivates_stale_feed(mock_score, mock_log):
+    """A feed with 20+ historical articles but >14 days silent gets deactivated."""
+    mock_score.return_value = 0.6  # high enough to avoid demotion by score
+    stale_last = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+
+    with patch('src.collectors.source_registry.get_all_sources') as m_get, \
+         patch('src.collectors.source_registry.update_reliability_score') as m_rel, \
+         patch('src.collectors.source_registry.deactivate_source') as m_deact, \
+         patch('src.collectors.source_registry.promote_source'):
+        m_get.return_value = [{
+            'id': 42, 'source_name': 'Dead Feed', 'tier': 2,
+            'articles_total': 200, 'articles_with_signals': 0,
+            'consecutive_errors': 0, 'profitable_signal_ratio': 0,
+            'last_article_at': stale_last,
+        }]
+        from src.analysis.feedback_loop import run_daily_source_review
+        actions = run_daily_source_review()
+
+    m_rel.assert_called_once()
+    m_deact.assert_called_once()
+    args = m_deact.call_args[0]
+    assert args[0] == 42
+    assert 'stale' in args[1]  # reason mentions stale
+    assert 'Dead Feed' in actions['deactivated']
+
+
+@patch('src.analysis.feedback_loop.app_config', {
+    'settings': {'autonomous_bot': {
+        'feedback_loop': {
+            'enabled': True, 'min_trades_for_scoring': 5,
+            'stale_days_threshold': 14,
+        },
+        'source_discovery': {
+            'promotion_threshold': 0.6, 'demotion_threshold': 0.2,
+        },
+    }}
+})
+@patch('src.analysis.feedback_loop._log_experiment')
+@patch('src.analysis.feedback_loop._calculate_reliability_score')
+def test_run_daily_review_preserves_active_feed(mock_score, mock_log):
+    """Recently-active feed is NOT deactivated."""
+    mock_score.return_value = 0.6
+    recent_last = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+
+    with patch('src.collectors.source_registry.get_all_sources') as m_get, \
+         patch('src.collectors.source_registry.update_reliability_score'), \
+         patch('src.collectors.source_registry.deactivate_source') as m_deact, \
+         patch('src.collectors.source_registry.promote_source'):
+        m_get.return_value = [{
+            'id': 1, 'source_name': 'Active Feed', 'tier': 2,
+            'articles_total': 500, 'articles_with_signals': 50,
+            'consecutive_errors': 0, 'profitable_signal_ratio': 0.5,
+            'last_article_at': recent_last,
+        }]
+        from src.analysis.feedback_loop import run_daily_source_review
+        actions = run_daily_source_review()
+
+    m_deact.assert_not_called()
+    assert actions['deactivated'] == []
+
+
+@patch('src.analysis.feedback_loop.app_config', {
+    'settings': {'autonomous_bot': {
+        'feedback_loop': {
+            'enabled': True, 'min_trades_for_scoring': 5,
+            'stale_days_threshold': 14,
+        },
+        'source_discovery': {
+            'promotion_threshold': 0.6, 'demotion_threshold': 0.2,
+        },
+    }}
+})
+@patch('src.analysis.feedback_loop._log_experiment')
+@patch('src.analysis.feedback_loop._calculate_reliability_score')
+def test_run_daily_review_spares_new_seed_without_articles(mock_score, mock_log):
+    """Fresh seed with <20 articles and no last_article_at is NOT deactivated
+    — gives brand-new sources time to start producing."""
+    mock_score.return_value = 0.5
+
+    with patch('src.collectors.source_registry.get_all_sources') as m_get, \
+         patch('src.collectors.source_registry.update_reliability_score'), \
+         patch('src.collectors.source_registry.deactivate_source') as m_deact, \
+         patch('src.collectors.source_registry.promote_source'):
+        m_get.return_value = [{
+            'id': 7, 'source_name': 'New Seed', 'tier': 3,
+            'articles_total': 3, 'articles_with_signals': 0,
+            'consecutive_errors': 0, 'profitable_signal_ratio': 0,
+            'last_article_at': None,
+        }]
+        from src.analysis.feedback_loop import run_daily_source_review
+        actions = run_daily_source_review()
+
+    m_deact.assert_not_called()
+    assert actions['deactivated'] == []

@@ -594,6 +594,9 @@ settings:
       daily_review_hour_utc: 3
       min_trades_for_scoring: 5
       reliability_decay_days: 90
+      # Feeds producing zero new articles for this many days are deactivated
+      # even if the HTTP fetch itself didn't fail (silently-dead feeds).
+      stale_days_threshold: 14
 
     auto_tuner:
       enabled: true

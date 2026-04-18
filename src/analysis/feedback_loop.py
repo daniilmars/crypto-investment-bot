@@ -18,6 +18,42 @@ def _ph(is_pg):
     return "%s" if is_pg else "?"
 
 
+def _parse_ts(value):
+    """Parse a timestamp value (ISO string, datetime) to tz-aware datetime, or None."""
+    if value is None:
+        return None
+    from datetime import datetime, timezone
+    if hasattr(value, "tzinfo"):  # already datetime-like
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return None
+
+
+def _is_stale(last_article_at, cutoff):
+    """True if last_article_at is older than cutoff, or completely unknown AND
+    the source has had activity (caller guards with articles_total >= 20)."""
+    ts = _parse_ts(last_article_at)
+    if ts is None:
+        # Never recorded an article despite being seeded — treat as stale so
+        # the review eventually prunes seed rows that never produced data.
+        return True
+    return ts < cutoff
+
+
+def _days_since(value, now):
+    ts = _parse_ts(value)
+    if ts is None:
+        return None
+    return max(0, int((now - ts).total_seconds() // 86400))
+
+
 def process_closed_trade(order_id, pnl, pnl_pct=None, duration_hours=None,
                          exit_reason=None):
     """Process a closed trade: resolve attribution and update source scores.
@@ -107,9 +143,17 @@ def run_daily_source_review():
     min_trades = fb_config.get('min_trades_for_scoring', 5)
     promotion_threshold = disc_config.get('promotion_threshold', 0.6)
     demotion_threshold = disc_config.get('demotion_threshold', 0.2)
+    # Stale threshold: deactivate if a feed has gone >N days without any new
+    # article even when the fetch itself isn't failing. Catches silently-dead
+    # feeds (URL moved, site paywalled, RSS emptied). 14d by default.
+    stale_days = fb_config.get('stale_days_threshold', 14)
 
     sources = get_all_sources(include_inactive=False)
     actions = {'promoted': [], 'demoted': [], 'deactivated': [], 'scores_updated': 0}
+
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+    stale_cutoff = now - timedelta(days=stale_days)
 
     for source in sources:
         source_id = source['id']
@@ -117,17 +161,30 @@ def run_daily_source_review():
         total_articles = source.get('articles_total') or 0
         consecutive_errors = source.get('consecutive_errors') or 0
         tier = source.get('tier', 2)
+        last_article_at = source.get('last_article_at')
 
         # Calculate reliability score
         score = _calculate_reliability_score(source)
         update_reliability_score(source_id, score)
         actions['scores_updated'] += 1
 
-        # Auto-deactivate: too many errors or zero articles in 14 days
+        # Auto-deactivate: too many consecutive errors
         if consecutive_errors > 50:
             deactivate_source(source_id, f'consecutive_errors={consecutive_errors}')
             _log_experiment('source_demotion', f"Deactivated '{source['source_name']}': "
                            f"{consecutive_errors} consecutive errors",
+                           old_value=str(tier), new_value='inactive')
+            actions['deactivated'].append(source['source_name'])
+            continue
+
+        # Auto-deactivate: stale feed. Only apply to sources that once yielded
+        # articles (articles_total >= 20) to avoid killing brand-new seeds.
+        if total_articles >= 20 and _is_stale(last_article_at, stale_cutoff):
+            days = _days_since(last_article_at, now)
+            reason = f'stale_{days}d' if days is not None else 'stale_feed'
+            deactivate_source(source_id, reason)
+            _log_experiment('source_demotion', f"Deactivated '{source['source_name']}': "
+                           f"no new articles in {days} days",
                            old_value=str(tier), new_value='inactive')
             actions['deactivated'].append(source['source_name'])
             continue
