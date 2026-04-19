@@ -396,7 +396,8 @@ async def run_bot_cycle():
                         pos_risk['take_profit_pct'] = position['dynamic_tp_pct']
                     result = await monitor_position(
                         position, current_price, **pos_risk,
-                        mode_label=trading_mode.upper())
+                        mode_label=trading_mode.upper(),
+                        time_stop_cfg=None)
                     if result != 'none':
                         _cached_crypto_positions = await asyncio.to_thread(
                             get_open_positions, trading_strategy='manual')
@@ -594,7 +595,8 @@ async def run_bot_cycle():
                         pos_risk['take_profit_pct'] = position['dynamic_tp_pct']
                     result = await monitor_position(
                         position, current_price, **pos_risk,
-                        trading_strategy=strat_name, mode_label=strat_label)
+                        trading_strategy=strat_name, mode_label=strat_label,
+                        time_stop_cfg=strat_cfg.get('risk_params', {}).get('time_stop'))
                     if result != 'none':
                         _cached_strategy_positions[strat_name] = await asyncio.to_thread(
                             get_open_positions, trading_strategy=strat_name)
@@ -1027,7 +1029,8 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                 if position['symbol'] == symbol and position['status'] == 'OPEN':
                     result = await monitor_position(
                         position, current_price, **risk_cfg,
-                        asset_type='stock', mode_label=trading_mode_label)
+                        asset_type='stock', mode_label=trading_mode_label,
+                        time_stop_cfg=None)
 
                     if result != 'none':
                         _cached_stock_positions = await asyncio.to_thread(
@@ -1195,7 +1198,8 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                 if position['symbol'] == symbol and position['status'] == 'OPEN':
                     result = await monitor_position(
                         position, current_price, **risk_cfg,
-                        asset_type='stock', trading_strategy=strat_name, mode_label=strat_label)
+                        asset_type='stock', trading_strategy=strat_name, mode_label=strat_label,
+                        time_stop_cfg=strat_cfg.get('risk_params', {}).get('time_stop'))
                     if result != 'none':
                         _cached_strategy_stock_positions[strat_name] = await asyncio.to_thread(
                             get_open_positions, asset_type='stock', trading_strategy=strat_name)

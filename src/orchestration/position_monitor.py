@@ -13,6 +13,7 @@ from src.execution.binance_trader import place_order
 from src.logger import log
 from src.notify.telegram_bot import send_telegram_alert
 from src.orchestration import bot_state
+from src.orchestration.time_stop import should_time_stop
 from src.analysis.feedback_loop import process_closed_trade
 
 
@@ -53,10 +54,11 @@ async def monitor_position(
     asset_type: str = 'crypto',
     trading_strategy: str = 'manual',
     mode_label: str = 'PAPER',
+    time_stop_cfg: dict | None = None,
 ) -> str:
     """Monitor a single open position for SL/TP/trailing stop triggers.
 
-    Returns 'trailing_stop', 'stop_loss', 'take_profit', or 'none'.
+    Returns 'trailing_stop', 'stop_loss', 'take_profit', 'time_stop', or 'none'.
     """
     symbol = position['symbol']
     entry_price = position['entry_price']
@@ -153,6 +155,43 @@ async def monitor_position(
             symbol, trading_strategy, entry_price, current_price,
             qty, pnl_pct, position.get('entry_timestamp'), 'take_profit')
         return 'take_profit'
+
+    # --- Time-stop (slow-drift positions; fires last, after all protective exits) ---
+    fire_time_stop, ts_reason = should_time_stop(
+        position, current_price, time_stop_cfg, trading_strategy)
+    if fire_time_stop:
+        dry_run = bool(time_stop_cfg.get('dry_run', True))
+        if dry_run:
+            log.info(
+                f"[{mode_label}] TIME-STOP CANDIDATE (dry_run) {symbol} "
+                f"{trading_strategy}: {ts_reason}")
+            return 'none'
+
+        log.info(f"[{mode_label}] Time-stop triggered for {symbol}. {ts_reason}")
+        place_order(symbol, "SELL", qty, current_price,
+                    existing_order_id=order_id, exit_reason='time_stop', **order_kw)
+        _cleanup_position_state(order_id, is_auto)
+        if asset_type == 'stock':
+            from src.execution.stock_trader import _is_same_day_trade, _record_day_trade
+            if _is_same_day_trade(position):
+                _record_day_trade()
+                log.info(f"PDT: recorded day trade for {symbol}")
+        _resolve_trade_attribution(order_id, pnl_pct, entry_price,
+                                   current_price, 'time_stop')
+        # Short BUY cooldown to prevent immediate re-entry on the same signal.
+        signal_cooldown_hours = app_config.get('settings', {}).get(
+            'signal_cooldown_hours', 4)
+        expires = datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours)
+        if is_auto:
+            bot_state.set_auto_signal_cooldown(symbol, "BUY", expires)
+        else:
+            bot_state.set_signal_cooldown(symbol, "BUY", expires)
+        bot_state.strategy_record_trade_outcome(
+            trading_strategy, is_win=(pnl_pct > 0))
+        await _send_trade_exit_alert(
+            symbol, trading_strategy, entry_price, current_price,
+            qty, pnl_pct, position.get('entry_timestamp'), 'time_stop')
+        return 'time_stop'
 
     return 'none'
 

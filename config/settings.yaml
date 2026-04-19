@@ -374,6 +374,15 @@ settings:
         trailing_stop_enabled: true
         trailing_stop_activation: 0.05
         trailing_stop_distance: 0.02
+        # Close slow-drift positions that never trigger SL/TP/trailing.
+        # Fires when age >= max_hold_days AND -max_loss_pct < pnl_pct < min_gain_pct.
+        # dry_run=true: log candidates only (no close). Flip after observing ≥1 cycle.
+        time_stop:
+          enabled: true
+          dry_run: true
+          max_hold_days: 14
+          min_gain_pct: 0.02
+          max_loss_pct: 0.05
       weights:
         base_confidence: 1.0
         hype_multiplier: 1.0
@@ -439,6 +448,12 @@ settings:
         trailing_stop_enabled: true
         trailing_stop_activation: 0.03
         trailing_stop_distance: 0.015
+        time_stop:
+          enabled: true
+          dry_run: true
+          max_hold_days: 21
+          min_gain_pct: 0.02
+          max_loss_pct: 0.04
       weights:
         base_confidence: 0.8
         hype_multiplier: 0.6
