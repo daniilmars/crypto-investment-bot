@@ -209,6 +209,120 @@ class TestAutoIncreaseRouting:
         mock_balance.assert_called_once_with(asset_type='crypto', trading_strategy='auto')
 
 
+class TestIncreaseClearsTrailingPeak:
+    """Feature 5.1: successful INCREASE clears the trailing-stop peak so the
+    next trailing check re-baselines from the new average entry price."""
+
+    @patch('src.orchestration.position_analyst.bot_state')
+    @patch('src.orchestration.position_analyst.add_to_position')
+    @patch('src.orchestration.position_analyst.get_account_balance')
+    def test_increase_success_clears_strategy_trailing_peak(
+        self, mock_balance, mock_add, mock_state,
+    ):
+        from src.orchestration.position_analyst import _handle_increase
+
+        mock_balance.return_value = {'USDT': 100_000}
+        position = _make_position(entry_price=50000, quantity=0.01)
+        result_dict = {'increase_sizing_hint': 'small'}
+        analyst_cfg = {'max_position_multiplier': 3.0}
+
+        run_async(_handle_increase(
+            position, 'BTC', 51000.0, 50000.0,
+            [], result_dict, 'bullish', analyst_cfg, 'crypto',
+            is_auto=True))
+
+        mock_add.assert_called_once()
+        mock_state.strategy_clear_trailing_stop.assert_called_once_with(
+            position['order_id'], 'auto')
+
+    @patch('src.orchestration.position_analyst.bot_state')
+    @patch('src.orchestration.position_analyst.add_to_position')
+    @patch('src.orchestration.position_analyst.get_account_balance')
+    @patch('src.orchestration.position_analyst.send_telegram_alert', new_callable=AsyncMock)
+    def test_increase_blocked_by_cap_does_not_clear(
+        self, mock_alert, mock_balance, mock_add, mock_state,
+    ):
+        from src.orchestration.position_analyst import _handle_increase
+
+        mock_balance.return_value = {'USDT': 100_000}
+        # additions list large enough to push current_mult above max_mult
+        position = _make_position(entry_price=50000, quantity=0.01)
+        # estimated_original = original_value (since total_added=0); cap=1.05x
+        analyst_cfg = {'max_position_multiplier': 1.05}
+        result_dict = {'increase_sizing_hint': 'large'}  # 0.75 fraction → 1.75x
+
+        run_async(_handle_increase(
+            position, 'BTC', 51000.0, 50000.0,
+            [], result_dict, 'bullish', analyst_cfg, 'crypto',
+            is_auto=True))
+
+        mock_add.assert_not_called()
+        mock_state.strategy_clear_trailing_stop.assert_not_called()
+
+    @patch('src.orchestration.position_analyst.bot_state')
+    @patch('src.orchestration.position_analyst.add_to_position')
+    @patch('src.orchestration.position_analyst.get_account_balance')
+    @patch('src.orchestration.position_analyst.send_telegram_alert', new_callable=AsyncMock)
+    def test_increase_blocked_by_balance_does_not_clear(
+        self, mock_alert, mock_balance, mock_add, mock_state,
+    ):
+        from src.orchestration.position_analyst import _handle_increase
+
+        mock_balance.return_value = {'USDT': 1.0}  # tiny — can't afford anything
+        position = _make_position(entry_price=50000, quantity=0.01)
+        result_dict = {'increase_sizing_hint': 'small'}
+        analyst_cfg = {'max_position_multiplier': 3.0}
+
+        run_async(_handle_increase(
+            position, 'BTC', 51000.0, 50000.0,
+            [], result_dict, 'bullish', analyst_cfg, 'crypto',
+            is_auto=True))
+
+        mock_add.assert_not_called()
+        mock_state.strategy_clear_trailing_stop.assert_not_called()
+
+
+class TestAnalystSellSetsBuyCooldown:
+    """Feature 5.2: _handle_analyst_sell sets a 4h BUY cooldown so the same
+    signal can't immediately re-enter the position the analyst just exited."""
+
+    @patch('src.orchestration.position_analyst.send_telegram_alert', new_callable=AsyncMock)
+    @patch('src.notify.telegram_periodic_summary.send_trade_alert', new_callable=AsyncMock)
+    @patch('src.orchestration.position_analyst.place_order')
+    @patch('src.orchestration.position_analyst.bot_state')
+    def test_auto_analyst_sell_sets_auto_buy_cooldown(
+        self, mock_state, mock_order, mock_trade_alert, mock_alert,
+    ):
+        from src.orchestration.position_analyst import _handle_analyst_sell
+        position = _make_position()
+        run_async(_handle_analyst_sell(
+            position, 'BTC', 48000.0, 'A_1',
+            0.85, 'bearish reversal', 'crypto', trading_strategy='auto'))
+        mock_state.set_auto_signal_cooldown.assert_called_once()
+        args = mock_state.set_auto_signal_cooldown.call_args[0]
+        assert args[0] == 'BTC'
+        assert args[1] == 'BUY'
+        mock_state.set_signal_cooldown.assert_not_called()
+
+    @patch('src.orchestration.position_analyst.send_telegram_alert', new_callable=AsyncMock)
+    @patch('src.notify.telegram_periodic_summary.send_trade_alert', new_callable=AsyncMock)
+    @patch('src.orchestration.position_analyst.place_order')
+    @patch('src.orchestration.position_analyst.bot_state')
+    def test_manual_analyst_sell_sets_manual_buy_cooldown(
+        self, mock_state, mock_order, mock_trade_alert, mock_alert,
+    ):
+        from src.orchestration.position_analyst import _handle_analyst_sell
+        position = _make_position()
+        run_async(_handle_analyst_sell(
+            position, 'BTC', 48000.0, 'A_1',
+            0.85, 'bearish', 'crypto', trading_strategy='manual'))
+        mock_state.set_signal_cooldown.assert_called_once()
+        args = mock_state.set_signal_cooldown.call_args[0]
+        assert args[0] == 'BTC'
+        assert args[1] == 'BUY'
+        mock_state.set_auto_signal_cooldown.assert_not_called()
+
+
 class TestAutoTrailingStopInfo:
     """Verifies _build_trailing_stop_info routes to auto peak."""
 

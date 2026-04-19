@@ -5,6 +5,7 @@ Strategic trades use category-specific catastrophic SL only (no TP, no trailing)
 Never blocks exits (these are protective exits).
 """
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 from src.config import app_config
@@ -15,6 +16,7 @@ from src.notify.telegram_bot import send_telegram_alert
 from src.orchestration import bot_state
 from src.orchestration.time_stop import should_time_stop
 from src.analysis.feedback_loop import process_closed_trade
+from src.analysis.recent_assessment import get_recent_bearish_assessment
 
 
 def _get_strategic_overrides(position: dict) -> dict | None:
@@ -91,10 +93,17 @@ async def monitor_position(
     # --- Trailing stop (disabled for strategic trades) ---
     if trailing_stop_enabled and pnl_pct >= trailing_stop_activation:
         if drawdown >= trailing_stop_distance:
-            log.info(f"[{mode_label}] Trailing stop triggered for {symbol}. "
-                     f"Peak: ${peak_price:,.2f}, Current: ${current_price:,.2f}")
+            # If a recent bearish Gemini assessment exists for this symbol,
+            # the trailing exit is "concur with analyst" rather than pure
+            # noise — tag it so attribution can distinguish the two.
+            recent_bearish = await asyncio.to_thread(
+                get_recent_bearish_assessment, symbol, 8)
+            exit_reason_tag = 'trailing_stop_analyst_concur' if recent_bearish else 'trailing_stop'
+            log.info(f"[{mode_label}] Trailing stop triggered for {symbol} "
+                     f"(tag={exit_reason_tag}). Peak: ${peak_price:,.2f}, "
+                     f"Current: ${current_price:,.2f}")
             place_order(symbol, "SELL", qty, current_price,
-                        existing_order_id=order_id, exit_reason='trailing_stop', **order_kw)
+                        existing_order_id=order_id, exit_reason=exit_reason_tag, **order_kw)
             _cleanup_position_state(order_id, is_auto)
             if asset_type == 'stock':
                 from src.execution.stock_trader import _is_same_day_trade, _record_day_trade
@@ -102,11 +111,23 @@ async def monitor_position(
                     _record_day_trade()
                     log.info(f"PDT: recorded day trade for {symbol}")
             _resolve_trade_attribution(order_id, pnl_pct, entry_price,
-                                       current_price, 'trailing_stop')
+                                       current_price, exit_reason_tag)
             bot_state.strategy_record_trade_outcome(trading_strategy, is_win=(pnl_pct > 0))
+            # Short BUY cooldown to prevent immediate re-entry on the same
+            # signal that drove the position down past the trailing threshold.
+            signal_cooldown_hours = app_config.get('settings', {}).get(
+                'signal_cooldown_hours', 4)
+            expires = datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours)
+            if is_auto:
+                bot_state.set_auto_signal_cooldown(symbol, "BUY", expires)
+            else:
+                bot_state.set_signal_cooldown(symbol, "BUY", expires)
             await _send_trade_exit_alert(
                 symbol, trading_strategy, entry_price, current_price,
-                qty, pnl_pct, position.get('entry_timestamp'), 'trailing_stop')
+                qty, pnl_pct, position.get('entry_timestamp'), exit_reason_tag)
+            # Return value stays 'trailing_stop' — cycle_runner only checks
+            # `result != 'none'`, and downstream telemetry consumes the tag
+            # via place_order's exit_reason kwarg + the alert payload.
             return 'trailing_stop'
 
     # --- Stop-loss (catastrophic SL for strategic trades) ---

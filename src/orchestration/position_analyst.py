@@ -391,6 +391,13 @@ async def _handle_increase(
     add_to_position(order_id, symbol, add_qty, current_price,
                     reason=reasoning, asset_type=asset_type,
                     trading_strategy=trading_strategy)
+    # Reset trailing-stop peak after successful INCREASE so the trailing
+    # logic re-baselines from the new average entry price. Without this,
+    # the next 2% dip from the OLD peak fires trailing on the whole
+    # enlarged position — undoing the increased conviction.
+    bot_state.strategy_clear_trailing_stop(order_id, trading_strategy)
+    log.info(f"[{symbol}] Trailing peak cleared after INCREASE — will rearm "
+             f"at next +activation% over new avg entry")
 
 
 async def _handle_analyst_sell(
@@ -420,6 +427,16 @@ async def _handle_analyst_sell(
     else:
         bot_state.remove_analyst_last_run(order_id)
         bot_state.remove_flash_analyst_last_run(order_id)
+
+    # Short BUY cooldown to prevent immediate re-entry on the same signal
+    # the analyst just acted on. Same pattern as trailing_stop / time_stop.
+    signal_cooldown_hours = app_config.get('settings', {}).get(
+        'signal_cooldown_hours', 4)
+    expires = datetime.now(timezone.utc) + timedelta(hours=signal_cooldown_hours)
+    if is_auto:
+        bot_state.set_auto_signal_cooldown(symbol, "BUY", expires)
+    else:
+        bot_state.set_signal_cooldown(symbol, "BUY", expires)
 
     try:
         from src.notify.telegram_periodic_summary import send_trade_alert

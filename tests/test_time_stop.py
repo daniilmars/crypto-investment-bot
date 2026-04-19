@@ -294,6 +294,142 @@ def test_integration_sl_preempts_time_stop(mock_state, mock_alert, mock_trade_al
     assert kwargs.get('exit_reason') == 'stop_loss'
 
 
+@patch('src.orchestration.position_monitor.get_recent_bearish_assessment',
+       return_value=None)
+@patch('src.orchestration.position_monitor.place_order')
+@patch('src.orchestration.position_monitor.send_telegram_alert', new_callable=AsyncMock)
+@patch('src.orchestration.position_monitor._send_trade_exit_alert', new_callable=AsyncMock)
+@patch('src.orchestration.position_monitor.bot_state')
+def test_integration_trailing_stop_no_bearish_uses_plain_tag(
+    mock_state, mock_alert, mock_trade_alert, mock_order, mock_lookup,
+):
+    """Feature 5.3: with no recent bearish assessment, exit_reason stays
+    'trailing_stop'."""
+    from src.orchestration.position_monitor import monitor_position
+    mock_state.auto_update_trailing_stop.return_value = 110.0
+    mock_state.update_trailing_stop.return_value = 110.0
+
+    pos = {
+        "symbol": "TEST", "entry_price": 100.0, "order_id": "ts-c1",
+        "quantity": 1.0,
+        "entry_timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    asyncio.run(monitor_position(
+        pos, 107.8,
+        stop_loss_pct=0.10, take_profit_pct=0.50,
+        trailing_stop_enabled=True, trailing_stop_activation=0.05,
+        trailing_stop_distance=0.02,
+        trading_strategy='auto'))
+    _, kwargs = mock_order.call_args
+    assert kwargs.get('exit_reason') == 'trailing_stop'
+
+
+@patch('src.orchestration.position_monitor.get_recent_bearish_assessment',
+       return_value={'id': 1, 'symbol': 'TEST', 'direction': 'bearish',
+                      'confidence': 0.85, 'created_at': '2026-04-19 12:00:00'})
+@patch('src.orchestration.position_monitor.place_order')
+@patch('src.orchestration.position_monitor.send_telegram_alert', new_callable=AsyncMock)
+@patch('src.orchestration.position_monitor._send_trade_exit_alert', new_callable=AsyncMock)
+@patch('src.orchestration.position_monitor.bot_state')
+def test_integration_trailing_stop_with_bearish_uses_concur_tag(
+    mock_state, mock_alert, mock_trade_alert, mock_order, mock_lookup,
+):
+    """Feature 5.3: recent bearish assessment → exit_reason becomes
+    'trailing_stop_analyst_concur'."""
+    from src.orchestration.position_monitor import monitor_position
+    mock_state.auto_update_trailing_stop.return_value = 110.0
+    mock_state.update_trailing_stop.return_value = 110.0
+
+    pos = {
+        "symbol": "TEST", "entry_price": 100.0, "order_id": "ts-c2",
+        "quantity": 1.0,
+        "entry_timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    result = asyncio.run(monitor_position(
+        pos, 107.8,
+        stop_loss_pct=0.10, take_profit_pct=0.50,
+        trailing_stop_enabled=True, trailing_stop_activation=0.05,
+        trailing_stop_distance=0.02,
+        trading_strategy='auto'))
+    # Return value contract preserved (cycle_runner only checks != 'none')
+    assert result == 'trailing_stop'
+    # But the persisted/alerted tag carries the concur info
+    _, kwargs = mock_order.call_args
+    assert kwargs.get('exit_reason') == 'trailing_stop_analyst_concur'
+    # _send_trade_exit_alert (decorator-order: maps to `mock_alert`) receives
+    # the tag as the last positional arg.
+    pos_args = mock_alert.call_args[0]
+    assert pos_args[-1] == 'trailing_stop_analyst_concur'
+
+
+@patch('src.orchestration.position_monitor.get_recent_bearish_assessment',
+       return_value=None)
+@patch('src.orchestration.position_monitor.place_order')
+@patch('src.orchestration.position_monitor.send_telegram_alert', new_callable=AsyncMock)
+@patch('src.orchestration.position_monitor._send_trade_exit_alert', new_callable=AsyncMock)
+@patch('src.orchestration.position_monitor.bot_state')
+def test_integration_trailing_stop_sets_buy_cooldown_auto(
+    mock_state, mock_alert, mock_trade_alert, mock_order, mock_lookup,
+):
+    """Feature 5.2: trailing-stop fire sets a 4h BUY cooldown to prevent
+    immediate re-entry on the same signal."""
+    from src.orchestration.position_monitor import monitor_position
+    # Peak 110, current 107.8 → 2% drawdown ≥ trailing_stop_distance.
+    mock_state.auto_update_trailing_stop.return_value = 110.0
+    mock_state.update_trailing_stop.return_value = 110.0
+
+    pos = {
+        "symbol": "TEST", "entry_price": 100.0, "order_id": "ts-1",
+        "quantity": 1.0,
+        "entry_timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    result = asyncio.run(monitor_position(
+        pos, 107.8,
+        stop_loss_pct=0.10, take_profit_pct=0.50,
+        trailing_stop_enabled=True, trailing_stop_activation=0.05,
+        trailing_stop_distance=0.02,
+        trading_strategy='auto'))
+    assert result == 'trailing_stop'
+    mock_state.set_auto_signal_cooldown.assert_called_once()
+    args = mock_state.set_auto_signal_cooldown.call_args[0]
+    assert args[0] == 'TEST'
+    assert args[1] == 'BUY'
+    mock_state.set_signal_cooldown.assert_not_called()
+
+
+@patch('src.orchestration.position_monitor.get_recent_bearish_assessment',
+       return_value=None)
+@patch('src.orchestration.position_monitor.place_order')
+@patch('src.orchestration.position_monitor.send_telegram_alert', new_callable=AsyncMock)
+@patch('src.orchestration.position_monitor._send_trade_exit_alert', new_callable=AsyncMock)
+@patch('src.orchestration.position_monitor.bot_state')
+def test_integration_trailing_stop_sets_buy_cooldown_manual(
+    mock_state, mock_alert, mock_trade_alert, mock_order, mock_lookup,
+):
+    """Same as above but for manual strategy → uses non-auto cooldown setter."""
+    from src.orchestration.position_monitor import monitor_position
+    mock_state.update_trailing_stop.return_value = 110.0
+    mock_state.auto_update_trailing_stop.return_value = 110.0
+
+    pos = {
+        "symbol": "TEST", "entry_price": 100.0, "order_id": "ts-2",
+        "quantity": 1.0,
+        "entry_timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    result = asyncio.run(monitor_position(
+        pos, 107.8,
+        stop_loss_pct=0.10, take_profit_pct=0.50,
+        trailing_stop_enabled=True, trailing_stop_activation=0.05,
+        trailing_stop_distance=0.02,
+        trading_strategy='manual'))
+    assert result == 'trailing_stop'
+    mock_state.set_signal_cooldown.assert_called_once()
+    args = mock_state.set_signal_cooldown.call_args[0]
+    assert args[0] == 'TEST'
+    assert args[1] == 'BUY'
+    mock_state.set_auto_signal_cooldown.assert_not_called()
+
+
 @patch('src.orchestration.position_monitor.place_order')
 @patch('src.orchestration.position_monitor.send_telegram_alert', new_callable=AsyncMock)
 @patch('src.orchestration.position_monitor._send_trade_exit_alert', new_callable=AsyncMock)
