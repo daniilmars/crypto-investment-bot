@@ -1,22 +1,28 @@
-// Telegram Mini App — portfolio dashboard
-// Thin vanilla-JS client: three fetches, 30 s auto-refresh, pauses when hidden.
+// Telegram Mini App — portfolio dashboard (v2)
+// Groups positions by strategy, inline rationale expand, recent closed trades.
 
 (function () {
   'use strict';
 
   const tg = window.Telegram && window.Telegram.WebApp;
-  if (tg) {
-    tg.ready();
-    tg.expand();
-  }
+  if (tg) { tg.ready(); tg.expand(); }
+
+  // --- read dev_key from querystring for local preview ---
+  const devKey = new URLSearchParams(location.search).get('dev_key') || '';
 
   const state = {
-    days: 7,
-    sort: 'pnl',
+    days: 30,
     chart: null,
     timer: null,
     initData: (tg && tg.initData) || '',
+    expanded: new Set(JSON.parse(localStorage.getItem('miniapp.v2.expanded') || '[]')),
+    collapsedGroups: new Set(JSON.parse(localStorage.getItem('miniapp.v2.collapsedGroups') || '[]')),
+    closedLimit: parseInt(localStorage.getItem('miniapp.v2.closedLimit') || '10', 10),
+    lastPositions: null,
+    lastClosed: null,
   };
+
+  const STRATEGY_ORDER = ['auto', 'conservative', 'longterm', 'manual'];
 
   // --------------------------------------------------------------- helpers
 
@@ -27,20 +33,39 @@
       minimumFractionDigits: 2, maximumFractionDigits: 2,
     })}`;
   };
-  const fmtPct = (n) => {
+  const fmtPct = (n, digits = 1) => {
     if (n == null || isNaN(n)) return '—';
     const sign = n >= 0 ? '+' : '−';
-    return `${sign}${Math.abs(n).toFixed(1)}%`;
+    return `${sign}${Math.abs(n).toFixed(digits)}%`;
+  };
+  const fmtPrice = (n) => {
+    if (n == null || isNaN(n)) return '—';
+    const abs = Math.abs(n);
+    const digits = abs >= 1000 ? 0 : abs >= 100 ? 1 : abs >= 1 ? 2 : 4;
+    return `$${n.toLocaleString('en-US', {
+      minimumFractionDigits: digits, maximumFractionDigits: digits,
+    })}`;
   };
   const klass = (n) => (n > 0 ? 'positive' : n < 0 ? 'negative' : 'neutral');
 
+  function escapeHtml(s) {
+    return String(s ?? '')
+      .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+  }
+
+  function fmtHours(h) {
+    if (h == null) return '—';
+    if (h < 1) return `${Math.round(h * 60)}m`;
+    if (h < 24) return `${h.toFixed(1)}h`;
+    return `${(h / 24).toFixed(1)}d`;
+  }
+
   async function api(path) {
-    const resp = await fetch(path, {
-      headers: { 'X-Telegram-Init-Data': state.initData },
-    });
-    if (!resp.ok) {
-      throw new Error(`${resp.status} ${resp.statusText}`);
-    }
+    const headers = { 'X-Telegram-Init-Data': state.initData };
+    if (devKey) headers['X-Miniapp-Dev-Key'] = devKey;
+    const resp = await fetch(path, { headers });
+    if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
     return resp.json();
   }
 
@@ -53,43 +78,83 @@
 
   // ---------------------------------------------------------- render: summary
 
-  function renderSummary(s) {
+  function renderSummary(s, positions) {
     if (!s || s.error) {
-      document.getElementById('headline-total').textContent = '—';
-      document.getElementById('headline-breakdown').textContent = s && s.error
-        ? `data unavailable (${s.error})`
-        : 'no data';
+      document.getElementById('headline-realized').textContent = '—';
+      document.getElementById('headline-realized-breakdown').textContent =
+        s && s.error ? `data unavailable (${s.error})` : 'no data';
       return;
     }
-    const realized = (s.realized && s.realized.all) || 0;
+
+    const realized = s.realized || {};
+    const today = realized.d1 || 0;
+    const week = realized.d7 || 0;
+    const month = realized.d30 || 0;
+    const lifetime = realized.all || 0;
     const unrealized = s.unrealized_now_usd || 0;
-    const total = realized + unrealized;
 
-    const totalEl = document.getElementById('headline-total');
-    totalEl.textContent = fmtUsd(total);
-    totalEl.className = `value ${klass(total)}`;
+    // --- Header: lifetime realized as the hero ---
+    const realEl = document.getElementById('headline-realized');
+    realEl.textContent = fmtUsd(lifetime);
+    realEl.className = `value ${klass(lifetime)}`;
 
-    document.getElementById('headline-breakdown').textContent =
-      `realized ${fmtUsd(realized)} · unrealized ${fmtUsd(unrealized)}`;
+    // --- Row 1: realized PnL over time (the connected period bar) ---
+    const setTile = (id, value, useClass = true) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.textContent = fmtUsd(value);
+      if (useClass) el.className = `tile-value ${klass(value)}`;
+    };
+    setTile('tile-today-realized', today);
+    setTile('tile-7d-realized', week);
+    setTile('tile-30d-realized', month);
+    setTile('tile-lifetime-realized', lifetime);
 
-    const d1El = document.getElementById('tile-d1');
-    const d7El = document.getElementById('tile-d7');
-    const d30El = document.getElementById('tile-d30');
-    d1El.textContent = fmtUsd(s.realized && s.realized.d1);
-    d1El.className = `tile-value ${klass(s.realized && s.realized.d1)}`;
-    d7El.textContent = fmtUsd(s.realized && s.realized.d7);
-    d7El.className = `tile-value ${klass(s.realized && s.realized.d7)}`;
-    d30El.textContent = fmtUsd(s.realized && s.realized.d30);
-    d30El.className = `tile-value ${klass(s.realized && s.realized.d30)}`;
+    // --- Row 2: live portfolio snapshot ---
+    const urEl = document.getElementById('tile-unrealized');
+    if (urEl) {
+      urEl.textContent = fmtUsd(unrealized);
+      urEl.className = `tile-value ${klass(unrealized)}`;
+    }
 
     const openBy = s.open_by_strategy || {};
     const openTotal = Object.values(openBy).reduce((a, b) => a + b, 0);
     const breakdown = Object.entries(openBy)
       .map(([k, v]) => `${k[0].toUpperCase()}${v}`)
       .join('/');
-    document.getElementById('tile-open').textContent =
-      openTotal ? `${openTotal}\u00A0(${breakdown})` : '0';
+    const openEl = document.getElementById('tile-open');
+    if (openEl) {
+      openEl.textContent = openTotal ? `${openTotal}\u00A0(${breakdown})` : '0';
+      openEl.className = 'tile-value';
+    }
 
+    const wrEl = document.getElementById('tile-winrate');
+    if (wrEl) {
+      if (s.win_rate_7d != null) {
+        const wr = s.win_rate_7d;
+        wrEl.textContent = `${(wr * 100).toFixed(0)}%\u00A0(${s.wins_7d}W/${s.losses_7d}L)`;
+        wrEl.className = `tile-value ${wr >= 0.5 ? 'positive' : 'negative'}`;
+      } else {
+        wrEl.textContent = '—';
+        wrEl.className = 'tile-value';
+      }
+    }
+
+    // Biggest mover — computed from positions payload
+    const movers = (positions && positions.positions) || [];
+    const biggestEl = document.getElementById('tile-biggest');
+    if (movers.length) {
+      const biggest = movers.reduce((m, r) =>
+        Math.abs(r.pnl_pct || 0) > Math.abs(m.pnl_pct || 0) ? r : m);
+      const pctClass = klass(biggest.pnl_pct);
+      const label = biggest.display_name || biggest.symbol;
+      biggestEl.innerHTML =
+        `${escapeHtml(label)}\u00A0<span class="${pctClass}">${fmtPct(biggest.pnl_pct)}</span>`;
+    } else {
+      biggestEl.textContent = '—';
+    }
+
+    // Regime pill
     const regime = s.regime;
     const pill = document.getElementById('regime-pill');
     if (regime && regime.regime) {
@@ -104,41 +169,221 @@
     document.getElementById('as-of').textContent = `updated ${asOf}`;
   }
 
+  // -------------------------------------------------------- rationale render
+
+  function renderRationale(rationale) {
+    if (!rationale) {
+      return '<div class="rat-empty">No rationale recorded (pre-WS1 trade).</div>';
+    }
+    const parts = ['<div class="rat-grid">'];
+
+    // Gemini line
+    if (rationale.gemini_direction || rationale.gemini_confidence != null) {
+      const dir = rationale.gemini_direction || '?';
+      const conf = rationale.gemini_confidence != null
+        ? rationale.gemini_confidence.toFixed(2) : '—';
+      const cat = rationale.catalyst_type || '?';
+      const fresh = rationale.catalyst_freshness;
+      const hvf = rationale.hype_vs_fundamental;
+      let line = `<strong>${escapeHtml(dir)}</strong> · conf ${escapeHtml(conf)} · catalyst <strong>${escapeHtml(cat)}</strong>`;
+      if (fresh) line += ` · ${escapeHtml(fresh)}`;
+      if (hvf) line += ` · ${escapeHtml(hvf)}`;
+      parts.push(`<div class="rat-label">Gemini</div><div class="rat-value">${line}</div>`);
+    }
+
+    // Key headline
+    if (rationale.key_headline) {
+      parts.push(`<div class="rat-headline">“${escapeHtml(rationale.key_headline)}”</div>`);
+    }
+
+    // Reasoning
+    if (rationale.reasoning) {
+      parts.push(`<div class="rat-reasoning">${escapeHtml(rationale.reasoning)}</div>`);
+    }
+
+    // Sources
+    if (rationale.sources && rationale.sources.length) {
+      const chips = rationale.sources
+        .map((s) => `<span class="rat-chip">${escapeHtml(s)}</span>`).join('');
+      parts.push(`<div class="rat-label">Sources</div><div class="rat-value">${chips}</div>`);
+    }
+
+    // Risks
+    if (rationale.risk_factors && rationale.risk_factors.length) {
+      const chips = rationale.risk_factors
+        .map((r) => `<span class="rat-chip risk">${escapeHtml(r)}</span>`).join('');
+      parts.push(`<div class="rat-label">Risks</div><div class="rat-value">${chips}</div>`);
+    }
+
+    // Legacy fallback (pre-WS1)
+    if (!rationale.key_headline && !rationale.reasoning &&
+        !(rationale.sources && rationale.sources.length) && rationale.trade_reason) {
+      parts.push(`<div class="rat-reasoning">${escapeHtml(rationale.trade_reason)}</div>`);
+    }
+
+    parts.push('</div>');
+    return parts.join('');
+  }
+
+  function renderPositionDetail(p) {
+    const parts = ['<div class="rat-grid">'];
+
+    parts.push(`<div class="rat-label">Entry → Now</div><div class="rat-value">${fmtPrice(p.entry_price)} → <strong>${fmtPrice(p.current_price)}</strong> · ${fmtPct(p.pnl_pct, 2)}</div>`);
+
+    if (p.age_days != null) {
+      parts.push(`<div class="rat-label">Age</div><div class="rat-value">${p.age_days}d</div>`);
+    }
+
+    if (p.sl_price != null) {
+      const cls = p.sl_distance_pct != null && p.sl_distance_pct < 5 ? 'negative' : 'neutral';
+      parts.push(`<div class="rat-label">Stop-loss</div><div class="rat-value ${cls}">${fmtPrice(p.sl_price)} · ${fmtPct(p.sl_distance_pct)} away</div>`);
+    }
+    if (p.tp_price != null) {
+      parts.push(`<div class="rat-label">Take-profit</div><div class="rat-value">${fmtPrice(p.tp_price)} · ${fmtPct(p.tp_distance_pct)} to go</div>`);
+    }
+
+    parts.push('</div>');
+
+    // Append rationale as its own grid
+    return parts.join('') + '<div style="height:8px"></div>' + renderRationale(p.rationale);
+  }
+
   // -------------------------------------------------------- render: positions
 
   function renderPositions(p) {
-    const list = document.getElementById('positions-list');
+    state.lastPositions = p;
+    const container = document.getElementById('positions-groups');
     const title = document.getElementById('positions-title');
     const rows = (p && p.positions) || [];
 
     if (!rows.length) {
       title.textContent = 'Open positions';
-      list.innerHTML = '<div class="empty-state">No open positions.</div>';
+      container.innerHTML = '<div class="empty-state">No open positions.</div>';
       return;
-    }
-
-    const sorted = [...rows];
-    if (state.sort === 'age') {
-      sorted.sort((a, b) => (b.age_days || 0) - (a.age_days || 0));
-    } else {
-      sorted.sort((a, b) => (b.pnl_usd || 0) - (a.pnl_usd || 0));
     }
 
     title.textContent = `Open positions (${rows.length})`;
 
+    // Group by strategy, fixed order
+    const groups = {};
+    for (const s of STRATEGY_ORDER) groups[s] = [];
+    for (const r of rows) {
+      const s = groups[r.strategy] ? r.strategy : 'manual';
+      groups[s].push(r);
+    }
+
     const stale = new Set(p.stale_prices || []);
-    list.innerHTML = sorted.map((r) => {
-      const staleMark = stale.has(r.symbol) ? '<span class="stale-dot" title="stale price"></span>' : '';
-      return `
-        <div class="pos-row">
-          <div>
-            <div class="pos-symbol">${escapeHtml(r.symbol)}${staleMark}</div>
-            <div class="pos-strategy">${escapeHtml(r.strategy || '')}</div>
+
+    const html = STRATEGY_ORDER
+      .filter((s) => groups[s].length > 0)
+      .map((strat) => {
+        const arr = groups[strat];
+        // Sort within group by pnl_pct desc
+        arr.sort((a, b) => (b.pnl_pct || 0) - (a.pnl_pct || 0));
+        const subtotal = arr.reduce((a, r) => a + (r.pnl_usd || 0), 0);
+        const subtotalClass = klass(subtotal);
+        const isCollapsed = state.collapsedGroups.has(strat) ? 'collapsed' : '';
+
+        const rowsHtml = arr.map((r) => {
+          const isExpanded = state.expanded.has(r.order_id) ? 'expanded' : '';
+          const staleMark = stale.has(r.symbol) ? '<span class="stale-dot" title="stale price"></span>' : '';
+          const nameLine = r.display_name
+            ? `<div class="pos-name">${escapeHtml(r.display_name)}</div>`
+            : '';
+          return `
+            <div class="pos-row ${isExpanded}" data-order-id="${escapeHtml(r.order_id || '')}">
+              <div class="pos-left">
+                <div class="pos-symbol-row">
+                  ${escapeHtml(r.symbol)}${staleMark}
+                </div>
+                ${nameLine}
+                <div class="pos-meta">${escapeHtml(r.age_days ?? 0)}d · entry ${fmtPrice(r.entry_price)}</div>
+              </div>
+              <div class="pos-pnl-col">
+                <div class="pos-pnl-usd ${klass(r.pnl_usd)}">${fmtUsd(r.pnl_usd)}</div>
+                <div class="pos-pnl-pct ${klass(r.pnl_pct)}">${fmtPct(r.pnl_pct)}</div>
+              </div>
+              <div class="expand-arrow">▼</div>
+            </div>
+            <div class="expand-panel">${isExpanded ? renderPositionDetail(r) : ''}</div>
+          `;
+        }).join('');
+
+        return `
+          <div class="group ${isCollapsed}" data-strategy="${strat}">
+            <div class="group-header">
+              <div class="group-title">
+                <span class="group-chevron">▼</span>
+                ${strat}
+                <span style="color:var(--text-dim);font-weight:400;font-size:12px">(${arr.length})</span>
+              </div>
+              <div class="group-meta">
+                <span class="subtotal ${subtotalClass}">${fmtUsd(subtotal)}</span>
+              </div>
+            </div>
+            <div class="group-rows">${rowsHtml}</div>
           </div>
-          <div class="pos-age">${r.age_days ?? 0}d</div>
-          <div class="pos-pnl ${klass(r.pnl_usd)}">${fmtUsd(r.pnl_usd)}</div>
-          <div class="pos-pct ${klass(r.pnl_pct)}">${fmtPct(r.pnl_pct)}</div>
-        </div>`;
+        `;
+      })
+      .join('');
+
+    container.innerHTML = html;
+  }
+
+  // ---------------------------------------------------- render: closed trades
+
+  function renderClosed(c) {
+    state.lastClosed = c;
+    const list = document.getElementById('closed-list');
+    const title = document.getElementById('closed-title');
+    const rows = (c && c.trades) || [];
+
+    if (!rows.length) {
+      title.textContent = 'Recent closed trades';
+      list.innerHTML = '<div class="empty-state">No closed trades yet.</div>';
+      return;
+    }
+
+    title.textContent = `Recent closed trades (${rows.length})`;
+
+    const exitClass = (reason) => {
+      if (!reason) return 'exit-neutral';
+      const r = reason.toLowerCase();
+      if (r.includes('take_profit') || r.includes('trailing_stop')) return 'exit-win';
+      if (r.includes('stop_loss') || r.includes('flash_analyst')) return 'exit-win'; // may be loss or win — depends on PnL
+      return 'exit-neutral';
+    };
+
+    list.innerHTML = rows.map((t) => {
+      const isExpanded = state.expanded.has(t.order_id) ? 'expanded' : '';
+      const pnlCls = klass(t.pnl_usd);
+      const exitTag = t.exit_reason
+        ? `<span class="closed-exit ${t.pnl_usd >= 0 ? 'exit-win' : 'exit-loss'}">${escapeHtml(t.exit_reason)}</span>`
+        : '';
+      const nameLine = t.display_name
+        ? `<div class="pos-name">${escapeHtml(t.display_name)}</div>`
+        : '';
+      return `
+        <div class="closed-row ${isExpanded}" data-order-id="${escapeHtml(t.order_id || '')}">
+          <div class="pos-left">
+            <div class="pos-symbol-row">
+              ${escapeHtml(t.symbol)}
+              <span style="font-size:11px;color:var(--text-dim);font-weight:400">${escapeHtml(t.strategy)}</span>
+              ${exitTag}
+            </div>
+            ${nameLine}
+            <div class="pos-meta">
+              ${fmtPrice(t.entry_price)} → ${fmtPrice(t.exit_price)} · ${fmtHours(t.duration_hours)}
+            </div>
+          </div>
+          <div class="pos-pnl-col">
+            <div class="pos-pnl-usd ${pnlCls}">${fmtUsd(t.pnl_usd)}</div>
+            <div class="pos-pnl-pct ${klass(t.pnl_pct)}">${fmtPct(t.pnl_pct)}</div>
+          </div>
+          <div class="expand-arrow">▼</div>
+        </div>
+        <div class="expand-panel">${isExpanded ? renderRationale(t.rationale) : ''}</div>
+      `;
     }).join('');
   }
 
@@ -150,9 +395,7 @@
     const nowPoint = e && e.now;
 
     const seriesRealized = pts.map((p) => ({ x: p.t, y: p.realized_usd }));
-    if (nowPoint) {
-      seriesRealized.push({ x: nowPoint.t, y: nowPoint.realized_usd });
-    }
+    if (nowPoint) seriesRealized.push({ x: nowPoint.t, y: nowPoint.realized_usd });
     const seriesTotal = nowPoint
       ? [
           ...pts.map((p) => ({ x: p.t, y: p.realized_usd })),
@@ -168,85 +411,51 @@
 
     const data = {
       datasets: [
-        {
-          label: 'Realized',
-          data: seriesRealized,
-          borderColor: lineRealized,
-          backgroundColor: lineRealized + '33',
-          fill: 'origin',
-          tension: 0.25,
-          pointRadius: 0,
-          borderWidth: 1.8,
-        },
-        {
-          label: 'Realized + unrealized',
-          data: seriesTotal,
-          borderColor: lineTotal,
-          backgroundColor: 'transparent',
-          borderDash: [5, 4],
-          tension: 0.25,
-          pointRadius: 0,
-          borderWidth: 1.5,
-        },
+        { label: 'Realized', data: seriesRealized,
+          borderColor: lineRealized, backgroundColor: lineRealized + '33',
+          fill: 'origin', tension: 0.25, pointRadius: 0, borderWidth: 1.8 },
+        { label: 'Realized + unrealized', data: seriesTotal,
+          borderColor: lineTotal, backgroundColor: 'transparent',
+          borderDash: [5, 4], tension: 0.25, pointRadius: 0, borderWidth: 1.5 },
       ],
     };
-
     const options = {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: (c) => fmtUsd(c.parsed.y),
-          },
-        },
-      },
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: { legend: { display: false },
+        tooltip: { callbacks: { label: (c) => fmtUsd(c.parsed.y) } } },
       scales: {
-        x: {
-          type: 'time',
-          time: { unit: state.days <= 7 ? 'day' : state.days <= 30 ? 'day' : 'week' },
-          ticks: { color: axisColor, maxRotation: 0, autoSkipPadding: 20 },
-          grid: { display: false },
-        },
-        y: {
-          ticks: {
-            color: axisColor,
-            callback: (v) => fmtUsd(v).replace(/\.00$/, ''),
-          },
-          grid: { color: 'rgba(128,128,128,0.12)' },
-        },
+        x: { type: 'time',
+             time: { unit: state.days <= 7 ? 'day' : state.days <= 30 ? 'day' : 'week' },
+             ticks: { color: axisColor, maxRotation: 0, autoSkipPadding: 20 },
+             grid: { display: false } },
+        y: { ticks: { color: axisColor,
+                      callback: (v) => fmtUsd(v).replace(/\.00$/, '') },
+             grid: { color: 'rgba(128,128,128,0.12)' } },
       },
     };
 
     if (state.chart) {
-      state.chart.data = data;
-      state.chart.options = options;
+      state.chart.data = data; state.chart.options = options;
       state.chart.update('none');
     } else {
       state.chart = new Chart(ctx, { type: 'line', data, options });
     }
   }
 
-  function escapeHtml(s) {
-    return String(s)
-      .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
-      .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
-  }
-
   // ------------------------------------------------------------ refresh loop
 
   async function refreshAll() {
     try {
-      const [summary, positions, equity] = await Promise.all([
+      const [summary, positions, equity, closed] = await Promise.all([
         api('/api/miniapp/summary'),
         api('/api/miniapp/positions'),
         api(`/api/miniapp/equity?days=${state.days}`),
+        api(`/api/miniapp/trades/recent?limit=${state.closedLimit}`),
       ]);
-      renderSummary(summary);
-      renderPositions(positions);
+      renderPositions(positions);   // render positions first so biggest-mover is available
+      renderSummary(summary, positions);
       renderEquity(equity);
+      renderClosed(closed);
     } catch (err) {
       toast(`Update failed: ${err.message}`);
       console.error('refreshAll error', err);
@@ -263,6 +472,7 @@
 
   // ---------------------------------------------------------------- wire-up
 
+  // Range toggle (equity chart)
   document.querySelectorAll('.range-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.range-btn').forEach((b) => b.classList.remove('active'));
@@ -271,14 +481,63 @@
       refreshAll();
     });
   });
-  document.querySelectorAll('.sort-btn').forEach((btn) => {
+
+  // Closed trades limit toggle
+  document.querySelectorAll('.closed-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.sort-btn').forEach((b) => b.classList.remove('active'));
+      document.querySelectorAll('.closed-btn').forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
-      state.sort = btn.dataset.sort;
-      // Re-render using last-fetched positions if we have them; otherwise refresh
+      state.closedLimit = parseInt(btn.dataset.limit, 10);
+      localStorage.setItem('miniapp.v2.closedLimit', String(state.closedLimit));
       refreshAll();
     });
+  });
+
+  // Sync initial active state for closed-btn from localStorage
+  document.querySelectorAll('.closed-btn').forEach((b) => {
+    if (parseInt(b.dataset.limit, 10) === state.closedLimit) b.classList.add('active');
+    else b.classList.remove('active');
+  });
+
+  // Delegated click handler for group collapse AND row expand
+  document.addEventListener('click', (e) => {
+    // Group header toggle
+    const groupHeader = e.target.closest('.group-header');
+    if (groupHeader) {
+      const group = groupHeader.closest('.group');
+      const strat = group.dataset.strategy;
+      group.classList.toggle('collapsed');
+      if (group.classList.contains('collapsed')) state.collapsedGroups.add(strat);
+      else state.collapsedGroups.delete(strat);
+      localStorage.setItem(
+        'miniapp.v2.collapsedGroups',
+        JSON.stringify([...state.collapsedGroups]));
+      return;
+    }
+
+    // Position row expand/collapse
+    const posRow = e.target.closest('.pos-row, .closed-row');
+    if (posRow) {
+      const id = posRow.dataset.orderId;
+      if (!id) return;
+      const wasExpanded = posRow.classList.contains('expanded');
+      posRow.classList.toggle('expanded');
+      const panel = posRow.nextElementSibling;
+      if (!wasExpanded) {
+        // Populate the panel with detail HTML on open
+        const rec = (state.lastPositions?.positions || []).find((p) => p.order_id === id)
+                 || (state.lastClosed?.trades || []).find((t) => t.order_id === id);
+        if (rec) {
+          panel.innerHTML = posRow.classList.contains('pos-row')
+            ? renderPositionDetail(rec)
+            : renderRationale(rec.rationale);
+        }
+        state.expanded.add(id);
+      } else {
+        state.expanded.delete(id);
+      }
+      localStorage.setItem('miniapp.v2.expanded', JSON.stringify([...state.expanded]));
+    }
   });
 
   document.addEventListener('visibilitychange', () => {
@@ -286,5 +545,6 @@
     else { refreshAll(); startTimer(); }
   });
 
+  // Initial load
   refreshAll().then(startTimer);
 })();

@@ -11,6 +11,7 @@ convert with the *current* FX rate (not historical) — documented as
 
 from datetime import datetime, timezone
 
+from src.analysis.display_names import display_name
 from src.analysis.fx import currency_for_symbol, to_usd
 from src.logger import log
 
@@ -31,11 +32,113 @@ def _sum(rows, key):
 
 # ---------------------------------------------------------------- positions
 
-def positions_data() -> dict:
-    """Live unrealized PnL for every open trade, USD-normalized.
+_POSITIONS_WITH_RATIONALE_SQL = """
+    SELECT t.id, t.order_id, t.symbol, t.entry_price, t.quantity,
+           t.trading_strategy, t.asset_type, t.entry_timestamp,
+           t.dynamic_sl_pct, t.dynamic_tp_pct, t.trade_reason,
+           sa.gemini_direction, sa.gemini_confidence, sa.catalyst_type,
+           sa.source_names, sa.signal_timestamp,
+           ga.reasoning, ga.key_headline, ga.risk_factors,
+           ga.catalyst_freshness, ga.hype_vs_fundamental, ga.market_mood
+    FROM trades t
+    LEFT JOIN signal_attribution sa ON sa.trade_order_id = t.order_id
+    LEFT JOIN gemini_assessments ga
+      ON ga.symbol = t.symbol
+     AND ga.created_at <= t.entry_timestamp
+     AND ga.created_at >= datetime(t.entry_timestamp, '-30 minutes')
+    WHERE t.status = 'OPEN'
+      AND (ga.id IS NULL
+           OR ga.id = (
+             SELECT g2.id FROM gemini_assessments g2
+             WHERE g2.symbol = t.symbol
+               AND g2.created_at <= t.entry_timestamp
+               AND g2.created_at >= datetime(t.entry_timestamp, '-30 minutes')
+             ORDER BY g2.created_at DESC LIMIT 1))
+    ORDER BY t.trading_strategy, t.entry_timestamp
+"""
 
-    Reuses the existing ``_get_position_price`` helper so pricing behavior
-    matches the rest of the Telegram bot exactly.
+
+def _parse_risk_factors(raw) -> list[str]:
+    """risk_factors is JSON in new rows, plain text in old ones. Best effort."""
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [str(x) for x in raw if x]
+    s = str(raw).strip()
+    if not s or s == "null":
+        return []
+    try:
+        import json as _json
+        v = _json.loads(s)
+        if isinstance(v, list):
+            return [str(x) for x in v if x]
+        if isinstance(v, str):
+            return [v]
+    except Exception:
+        pass
+    # Plain text fallback — split on common separators
+    for sep in ("|", ";", ","):
+        if sep in s:
+            return [p.strip() for p in s.split(sep) if p.strip()]
+    return [s]
+
+
+def _build_rationale(row: dict) -> dict | None:
+    """Collect rationale fields from a joined row. None if no data at all."""
+    catalyst = row.get("catalyst_type")
+    direction = row.get("gemini_direction")
+    confidence = row.get("gemini_confidence")
+    key_headline = row.get("key_headline")
+    reasoning = row.get("reasoning")
+    sources_raw = row.get("source_names") or ""
+    risks_raw = row.get("risk_factors")
+    trade_reason = row.get("trade_reason")
+
+    has_any = any([catalyst, direction, confidence, key_headline, reasoning,
+                   sources_raw, risks_raw, trade_reason])
+    if not has_any:
+        return None
+
+    sources = [s.strip() for s in str(sources_raw).split(",") if s.strip()]
+    return {
+        "gemini_direction": direction,
+        "gemini_confidence": float(confidence) if confidence is not None else None,
+        "catalyst_type": catalyst,
+        "catalyst_freshness": row.get("catalyst_freshness"),
+        "hype_vs_fundamental": row.get("hype_vs_fundamental"),
+        "key_headline": key_headline,
+        "reasoning": reasoning,
+        "sources": sources[:10],
+        "risk_factors": _parse_risk_factors(risks_raw)[:5],
+        "market_mood": row.get("market_mood"),
+        "signal_timestamp": row.get("signal_timestamp"),
+        "trade_reason": trade_reason,
+    }
+
+
+def _sl_tp_distances(entry: float, current: float,
+                     sl_pct: float | None, tp_pct: float | None) -> dict:
+    """Compute SL/TP prices and 'distance to trigger' as % of current price."""
+    out = {"sl_price": None, "tp_price": None,
+           "sl_distance_pct": None, "tp_distance_pct": None}
+    if not entry or not current:
+        return out
+    if sl_pct is not None:
+        sl_price = entry * (1.0 - float(sl_pct))
+        out["sl_price"] = sl_price
+        # Positive = distance remaining (good). Negative = past stop.
+        out["sl_distance_pct"] = ((current - sl_price) / current * 100.0)
+    if tp_pct is not None:
+        tp_price = entry * (1.0 + float(tp_pct))
+        out["tp_price"] = tp_price
+        out["tp_distance_pct"] = ((tp_price - current) / current * 100.0)
+    return out
+
+
+def positions_data() -> dict:
+    """Live unrealized PnL for every open trade, USD-normalized,
+    with rationale (Gemini catalyst, headline, reasoning, sources, risks)
+    and SL/TP distances joined from signal_attribution + gemini_assessments.
     """
     from src.notify.telegram_dashboard import _get_position_price
     from src.database import get_db_connection, release_db_connection, _cursor
@@ -47,19 +150,21 @@ def positions_data() -> dict:
 
     try:
         with _cursor(conn) as cur:
-            cur.execute(
-                "SELECT id, symbol, entry_price, quantity, trading_strategy, "
-                "asset_type, entry_timestamp "
-                "FROM trades WHERE status = 'OPEN' "
-                "ORDER BY trading_strategy, entry_timestamp"
-            )
+            cur.execute(_POSITIONS_WITH_RATIONALE_SQL)
             rows = _rows_to_dicts(cur, cur.fetchall())
     finally:
         release_db_connection(conn)
 
     out = []
     stale: list[str] = []
+    seen_ids: set = set()
     for r in rows:
+        # The join can produce duplicates when multiple assessments match the
+        # 30-min window; dedupe on trade id.
+        if r["id"] in seen_ids:
+            continue
+        seen_ids.add(r["id"])
+
         sym = r["symbol"]
         entry = float(r["entry_price"] or 0)
         qty = float(r["quantity"] or 0)
@@ -76,9 +181,14 @@ def positions_data() -> dict:
         raw_pnl_pct = ((price - entry) / entry * 100.0) if entry else 0.0
         pnl_usd = to_usd(raw_pnl, ccy)
 
+        distances = _sl_tp_distances(
+            entry, price, r.get("dynamic_sl_pct"), r.get("dynamic_tp_pct"))
+
         out.append({
             "id": r["id"],
+            "order_id": r.get("order_id"),
             "symbol": sym,
+            "display_name": display_name(sym),
             "strategy": r.get("trading_strategy") or "manual",
             "asset_type": r.get("asset_type") or "crypto",
             "currency": ccy,
@@ -90,6 +200,10 @@ def positions_data() -> dict:
             "pnl_pct": raw_pnl_pct,
             "entry_timestamp": r.get("entry_timestamp"),
             "age_days": _age_days(r.get("entry_timestamp")),
+            "sl_pct": r.get("dynamic_sl_pct"),
+            "tp_pct": r.get("dynamic_tp_pct"),
+            **distances,
+            "rationale": _build_rationale(r),
         })
 
     return {
@@ -287,3 +401,105 @@ def _age_days(ts) -> int | None:
     if t is None:
         return None
     return max(0, int((datetime.now(timezone.utc).timestamp() - t) // 86400))
+
+
+# ------------------------------------------------------------- recent trades
+
+_RECENT_TRADES_SQL = """
+    SELECT t.id, t.order_id, t.symbol, t.trading_strategy, t.asset_type,
+           t.entry_price, t.exit_price, t.quantity, t.pnl,
+           t.entry_timestamp, t.exit_timestamp, t.exit_reason,
+           t.dynamic_sl_pct, t.dynamic_tp_pct, t.trade_reason,
+           sa.gemini_direction, sa.gemini_confidence, sa.catalyst_type,
+           sa.source_names, sa.signal_timestamp,
+           ga.reasoning, ga.key_headline, ga.risk_factors,
+           ga.catalyst_freshness, ga.hype_vs_fundamental, ga.market_mood
+    FROM trades t
+    LEFT JOIN signal_attribution sa ON sa.trade_order_id = t.order_id
+    LEFT JOIN gemini_assessments ga
+      ON ga.symbol = t.symbol
+     AND ga.created_at <= t.entry_timestamp
+     AND ga.created_at >= datetime(t.entry_timestamp, '-30 minutes')
+    WHERE t.status = 'CLOSED'
+      AND t.exit_timestamp IS NOT NULL
+      AND (ga.id IS NULL
+           OR ga.id = (
+             SELECT g2.id FROM gemini_assessments g2
+             WHERE g2.symbol = t.symbol
+               AND g2.created_at <= t.entry_timestamp
+               AND g2.created_at >= datetime(t.entry_timestamp, '-30 minutes')
+             ORDER BY g2.created_at DESC LIMIT 1))
+    ORDER BY t.exit_timestamp DESC
+    LIMIT ?
+"""
+
+
+def recent_trades_data(limit: int = 10) -> dict:
+    """Most recent closed trades with the rationale that drove the entry.
+
+    Used by the new v2 Mini App 'Recent closed trades' section.
+    """
+    from src.database import get_db_connection, release_db_connection, _cursor
+
+    conn = get_db_connection()
+    if not conn:
+        return {"trades": [], "as_of_ts": _now_iso(),
+                "fx_method": FX_METHOD_NOTE, "error": "db_unavailable"}
+
+    try:
+        with _cursor(conn) as cur:
+            cur.execute(_RECENT_TRADES_SQL, (int(limit),))
+            rows = _rows_to_dicts(cur, cur.fetchall())
+    finally:
+        release_db_connection(conn)
+
+    out = []
+    seen_ids: set = set()
+    for r in rows:
+        if r["id"] in seen_ids:
+            continue
+        seen_ids.add(r["id"])
+
+        sym = r["symbol"]
+        entry = float(r["entry_price"] or 0)
+        exit_p = float(r["exit_price"] or 0) if r["exit_price"] is not None else None
+        qty = float(r["quantity"] or 0)
+        ccy = currency_for_symbol(sym)
+        raw_pnl = float(r["pnl"] or 0)
+        pnl_usd = to_usd(raw_pnl, ccy)
+        pnl_pct = ((exit_p - entry) / entry * 100.0) if (entry and exit_p) else None
+
+        # Duration in hours
+        dur_h = None
+        entry_ts = _parse_ts(r.get("entry_timestamp"))
+        exit_ts = _parse_ts(r.get("exit_timestamp"))
+        if entry_ts and exit_ts:
+            dur_h = max(0.0, (exit_ts - entry_ts) / 3600.0)
+
+        out.append({
+            "id": r["id"],
+            "order_id": r.get("order_id"),
+            "symbol": sym,
+            "display_name": display_name(sym),
+            "strategy": r.get("trading_strategy") or "manual",
+            "asset_type": r.get("asset_type") or "crypto",
+            "currency": ccy,
+            "entry_price": entry,
+            "exit_price": exit_p,
+            "quantity": qty,
+            "pnl_local": raw_pnl,
+            "pnl_usd": pnl_usd,
+            "pnl_pct": pnl_pct,
+            "entry_timestamp": r.get("entry_timestamp"),
+            "exit_timestamp": r.get("exit_timestamp"),
+            "duration_hours": dur_h,
+            "exit_reason": r.get("exit_reason") or "unknown",
+            "rationale": _build_rationale(r),
+        })
+
+    return {
+        "trades": out,
+        "limit": int(limit),
+        "as_of_ts": _now_iso(),
+        "fx_method": FX_METHOD_NOTE,
+    }

@@ -7,35 +7,63 @@
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-  <link rel="stylesheet" href="styles.css?v=4" />
+  <link rel="stylesheet" href="styles.css?v=8" />
 </head>
 <body>
   <div id="app">
     <header>
       <div id="portfolio-headline">
-        <div class="label">Portfolio PnL (USD)</div>
-        <div class="value" id="headline-total">—</div>
-        <div class="sub" id="headline-breakdown">realized — · unrealized —</div>
+        <div class="label">Realized PnL</div>
+        <div class="value" id="headline-realized">—</div>
       </div>
       <div id="regime-pill" class="pill pill-neutral">REGIME —</div>
     </header>
 
-    <section id="tiles">
-      <div class="tile">
-        <div class="tile-label">24h</div>
-        <div class="tile-value" id="tile-d1">—</div>
+    <!-- Row 1: realized PnL across time periods (timeline-styled, connected bar) -->
+    <div class="row-label">
+      <span>Realized PnL over time</span>
+      <span class="row-hint">past → lifetime</span>
+    </div>
+    <section id="period-bar" class="period-bar">
+      <div class="period-cell">
+        <div class="tile-label">Today</div>
+        <div class="tile-value" id="tile-today-realized">—</div>
       </div>
-      <div class="tile">
-        <div class="tile-label">7d</div>
-        <div class="tile-value" id="tile-d7">—</div>
+      <div class="period-cell">
+        <div class="tile-label">7 days</div>
+        <div class="tile-value" id="tile-7d-realized">—</div>
       </div>
+      <div class="period-cell">
+        <div class="tile-label">30 days</div>
+        <div class="tile-value" id="tile-30d-realized">—</div>
+      </div>
+      <div class="period-cell">
+        <div class="tile-label">Lifetime</div>
+        <div class="tile-value" id="tile-lifetime-realized">—</div>
+      </div>
+    </section>
+
+    <!-- Row 2: live portfolio state (independent snapshots, separate tiles) -->
+    <div class="row-label">
+      <span>Live portfolio</span>
+      <span class="row-hint">right now</span>
+    </div>
+    <section id="live-tiles" class="live-tiles">
       <div class="tile">
-        <div class="tile-label">30d</div>
-        <div class="tile-value" id="tile-d30">—</div>
+        <div class="tile-label">Unrealized</div>
+        <div class="tile-value" id="tile-unrealized">—</div>
       </div>
       <div class="tile">
         <div class="tile-label">Open</div>
         <div class="tile-value" id="tile-open">—</div>
+      </div>
+      <div class="tile">
+        <div class="tile-label">Win rate 7d</div>
+        <div class="tile-value" id="tile-winrate">—</div>
+      </div>
+      <div class="tile">
+        <div class="tile-label">Biggest mover</div>
+        <div class="tile-value" id="tile-biggest">—</div>
       </div>
     </section>
 
@@ -43,8 +71,8 @@
       <div class="section-header">
         <span>Equity curve</span>
         <span class="range-toggle">
-          <button class="range-btn active" data-days="7">7d</button>
-          <button class="range-btn" data-days="30">30d</button>
+          <button class="range-btn" data-days="7">7d</button>
+          <button class="range-btn active" data-days="30">30d</button>
           <button class="range-btn" data-days="90">90d</button>
         </span>
       </div>
@@ -56,12 +84,19 @@
     <section id="positions-section">
       <div class="section-header">
         <span id="positions-title">Open positions</span>
+      </div>
+      <div id="positions-groups"></div>
+    </section>
+
+    <section id="closed-section">
+      <div class="section-header">
+        <span id="closed-title">Recent closed trades</span>
         <span class="sort-toggle">
-          <button class="sort-btn active" data-sort="pnl">by P&amp;L</button>
-          <button class="sort-btn" data-sort="age">by age</button>
+          <button class="closed-btn active" data-limit="10">10</button>
+          <button class="closed-btn" data-limit="25">25</button>
         </span>
       </div>
-      <div id="positions-list"></div>
+      <div id="closed-list"></div>
     </section>
 
     <div id="toast" class="toast hidden"></div>
@@ -73,6 +108,6 @@
     </footer>
   </div>
 
-  <script src="app.js?v=4"></script>
+  <script src="app.js?v=8"></script>
 </body>
 </html>

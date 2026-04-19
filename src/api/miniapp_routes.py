@@ -15,7 +15,9 @@ from fastapi import APIRouter, Depends
 from fastapi.staticfiles import StaticFiles
 
 from src.api.miniapp_auth import miniapp_auth
-from src.api.miniapp_queries import summary_data, positions_data, equity_data
+from src.api.miniapp_queries import (
+    summary_data, positions_data, equity_data, recent_trades_data,
+)
 
 
 router = APIRouter()
@@ -57,6 +59,17 @@ async def equity(days: int = 30, _user: dict = Depends(miniapp_auth)) -> dict:
     days = max(1, min(int(days or 30), 365))
     return await asyncio.to_thread(
         _cached, f"equity:{days}", _CACHE_TTL_SEC, lambda: equity_data(days=days)
+    )
+
+
+@router.get("/trades/recent")
+async def trades_recent(limit: int = 10,
+                         _user: dict = Depends(miniapp_auth)) -> dict:
+    limit = max(1, min(int(limit or 10), 50))
+    # Closed-trade set changes slowly; cache longer than positions.
+    return await asyncio.to_thread(
+        _cached, f"recent_trades:{limit}", _CACHE_TTL_SEC * 3,
+        lambda: recent_trades_data(limit=limit),
     )
 
 

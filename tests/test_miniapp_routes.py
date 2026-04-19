@@ -38,7 +38,7 @@ def client(monkeypatch):
     monkeypatch.setattr("src.api.miniapp_auth._authorized_ids", lambda: {TEST_USER_ID})
 
     # Stub out query functions so tests don't depend on DB state
-    call_counts = {"summary": 0, "positions": 0, "equity": 0}
+    call_counts = {"summary": 0, "positions": 0, "equity": 0, "recent": 0}
 
     def fake_summary():
         call_counts["summary"] += 1
@@ -52,9 +52,14 @@ def client(monkeypatch):
         call_counts["equity"] += 1
         return {"marker": "equity", "days": days}
 
+    def fake_recent(limit=10):
+        call_counts["recent"] += 1
+        return {"marker": "recent_trades", "limit": limit, "trades": []}
+
     monkeypatch.setattr("src.api.miniapp_routes.summary_data", fake_summary)
     monkeypatch.setattr("src.api.miniapp_routes.positions_data", fake_positions)
     monkeypatch.setattr("src.api.miniapp_routes.equity_data", fake_equity)
+    monkeypatch.setattr("src.api.miniapp_routes.recent_trades_data", fake_recent)
 
     # Clear cache before each test
     from src.api.miniapp_routes import _clear_cache
@@ -136,3 +141,41 @@ def test_cache_scopes_equity_by_days(client):
     client.get("/api/miniapp/equity?days=7", headers=headers)
     # Two distinct cache keys (days=7, days=30); third call is a cache hit.
     assert client.call_counts["equity"] == 2
+
+
+# --- new /trades/recent endpoint ---
+
+def test_recent_trades_requires_auth(client):
+    r = client.get("/api/miniapp/trades/recent")
+    assert r.status_code == 401
+
+
+def test_recent_trades_returns_payload(client):
+    r = client.get(
+        "/api/miniapp/trades/recent",
+        headers={"X-Telegram-Init-Data": _good_init_data()},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["marker"] == "recent_trades"
+    assert body["trades"] == []
+
+
+def test_recent_trades_clamps_limit(client):
+    headers = {"X-Telegram-Init-Data": _good_init_data()}
+    # Upper bound
+    r = client.get("/api/miniapp/trades/recent?limit=9999", headers=headers)
+    assert r.status_code == 200
+    assert r.json()["limit"] == 50
+    # Lower bound (negative) → clamp to 1
+    r = client.get("/api/miniapp/trades/recent?limit=-5", headers=headers)
+    assert r.status_code == 200
+    assert r.json()["limit"] == 1
+
+
+def test_recent_trades_cache_scopes_by_limit(client):
+    headers = {"X-Telegram-Init-Data": _good_init_data()}
+    client.get("/api/miniapp/trades/recent?limit=10", headers=headers)
+    client.get("/api/miniapp/trades/recent?limit=10", headers=headers)
+    client.get("/api/miniapp/trades/recent?limit=25", headers=headers)
+    assert client.call_counts["recent"] == 2
