@@ -105,16 +105,6 @@ settings:
     # Minimum Gemini confidence to override VADER
     min_gemini_confidence: 0.6
 
-  # -- Signal Confirmation Settings --
-  # Require manual Telegram approval before executing BUY/SELL trades.
-  # Protective exits (SL/TP/trailing) are NEVER gated by confirmation.
-  signal_confirmation:
-    enabled: true
-    timeout_minutes: 30
-    require_confirmation_for:
-      - "BUY"
-      - "SELL"
-
   # -- News Scraper Daemon Settings --
   # Continuous scraper with tiered intervals (replaces launchd batch approach)
   news_scraper_daemon:

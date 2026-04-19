@@ -287,10 +287,10 @@ async def update_live_dashboard(application: Application,
 
 def build_daily_recap() -> str:
     """Build the end-of-day recap message. Returns empty string if no trades."""
-    manual_trades = get_trades_closed_today()
-    auto_trades = get_trades_closed_today('auto')
+    strategies = ['auto', 'conservative', 'longterm']
+    trades_by_strategy = {s: get_trades_closed_today(s) for s in strategies}
 
-    if not manual_trades and not auto_trades:
+    if not any(trades_by_strategy.values()):
         return ''
 
     now = datetime.now(timezone.utc)
@@ -314,24 +314,21 @@ def build_daily_recap() -> str:
             f'{hold}{reason_str}'
         )
 
-    if manual_trades:
-        lines.append('\u2500\u2500 Manual \u2500\u2500')
+    first = True
+    for strat in strategies:
+        trades = trades_by_strategy[strat]
+        if not trades:
+            continue
+        if not first:
+            lines.append('')
+        first = False
+        lines.append(f'\u2500\u2500 {strat.capitalize()} \u2500\u2500')
         total_pnl = 0
-        for t in manual_trades:
+        for t in trades:
             lines.append(_format_trade(t))
             total_pnl += t.get('pnl', 0)
         tp_sign = '+' if total_pnl >= 0 else '-'
         lines.append(f' Total: {tp_sign}${abs(total_pnl):,.2f}')
-
-    if auto_trades:
-        lines.append('')
-        lines.append('\u2500\u2500 Auto-Bot \u2500\u2500')
-        total_auto_pnl = 0
-        for t in auto_trades:
-            lines.append(_format_trade(t))
-            total_auto_pnl += t.get('pnl', 0)
-        ta_sign = '+' if total_auto_pnl >= 0 else '-'
-        lines.append(f' Total: {ta_sign}${abs(total_auto_pnl):,.2f}')
 
     return truncate_for_telegram('\n'.join(lines))
 

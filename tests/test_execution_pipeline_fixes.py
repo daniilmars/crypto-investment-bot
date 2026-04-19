@@ -17,11 +17,10 @@ class TestMinNotional:
     """Tests for configurable min trade notional."""
 
     @patch('src.orchestration.trade_executor.send_telegram_alert', new_callable=AsyncMock)
-    @patch('src.orchestration.trade_executor.is_confirmation_required', return_value=False)
     @patch('src.orchestration.trade_executor.place_order')
     @patch('src.orchestration.trade_executor.app_config')
     def test_buy_below_min_notional_skipped(self, mock_config, mock_order,
-                                             mock_confirm, mock_alert):
+                                             mock_alert):
         """BUY with notional below $5 minimum should be skipped."""
         from src.orchestration.trade_executor import execute_buy
         mock_config.get.return_value = {'min_trade_notional': 5.00}
@@ -38,11 +37,10 @@ class TestMinNotional:
         mock_order.assert_not_called()
 
     @patch('src.orchestration.trade_executor.send_telegram_alert', new_callable=AsyncMock)
-    @patch('src.orchestration.trade_executor.is_confirmation_required', return_value=False)
     @patch('src.orchestration.trade_executor.place_order')
     @patch('src.orchestration.trade_executor.app_config')
     def test_buy_above_min_notional_proceeds(self, mock_config, mock_order,
-                                              mock_confirm, mock_alert):
+                                              mock_alert):
         """BUY with notional above $5 minimum should proceed."""
         from src.orchestration.trade_executor import execute_buy
         mock_config.get.return_value = {'min_trade_notional': 5.00}
@@ -179,12 +177,10 @@ class TestSellAlertTiming:
 
     @patch('src.orchestration.trade_executor.bot_state')
     @patch('src.orchestration.trade_executor.send_telegram_alert', new_callable=AsyncMock)
-    @patch('src.orchestration.trade_executor.is_confirmation_required', return_value=False)
     @patch('src.orchestration.trade_executor.place_order')
     @patch('src.orchestration.trade_executor.app_config')
     def test_sell_alert_not_sent_on_failure(self, mock_config, mock_order,
-                                             mock_confirm, mock_alert,
-                                             mock_state):
+                                             mock_alert, mock_state):
         """SELL alert should NOT be sent when order fails."""
         from src.orchestration.trade_executor import execute_sell
         mock_config.get.return_value = {}
@@ -202,12 +198,10 @@ class TestSellAlertTiming:
     @patch('src.orchestration.trade_executor.bot_state')
     @patch('src.notify.telegram_periodic_summary.send_trade_alert',
            new_callable=AsyncMock)
-    @patch('src.orchestration.trade_executor.is_confirmation_required', return_value=False)
     @patch('src.orchestration.trade_executor.place_order')
     @patch('src.orchestration.trade_executor.app_config')
     def test_sell_alert_sent_on_success(self, mock_config, mock_order,
-                                         mock_confirm, mock_alert,
-                                         mock_state):
+                                         mock_alert, mock_state):
         """SELL alert should be sent when order succeeds (CLOSED)."""
         from src.orchestration.trade_executor import execute_sell
         mock_config.get.return_value = {}

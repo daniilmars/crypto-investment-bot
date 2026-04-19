@@ -15,8 +15,7 @@ from src.database import get_position_additions, get_recent_articles
 from src.execution.binance_trader import add_to_position, get_account_balance, place_order
 from src.logger import log
 from src.notify.telegram_bot import (
-    is_confirmation_required, send_position_health_alert,
-    send_signal_for_confirmation, send_telegram_alert,
+    send_position_health_alert, send_telegram_alert,
 )
 from src.orchestration import bot_state
 from src.orchestration.pre_trade_gates import check_signal_cooldown
@@ -389,19 +388,9 @@ async def _handle_increase(
             })
         return
 
-    if not is_auto and is_confirmation_required("INCREASE"):
-        await send_signal_for_confirmation({
-            'signal': 'INCREASE', 'symbol': symbol,
-            'current_price': current_price,
-            'quantity': add_qty,
-            'reason': reasoning,
-            'asset_type': asset_type,
-            'position': position,
-        })
-    else:
-        add_to_position(order_id, symbol, add_qty, current_price,
-                        reason=reasoning, asset_type=asset_type,
-                        trading_strategy=trading_strategy)
+    add_to_position(order_id, symbol, add_qty, current_price,
+                    reason=reasoning, asset_type=asset_type,
+                    trading_strategy=trading_strategy)
 
 
 async def _handle_analyst_sell(
@@ -412,17 +401,6 @@ async def _handle_analyst_sell(
 ):
     """Handle a SELL recommendation from the analyst."""
     is_auto = trading_strategy != 'manual'
-    if not is_auto and is_confirmation_required("SELL"):
-        await send_signal_for_confirmation({
-            'signal': 'SELL', 'symbol': symbol,
-            'current_price': current_price,
-            'quantity': position['quantity'],
-            'reason': reasoning,
-            'asset_type': asset_type,
-            'position': position,
-        })
-        return
-
     order_kw = {}
     if asset_type == 'stock':
         order_kw['asset_type'] = 'stock'

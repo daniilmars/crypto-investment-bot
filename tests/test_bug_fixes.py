@@ -7,21 +7,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
-# --- Bug 2: _signal_counter is atomic via itertools.count ---
-
-def test_signal_counter_is_itertools_count():
-    """Bug 2: _signal_counter should be itertools.count, not a plain int."""
-    from src.notify.telegram_bot import _signal_counter
-    assert isinstance(_signal_counter, type(itertools.count()))
-
-
-def test_signal_counter_increments():
-    """Bug 2: next(_signal_counter) should return sequential IDs."""
-    counter = itertools.count(1000)  # use a fresh counter to avoid side-effects
-    assert next(counter) == 1000
-    assert next(counter) == 1001
-    assert next(counter) == 1002
-
+# --- Bug 2: _signal_counter atomicity tests removed alongside the
+# signal_confirmation feature (Apr 19). The counter and its consumers
+# (send_signal_for_confirmation et al.) no longer exist.
 
 # --- Bug 4: Paper PnL deducts simulated fees ---
 

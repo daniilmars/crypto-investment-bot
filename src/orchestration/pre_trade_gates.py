@@ -50,7 +50,11 @@ def check_buy_gates(
 
     try:
         from src.database import get_pending_orders
-        strategy = 'auto' if label == 'AUTO' else 'manual'
+        # Map Telegram-side label ('AUTO'/'CONSERVATIVE'/'LONGTERM') to the
+        # DB strategy column. Legacy manual-loop labels ('paper'/'live'/etc.)
+        # fall through to 'auto' since manual trading is removed.
+        label_lower = (label or '').lower()
+        strategy = label_lower if label_lower in ('auto', 'conservative', 'longterm') else 'auto'
         pending = get_pending_orders(asset_type=asset_type, trading_strategy=strategy)
         if any(p['symbol'] == symbol for p in pending):
             reason = f"{prefix}Skipping BUY for {symbol}: Pending limit order exists."
@@ -67,8 +71,9 @@ def check_buy_gates(
         log.info(reason)
         return False, 0.0, reason
 
-    # 4. Sector limit
-    strategy = 'auto' if label == 'AUTO' else None
+    # 4. Sector limit — strategy is only used for logging context.
+    label_lower = (label or '').lower()
+    strategy = label_lower if label_lower in ('auto', 'conservative', 'longterm') else None
     sector_ok, sector_msg = check_sector_limit(
         symbol, open_positions, strategy)
     if not sector_ok:

@@ -376,50 +376,6 @@ class TestAddToPosition:
         assert result['symbol'] == 'AAPL'
 
 
-# ---------- Telegram INCREASE Signal ----------
-
-class TestTelegramIncreaseSignal:
-    """Tests that send_signal_for_confirmation handles INCREASE correctly."""
-
-    @patch('src.notify.telegram_bot.Bot')
-    @patch('src.notify.telegram_bot.telegram_config', {'enabled': True})
-    @patch('src.notify.telegram_bot.TOKEN', 'fake-token')
-    @patch('src.notify.telegram_bot.CHAT_ID', '12345')
-    def test_increase_signal_message_format(self, mock_bot_cls):
-        """INCREASE signal should show current + adding + new total."""
-        from src.notify.telegram_bot import send_signal_for_confirmation, _pending_signals
-
-        mock_bot = MagicMock()
-        mock_bot_cls.return_value = mock_bot
-        mock_sent = MagicMock()
-        mock_sent.message_id = 42
-        mock_bot.send_message = AsyncMock(return_value=mock_sent)
-
-        signal = {
-            'signal': 'INCREASE',
-            'symbol': 'BTC',
-            'current_price': 52000.0,
-            'quantity': 0.05,
-            'reason': 'ETF approval catalyst',
-            'asset_type': 'crypto',
-            'position': {'order_id': 'ORDER_1', 'quantity': 0.1},
-        }
-
-        signal_id = asyncio.run(send_signal_for_confirmation(signal))
-
-        assert signal_id > 0
-        assert signal_id in _pending_signals
-
-        # Check that the message mentions the current/adding/new total
-        call_args = mock_bot.send_message.call_args
-        message_text = call_args.kwargs.get('text', call_args[1].get('text', ''))
-        assert 'INCREASE' in message_text
-        assert 'Adding' in message_text
-        assert 'New Total' in message_text
-
-        _pending_signals.clear()
-
-
 # ---------- Execute Confirmed Signal: INCREASE ----------
 
 class TestExecuteConfirmedIncrease:
@@ -514,14 +470,12 @@ class TestPositionAnalystConfig:
         assert analyst_cfg.get('check_interval_minutes') == 1440
         assert analyst_cfg.get('max_position_multiplier') == 3.0
 
-    def test_signal_confirmation_disabled(self):
-        """All trades are auto-executed now — confirmation entirely disabled."""
+    def test_signal_confirmation_section_removed(self):
+        """The signal_confirmation feature was removed (Apr 19) — config
+        block must no longer be present, otherwise we have stale config."""
         from src.config import app_config
         settings = app_config.get('settings', {})
-        confirm_cfg = settings.get('signal_confirmation', {})
-        assert confirm_cfg.get('enabled') is False
-        signals = confirm_cfg.get('require_confirmation_for', [])
-        assert 'BUY' not in signals
+        assert 'signal_confirmation' not in settings
 
 
 # ---------- Sizing Hints ----------

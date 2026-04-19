@@ -190,7 +190,7 @@ def positions_data() -> dict:
             "order_id": r.get("order_id"),
             "symbol": sym,
             "display_name": display_name(sym),
-            "strategy": r.get("trading_strategy") or "manual",
+            "strategy": r.get("trading_strategy") or "unknown",
             "asset_type": r.get("asset_type") or "crypto",
             "currency": ccy,
             "entry_price": entry,
@@ -219,7 +219,7 @@ def positions_data() -> dict:
 
 # Strategies the UI knows about; aligned with STRATEGY_ORDER in app.js so
 # the Mini App's group ordering matches the capital section.
-_KNOWN_STRATEGIES = ("auto", "conservative", "longterm", "manual")
+_KNOWN_STRATEGIES = ("auto", "conservative", "longterm")
 _DEFAULT_STARTING_CAPITAL = 10000.0
 _warned_strategies: set[str] = set()
 
@@ -273,11 +273,12 @@ def compute_capital_breakdown(
     """
     seen = set(realized_by_strategy) | set(deployed_by_strategy) \
         | set(unrealized_by_strategy) | set(open_count_by_strategy)
-    # Always emit auto/conservative/longterm if include_empty; manual only
-    # when it actually has activity to avoid visual clutter.
+    # Always emit auto/conservative/longterm if include_empty. Manual is
+    # removed; any stale rows still tagged 'manual' end up under 'unknown'
+    # via the fallback in summary_data and are only shown when active.
     candidates = list(_KNOWN_STRATEGIES)
     for s in seen:
-        if s not in candidates:
+        if s not in candidates and s != 'manual':
             candidates.append(s)
 
     by_strategy: list[dict] = []
@@ -287,14 +288,9 @@ def compute_capital_breakdown(
         unrealized = float(unrealized_by_strategy.get(s) or 0)
         open_count = int(open_count_by_strategy.get(s) or 0)
 
-        # Skip empties unless caller asks otherwise. Manual is always
-        # skipped when totally empty regardless of include_empty.
         is_active = (open_count > 0) or (abs(realized) > 0.005)
-        if not is_active:
-            if s == 'manual':
-                continue
-            if not include_empty:
-                continue
+        if not is_active and not include_empty:
+            continue
 
         starting = _starting_capital_for_strategy(s)
         free = starting + realized - deployed
@@ -383,7 +379,7 @@ def summary_data() -> dict:
                 "FROM trades WHERE status = 'OPEN' "
                 "GROUP BY trading_strategy"
             )
-            open_by_strat = {r["trading_strategy"] or "manual": int(r["n"])
+            open_by_strat = {r["trading_strategy"] or "unknown": int(r["n"])
                              for r in _rows_to_dicts(cur, cur.fetchall())}
 
             cur.execute(
@@ -406,7 +402,7 @@ def summary_data() -> dict:
         ccy = currency_for_symbol(t["symbol"])
         pnl_usd = to_usd(float(t["pnl"] or 0), ccy)
         bucket["all"] += pnl_usd
-        strat = (t.get("trading_strategy") or "manual")
+        strat = (t.get("trading_strategy") or "unknown")
         realized_by_strategy[strat] = realized_by_strategy.get(strat, 0.0) + pnl_usd
         exit_ts = _parse_ts(t.get("exit_timestamp"))
         if exit_ts is None:
@@ -432,7 +428,7 @@ def summary_data() -> dict:
     deployed_by_strategy: dict[str, float] = {}
     unrealized_by_strategy: dict[str, float] = {}
     for p in pos_blob.get("positions", []):
-        s = p.get("strategy") or "manual"
+        s = p.get("strategy") or "unknown"
         deployed_by_strategy[s] = deployed_by_strategy.get(s, 0.0) + to_usd(
             float(p["entry_price"]) * float(p["quantity"]), p["currency"])
         unrealized_by_strategy[s] = unrealized_by_strategy.get(s, 0.0) + float(
@@ -514,7 +510,7 @@ def equity_data(days: int = 30) -> dict:
         ts = _parse_ts(r.get("exit_timestamp"))
         if ts is None:
             continue
-        series.append((ts, cumulative, r.get("trading_strategy") or "manual"))
+        series.append((ts, cumulative, r.get("trading_strategy") or "unknown"))
 
     points = [
         {"t": datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(),
@@ -645,7 +641,7 @@ def recent_trades_data(limit: int = 10) -> dict:
             "order_id": r.get("order_id"),
             "symbol": sym,
             "display_name": display_name(sym),
-            "strategy": r.get("trading_strategy") or "manual",
+            "strategy": r.get("trading_strategy") or "unknown",
             "asset_type": r.get("asset_type") or "crypto",
             "currency": ccy,
             "entry_price": entry,

@@ -291,17 +291,11 @@ def build_auto_detail() -> str:
         auto_total = auto_balance.get('total_usd', initial)
         auto_return = ((auto_total - initial) / initial * 100) if initial > 0 else 0
 
-        manual_balance = get_account_balance()
-        manual_initial = app_config.get('settings', {}).get('paper_trading_initial_capital', 10000.0)
-        manual_total = manual_balance.get('total_usd', 0)
-        manual_return = ((manual_total - manual_initial) / manual_initial * 100) if manual_initial > 0 else 0
-
         lines = [
             "*Auto-Bot Summary*\n",
             f"*Balance:* ${auto_total:,.2f}",
             f"*Return:* {auto_return:+.1f}%",
-            f"*Positions:* {len(auto_positions)}\n",
-            f"_Manual: {manual_return:+.1f}% vs Auto: {auto_return:+.1f}%_",
+            f"*Positions:* {len(auto_positions)}",
         ]
         return '\n'.join(lines)
     except Exception as e:

@@ -112,11 +112,10 @@ class TestAutoSellRouting:
 
     @patch('src.notify.telegram_periodic_summary.send_trade_alert', new_callable=AsyncMock)
     @patch('src.orchestration.position_analyst.place_order')
-    @patch('src.orchestration.position_analyst.is_confirmation_required', return_value=True)
     @patch('src.orchestration.position_analyst.bot_state')
-    def test_auto_sell_skips_confirmation(self, mock_state, mock_confirm,
+    def test_auto_sell_skips_confirmation(self, mock_state,
                                           mock_order, mock_alert):
-        """Auto SELL should skip confirmation even if it's required."""
+        """Auto SELL should place order with trading_strategy='auto'."""
         from src.orchestration.position_analyst import _handle_analyst_sell
 
         position = _make_position()
@@ -124,8 +123,6 @@ class TestAutoSellRouting:
             position, 'BTC', 48000.0, 'A_1',
             0.85, 'bearish momentum', 'crypto', trading_strategy='auto'))
 
-        # Should NOT ask for confirmation
-        mock_confirm.assert_not_called()
         # Should place order with trading_strategy='auto'
         mock_order.assert_called_once()
         call_kwargs = mock_order.call_args
@@ -134,9 +131,8 @@ class TestAutoSellRouting:
 
     @patch('src.notify.telegram_periodic_summary.send_trade_alert', new_callable=AsyncMock)
     @patch('src.orchestration.position_analyst.place_order')
-    @patch('src.orchestration.position_analyst.is_confirmation_required', return_value=True)
     @patch('src.orchestration.position_analyst.bot_state')
-    def test_auto_sell_clears_auto_state(self, mock_state, mock_confirm,
+    def test_auto_sell_clears_auto_state(self, mock_state,
                                           mock_order, mock_alert):
         """Auto SELL should clear trailing stop and auto analyst state."""
         from src.orchestration.position_analyst import _handle_analyst_sell
@@ -152,9 +148,8 @@ class TestAutoSellRouting:
 
     @patch('src.notify.telegram_periodic_summary.send_trade_alert', new_callable=AsyncMock)
     @patch('src.orchestration.position_analyst.place_order')
-    @patch('src.orchestration.position_analyst.is_confirmation_required', return_value=True)
     @patch('src.orchestration.position_analyst.bot_state')
-    def test_auto_sell_alert_called(self, mock_state, mock_confirm,
+    def test_auto_sell_alert_called(self, mock_state,
                                      mock_order, mock_alert):
         """Auto SELL should send a trade alert with strategy + reasoning."""
         from src.orchestration.position_analyst import _handle_analyst_sell
@@ -169,30 +164,12 @@ class TestAutoSellRouting:
         assert kwargs['action'] == 'SELL'
         assert kwargs['trading_strategy'] == 'auto'
 
-    @patch('src.orchestration.position_analyst.send_signal_for_confirmation', new_callable=AsyncMock)
-    @patch('src.orchestration.position_analyst.is_confirmation_required', return_value=True)
-    @patch('src.orchestration.position_analyst.bot_state')
-    def test_manual_sell_uses_confirmation(self, mock_state, mock_confirm,
-                                            mock_send):
-        """Manual SELL still uses confirmation when explicitly enabled."""
-        from src.orchestration.position_analyst import _handle_analyst_sell
-
-        position = _make_position()
-        run_async(_handle_analyst_sell(
-            position, 'BTC', 48000.0, 'A_1',
-            0.85, 'bearish', 'crypto', trading_strategy='manual'))
-
-        mock_send.assert_called_once()
-
-
 class TestAutoIncreaseRouting:
     """Verifies auto INCREASE uses correct balance pool + skips confirmation."""
 
     @patch('src.orchestration.position_analyst.add_to_position')
     @patch('src.orchestration.position_analyst.get_account_balance')
-    @patch('src.orchestration.position_analyst.is_confirmation_required', return_value=True)
-    def test_auto_increase_skips_confirmation(self, mock_confirm,
-                                               mock_balance, mock_add):
+    def test_auto_increase_skips_confirmation(self, mock_balance, mock_add):
         """Auto INCREASE should skip confirmation and add directly."""
         from src.orchestration.position_analyst import _handle_increase
 
@@ -215,9 +192,7 @@ class TestAutoIncreaseRouting:
 
     @patch('src.orchestration.position_analyst.add_to_position')
     @patch('src.orchestration.position_analyst.get_account_balance')
-    @patch('src.orchestration.position_analyst.is_confirmation_required', return_value=True)
-    def test_auto_increase_uses_auto_balance_pool(self, mock_confirm,
-                                                    mock_balance, mock_add):
+    def test_auto_increase_uses_auto_balance_pool(self, mock_balance, mock_add):
         """Auto INCREASE should query balance with trading_strategy='auto'."""
         from src.orchestration.position_analyst import _handle_increase
 

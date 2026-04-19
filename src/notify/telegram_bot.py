@@ -1,8 +1,6 @@
 import asyncio
-import itertools
 from datetime import datetime, timezone
 from functools import wraps
-from typing import Callable, Optional
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
@@ -12,7 +10,6 @@ from src.config import app_config
 from src.database import (
     get_price_history_since,
     get_database_schema, get_table_counts, get_trade_summary, get_last_signal,
-    record_signal_decision,
 )
 from src.analysis.gemini_summary import generate_market_summary
 from src.gcp.costs import get_gcp_billing_summary
@@ -35,17 +32,6 @@ TOKEN = telegram_config.get('token')
 CHAT_ID = telegram_config.get('chat_id')
 AUTHORIZED_USER_IDS = telegram_config.get('authorized_user_ids', [])
 
-# --- Signal Confirmation State ---
-_pending_signals: dict[int, dict] = {}  # signal_id → {signal, message_id, chat_id, created_at}
-_signal_counter = itertools.count(1)
-_execute_callback: Optional[Callable] = None  # registered by main.py
-
-# Load confirmation config
-_confirmation_config = app_config.get('settings', {}).get('signal_confirmation', {})
-CONFIRMATION_ENABLED = _confirmation_config.get('enabled', False)
-CONFIRMATION_TIMEOUT_MINUTES = _confirmation_config.get('timeout_minutes', 30)
-CONFIRMATION_SIGNALS = _confirmation_config.get('require_confirmation_for', ['BUY', 'SELL'])
-
 # --- Decorators ---
 def authorized(func):
     """Decorator to check if a user is authorized."""
@@ -67,88 +53,6 @@ async def send_telegram_message(bot: Bot, chat_id: str, message: str):
         log.info("Successfully sent Telegram message.")
     except Exception as e:
         log.error(f"Error sending Telegram message: {e}")
-
-# --- Signal Confirmation Functions ---
-def register_execute_callback(callback: Callable):
-    """Registers the trade execution function (called from main.py at startup)."""
-    global _execute_callback
-    _execute_callback = callback
-    log.info("Signal confirmation execute callback registered.")
-
-
-def is_confirmation_required(signal_type: str) -> bool:
-    """Checks if this signal type requires user confirmation."""
-    return CONFIRMATION_ENABLED and signal_type in CONFIRMATION_SIGNALS
-
-
-async def send_signal_for_confirmation(signal: dict) -> int:
-    """Sends a signal to Telegram with inline Approve/Reject buttons.
-    Returns the signal_id assigned to this pending signal."""
-    if not telegram_config.get('enabled') or not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
-        log.error("Telegram bot is not configured. Cannot send confirmation.")
-        return -1
-
-    signal_id = next(_signal_counter)
-
-    bot = Bot(token=TOKEN)
-    signal_type = signal.get('signal', 'N/A')
-    symbol = signal.get('symbol', 'N/A').upper()
-    price = signal.get('current_price', 0)
-    reason = _escape_md(signal.get('reason', 'No reason provided.'))
-    asset_type = signal.get('asset_type', 'crypto')
-    quantity = signal.get('quantity', 0)
-
-    asset_label = "Stock" if asset_type == "stock" else "Crypto"
-    mode = _get_trading_mode()
-    mode_label = f" [{mode.upper()}]" if mode != 'paper' else ""
-    display = _display_name(symbol)
-
-    message = f"📊 *NEW SIGNAL: {signal_type} {display}*{mode_label}\n\n"
-    message += f"💰 *Price:* ${price:,.2f}\n"
-    message += f"📈 *Reason:* {reason}\n"
-
-    qf = _fmt_qty(quantity, asset_type)
-    if quantity and signal_type == "BUY":
-        total_value = quantity * price
-        message += f"💵 *Quantity:* {qf} {symbol} (${total_value:,.2f})\n"
-    elif quantity and signal_type == "SELL":
-        total_value = quantity * price
-        message += f"💵 *Quantity:* {qf} {symbol} (${total_value:,.2f})\n"
-    elif quantity and signal_type == "INCREASE":
-        position_data = signal.get('position', {})
-        current_qty = position_data.get('quantity', 0)
-        new_total = current_qty + quantity
-        message += f"📦 *Current:* {_fmt_qty(current_qty, asset_type)} {symbol}\n"
-        message += f"➕ *Adding:* {qf} {symbol} (${quantity * price:,.2f})\n"
-        message += f"📦 *New Total:* {_fmt_qty(new_total, asset_type)} {symbol}\n"
-
-    message += f"⏱ *Expires in {CONFIRMATION_TIMEOUT_MINUTES} min*\n"
-    message += f"_{asset_label} signal_"
-
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("✅ Execute", callback_data=f"a:{signal_id}"),
-            InlineKeyboardButton("❌ Skip", callback_data=f"r:{signal_id}"),
-        ]
-    ])
-
-    try:
-        sent_msg = await bot.send_message(
-            chat_id=CHAT_ID, text=message, parse_mode='Markdown',
-            reply_markup=keyboard
-        )
-        _pending_signals[signal_id] = {
-            'signal': signal,
-            'message_id': sent_msg.message_id,
-            'chat_id': CHAT_ID,
-            'created_at': datetime.now(timezone.utc),
-        }
-        log.info(f"Signal #{signal_id} sent for confirmation: {signal_type} {symbol}")
-        return signal_id
-    except Exception as e:
-        log.error(f"Error sending signal confirmation: {e}")
-        return -1
-
 
 def _escape_md(text: str) -> str:
     """Escape Telegram Markdown v1 special characters in user-facing text."""
@@ -175,170 +79,6 @@ async def _safe_edit(query, text: str):
             await query.edit_message_text(text, parse_mode=None)
         except Exception as plain_err:
             log.error(f"Message edit failed completely: {plain_err}")
-
-
-async def _handle_signal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles Approve/Reject button presses for pending signals."""
-    query = update.callback_query
-
-    # Authorization check
-    user_id = query.from_user.id
-    if user_id not in AUTHORIZED_USER_IDS:
-        await query.answer("You are not authorized.", show_alert=True)
-        return
-
-    data = query.data or ""
-    if ":" not in data:
-        await query.answer("Invalid action.")
-        return
-
-    action, id_str = data.split(":", 1)
-    try:
-        signal_id = int(id_str)
-    except ValueError:
-        await query.answer("Invalid signal ID.")
-        return
-
-    pending = _pending_signals.pop(signal_id, None)
-    if not pending:
-        await query.answer("Signal expired or already handled.", show_alert=True)
-        return
-
-    signal = pending['signal']
-    signal_type = signal.get('signal', 'N/A')
-    symbol = signal.get('symbol', 'N/A').upper()
-    display = _display_name(symbol)
-    price = signal.get('current_price', 0)
-    reason = _escape_md(signal.get('reason', 'No reason provided.'))
-    quantity = signal.get('quantity', 0)
-    asset_type = signal.get('asset_type', 'crypto')
-
-    if action == "a":
-        # Approve — execute the trade
-        await query.answer("Executing trade...")
-        order_result = None
-        if _execute_callback:
-            try:
-                order_result = await _execute_callback(signal)
-            except Exception as e:
-                log.error(f"Error executing confirmed signal #{signal_id}: {e}")
-                error_msg = (
-                    f"⚠️ *EXECUTION FAILED: {signal_type} {display}*\n\n"
-                    f"💰 *Price:* ${price:,.2f}\n"
-                    f"📈 *Reason:* {reason}\n\n"
-                    f"*Error:* {_escape_md(str(e)[:200])}"
-                )
-                await _safe_edit(query, error_msg)
-                return
-
-        # Check if execution was skipped (e.g., duplicate position)
-        if order_result and order_result.get('status') == 'SKIPPED':
-            skip_reason = _escape_md(order_result.get('message', 'Unknown reason'))
-            message = (
-                f"⚠️ *SKIPPED: {signal_type} {display}*\n\n"
-                f"*Reason:* {skip_reason}\n\n"
-                f"_Signal was approved but could not be executed_"
-            )
-            await _safe_edit(query, message)
-            log.info(f"Signal #{signal_id} skipped: {signal_type} {symbol} "
-                     f"— {order_result.get('message')}")
-            return
-
-        # Build success message
-        message = f"✅ *EXECUTED: {signal_type} {display}*\n\n"
-        if order_result:
-            fill_price = order_result.get('price', price)
-            message += f"💰 *Fill price:* ${fill_price:,.2f}\n"
-        else:
-            message += f"💰 *Price:* ${price:,.2f}\n"
-        message += f"📈 *Reason:* {reason}\n"
-        if quantity:
-            message += f"💵 *Quantity:* {_fmt_qty(quantity, asset_type)} {symbol}\n"
-        if order_result:
-            oco = order_result.get('oco')
-            if oco and 'take_profit' in oco:
-                message += f"🎯 *TP:* ${oco['take_profit']:,.2f} | *SL:* ${oco['stop_loss']:,.2f}\n"
-            elif oco and 'stop_loss' in oco:
-                message += f"🛡️ *SL:* ${oco['stop_loss']:,.2f} (fallback — no TP bracket)\n"
-            pnl = order_result.get('pnl')
-            if pnl is not None:
-                message += f"*PnL:* ${pnl:,.2f}\n"
-        message += "\n_Approved by user_"
-
-        await _safe_edit(query, message)
-        log.info(f"Signal #{signal_id} approved: {signal_type} {symbol}")
-        try:
-            await record_signal_decision(signal, 'approved')
-        except Exception as e:
-            log.debug(f"Failed to record approved decision: {e}")
-
-    elif action == "r":
-        # Reject
-        await query.answer("Signal skipped.")
-        message = (
-            f"❌ *SKIPPED: {signal_type} {display}*\n\n"
-            f"💰 *Price:* ${price:,.2f}\n"
-            f"📈 *Reason:* {reason}\n\n"
-            f"_Rejected by user_"
-        )
-        await _safe_edit(query, message)
-        log.info(f"Signal #{signal_id} rejected: {signal_type} {symbol}")
-        try:
-            await record_signal_decision(signal, 'rejected')
-        except Exception as e:
-            log.debug(f"Failed to record rejected decision: {e}")
-    else:
-        await query.answer("Unknown action.")
-
-
-async def cleanup_expired_signals():
-    """Removes expired pending signals and edits their messages."""
-    if not _pending_signals:
-        return
-
-    now = datetime.now(timezone.utc)
-    expired_ids = []
-
-    for signal_id, pending in list(_pending_signals.items()):
-        age_minutes = (now - pending['created_at']).total_seconds() / 60
-        if age_minutes >= CONFIRMATION_TIMEOUT_MINUTES:
-            expired_ids.append(signal_id)
-
-    if not expired_ids:
-        return
-
-    bot = Bot(token=TOKEN)
-    for signal_id in expired_ids:
-        pending = _pending_signals.pop(signal_id, None)
-        if not pending:
-            continue
-
-        signal = pending['signal']
-        signal_type = signal.get('signal', 'N/A')
-        symbol = signal.get('symbol', 'N/A').upper()
-        display = _display_name(symbol)
-        price = signal.get('current_price', 0)
-        reason = signal.get('reason', 'No reason provided.')
-
-        message = (
-            f"⏰ *EXPIRED: {signal_type} {display}*\n\n"
-            f"💰 *Price:* ${price:,.2f}\n"
-            f"📈 *Reason:* {reason}\n\n"
-            f"_Auto-rejected after {CONFIRMATION_TIMEOUT_MINUTES} min_"
-        )
-        try:
-            await bot.edit_message_text(
-                chat_id=pending['chat_id'],
-                message_id=pending['message_id'],
-                text=message, parse_mode='Markdown'
-            )
-        except Exception as e:
-            log.warning(f"Could not edit expired signal #{signal_id} message: {e}")
-        log.info(f"Signal #{signal_id} expired: {signal_type} {symbol}")
-        try:
-            await record_signal_decision(signal, 'expired')
-        except Exception as e:
-            log.debug(f"Failed to record expired decision: {e}")
 
 
 # --- Alerting Functions ---
@@ -1485,98 +1225,6 @@ async def market_analysis_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
 # --- Quick Action Commands ---
 
 @authorized
-async def sell_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the /sell SYMBOL command — routes through confirmation flow."""
-    if not context.args:
-        await update.message.reply_text("Usage: `/sell SYMBOL`", parse_mode='Markdown')
-        return
-    symbol = context.args[0].upper()
-    try:
-        crypto_positions = get_open_positions(asset_type='crypto')
-        stock_positions = get_open_positions(asset_type='stock')
-        all_positions = crypto_positions + stock_positions
-        pos = next((p for p in all_positions if p.get('symbol', '').upper() == symbol), None)
-        if not pos:
-            await update.message.reply_text(f"No open position found for `{symbol}`.",
-                                            parse_mode='Markdown')
-            return
-
-        asset_type = pos.get('asset_type', 'crypto')
-        current_price = _get_position_price(symbol)
-        if not current_price:
-            await update.message.reply_text(f"Could not fetch price for `{symbol}`.",
-                                            parse_mode='Markdown')
-            return
-
-        signal = {
-            'signal': 'SELL',
-            'symbol': symbol,
-            'current_price': current_price,
-            'quantity': pos.get('quantity', 0),
-            'position': pos,
-            'reason': 'Manual /sell command',
-            'asset_type': asset_type,
-        }
-        signal_id = await send_signal_for_confirmation(signal)
-        if signal_id < 0:
-            await update.message.reply_text("Failed to create sell confirmation.")
-    except Exception as e:
-        log.error(f"Error in /sell: {e}", exc_info=True)
-        await update.message.reply_text(f"Error: {e}")
-
-
-@authorized
-async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the /buy SYMBOL [AMOUNT] command — routes through confirmation flow."""
-    if not context.args:
-        await update.message.reply_text("Usage: `/buy SYMBOL [AMOUNT]`", parse_mode='Markdown')
-        return
-
-    symbol = context.args[0].upper()
-    amount = None
-    if len(context.args) > 1:
-        try:
-            amount = float(context.args[1])
-        except ValueError:
-            await update.message.reply_text("Invalid amount. Usage: `/buy SYMBOL [AMOUNT]`",
-                                            parse_mode='Markdown')
-            return
-
-    try:
-        # Determine asset type
-        asset_type = 'stock' if _is_stock_symbol(symbol) else 'crypto'
-
-        current_price = _get_position_price(symbol)
-        if not current_price:
-            await update.message.reply_text(f"Could not fetch price for `{symbol}`.",
-                                            parse_mode='Markdown')
-            return
-
-        if amount is None:
-            # Use default risk percentage
-            risk_pct = app_config.get('settings', {}).get('trade_risk_percentage', 0.02)
-            balance = get_account_balance(asset_type=asset_type)
-            amount = balance.get('total_usd', 0) * risk_pct
-
-        quantity = amount / current_price if current_price > 0 else 0
-
-        signal = {
-            'signal': 'BUY',
-            'symbol': symbol,
-            'current_price': current_price,
-            'quantity': quantity,
-            'reason': f'Manual /buy command (${amount:,.2f})',
-            'asset_type': asset_type,
-        }
-        signal_id = await send_signal_for_confirmation(signal)
-        if signal_id < 0:
-            await update.message.reply_text("Failed to create buy confirmation.")
-    except Exception as e:
-        log.error(f"Error in /buy: {e}", exc_info=True)
-        await update.message.reply_text(f"Error: {e}")
-
-
-@authorized
 async def close_all_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /close_all [crypto|stocks|all] command."""
     filter_type = (context.args[0].lower() if context.args else 'all')
@@ -1674,11 +1322,9 @@ async def _handle_quick_action_callback(update: Update, context: ContextTypes.DE
                 'asset_type': asset_type,
             }
             try:
-                if _execute_callback:
-                    result = await _execute_callback(signal)
-                    status = result.get('status', 'UNKNOWN') if isinstance(result, dict) else 'DONE'
-                else:
-                    status = 'NO_CALLBACK'
+                from src.orchestration.trade_executor import execute_confirmed_signal
+                result = await execute_confirmed_signal(signal)
+                status = result.get('status', 'UNKNOWN') if isinstance(result, dict) else 'DONE'
                 results.append(f"{symbol}: {status}")
             except Exception as e:
                 results.append(f"{symbol}: ERROR ({e})")
@@ -1702,9 +1348,7 @@ async def _dispatch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """Routes callback queries to the appropriate handler based on prefix."""
     data = update.callback_query.data or ""
     prefix = data.split(":")[0]
-    if prefix in ('a', 'r'):
-        await _handle_signal_callback(update, context)
-    elif prefix == 'dash':
+    if prefix == 'dash':
         from src.notify.telegram_dashboard import handle_dashboard_callback
         await handle_dashboard_callback(update, context)
     elif prefix == 'qa':
@@ -1792,10 +1436,7 @@ async def backtest_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Routes free-text messages to AI chat handler."""
-    from src.notify.telegram_chat import handle_chat_message, set_execute_callback
-    # Wire execute callback if not yet set
-    if _execute_callback:
-        set_execute_callback(_execute_callback)
+    from src.notify.telegram_chat import handle_chat_message
     await handle_chat_message(update, context)
 
 

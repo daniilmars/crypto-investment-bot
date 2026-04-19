@@ -15,7 +15,7 @@ from src.execution.binance_trader import (
 from src.execution.stock_trader import place_stock_order
 from src.logger import log
 from src.notify.telegram_bot import (
-    is_confirmation_required, send_signal_for_confirmation, send_telegram_alert,
+    send_telegram_alert,
 )
 from src.orchestration import bot_state
 from src.orchestration.pre_trade_gates import (
@@ -504,57 +504,14 @@ async def execute_sell(
 
     # Manual trading
     if broker == 'alpaca':
-        if is_confirmation_required("SELL"):
-            log.info(f"{prefix}Sending SELL {symbol} (Alpaca) for confirmation.")
-            await send_signal_for_confirmation(signal)
-            return None
-        else:
-            log.info(f"{prefix}Executing Alpaca trade: SELL {qty:.4f} {symbol}.")
-            order_result = place_stock_order(symbol, "SELL", qty, current_price)
-            if order_result.get('status') == 'FILLED':
-                signal['order_result'] = order_result
-                from src.execution.stock_trader import _is_same_day_trade, _record_day_trade
-                if _is_same_day_trade(position):
-                    _record_day_trade()
-                    log.info(f"PDT: recorded day trade for {symbol}")
-                try:
-                    from src.notify.telegram_periodic_summary import send_trade_alert
-                    entry_price = position['entry_price']
-                    pnl_pct = (current_price - entry_price) / entry_price
-                    pnl_dollar = (current_price - entry_price) * qty
-                    hold = _hold_duration(position.get('entry_timestamp'))
-                    await send_trade_alert(
-                        action="SELL", symbol=symbol,
-                        trading_strategy=trading_strategy,
-                        entry_price=entry_price, exit_price=current_price,
-                        quantity=qty, pnl=pnl_dollar, pnl_pct=pnl_pct * 100,
-                        hold_duration=hold, exit_reason='signal_sell')
-                except Exception:
-                    pass
-            else:
-                log.warning(f"SELL order for {symbol} failed: {order_result.get('message')}")
-            return order_result
-
-    # Paper/live crypto or paper stock
-    if is_confirmation_required("SELL"):
-        log.info(f"{prefix}Sending SELL {symbol} for confirmation.")
-        await send_signal_for_confirmation(signal)
-        return None
-    else:
-        log.info(f"{prefix}Executing trade: SELL {qty:.6f} {symbol}.")
-        order_kw = {}
-        if asset_type == 'stock':
-            order_kw['asset_type'] = 'stock'
-        order_result = place_order(symbol, "SELL", qty, current_price,
-                                   existing_order_id=order_id, exit_reason='signal_sell', **order_kw)
-        if order_result.get('status') == 'CLOSED':
-            bot_state.clear_trailing_stop(order_id)
+        log.info(f"{prefix}Executing Alpaca trade: SELL {qty:.4f} {symbol}.")
+        order_result = place_stock_order(symbol, "SELL", qty, current_price)
+        if order_result.get('status') == 'FILLED':
             signal['order_result'] = order_result
-            if asset_type == 'stock':
-                from src.execution.stock_trader import _is_same_day_trade, _record_day_trade
-                if _is_same_day_trade(position):
-                    _record_day_trade()
-                    log.info(f"PDT: recorded day trade for {symbol}")
+            from src.execution.stock_trader import _is_same_day_trade, _record_day_trade
+            if _is_same_day_trade(position):
+                _record_day_trade()
+                log.info(f"PDT: recorded day trade for {symbol}")
             try:
                 from src.notify.telegram_periodic_summary import send_trade_alert
                 entry_price = position['entry_price']
@@ -570,8 +527,41 @@ async def execute_sell(
             except Exception:
                 pass
         else:
-            log.warning(f"SELL order for {symbol} failed: {order_result}")
+            log.warning(f"SELL order for {symbol} failed: {order_result.get('message')}")
         return order_result
+
+    # Paper/live crypto or paper stock
+    log.info(f"{prefix}Executing trade: SELL {qty:.6f} {symbol}.")
+    order_kw = {}
+    if asset_type == 'stock':
+        order_kw['asset_type'] = 'stock'
+    order_result = place_order(symbol, "SELL", qty, current_price,
+                               existing_order_id=order_id, exit_reason='signal_sell', **order_kw)
+    if order_result.get('status') == 'CLOSED':
+        bot_state.clear_trailing_stop(order_id)
+        signal['order_result'] = order_result
+        if asset_type == 'stock':
+            from src.execution.stock_trader import _is_same_day_trade, _record_day_trade
+            if _is_same_day_trade(position):
+                _record_day_trade()
+                log.info(f"PDT: recorded day trade for {symbol}")
+        try:
+            from src.notify.telegram_periodic_summary import send_trade_alert
+            entry_price = position['entry_price']
+            pnl_pct = (current_price - entry_price) / entry_price
+            pnl_dollar = (current_price - entry_price) * qty
+            hold = _hold_duration(position.get('entry_timestamp'))
+            await send_trade_alert(
+                action="SELL", symbol=symbol,
+                trading_strategy=trading_strategy,
+                entry_price=entry_price, exit_price=current_price,
+                quantity=qty, pnl=pnl_dollar, pnl_pct=pnl_pct * 100,
+                hold_duration=hold, exit_reason='signal_sell')
+        except Exception:
+            pass
+    else:
+        log.warning(f"SELL order for {symbol} failed: {order_result}")
+    return order_result
 
 
 # --- Position Rotation ---
@@ -686,10 +676,8 @@ async def _try_rotation(
         return buy_result
 
     else:
-        # Manual mode: send rotation for confirmation
-        signal['rotation_candidate'] = candidate
-        signal['quantity'] = 0  # will be calculated on confirm
-        signal['asset_type'] = asset_type
-        log.info(f"{prefix}Sending rotation {rotate_sym} → {symbol} for confirmation")
-        await send_signal_for_confirmation(signal)
+        # Manual confirmation flow removed (Apr 19) — non-auto rotation no
+        # longer attempts a separate confirmation step. The auto branch
+        # above handles all rotations now; everything else returns None.
+        log.debug(f"{prefix}Skipping non-auto rotation {rotate_sym} → {symbol}")
         return None

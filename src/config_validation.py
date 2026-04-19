@@ -33,12 +33,6 @@ class TrailingStopSettings(BaseModel):
     trailing_stop_distance: float = 0.015
 
 
-class SignalConfirmationSettings(BaseModel):
-    enabled: bool = False
-    timeout_minutes: int = 30
-    require_confirmation_for: list[str] = ["BUY", "SELL"]
-
-
 class MarketAlertsSettings(BaseModel):
     enabled: bool = True
     daily_digest_hour_utc: int = 8
@@ -112,7 +106,6 @@ class TradingSettings(BaseModel):
 
     live_trading: Optional[LiveTradingSettings] = None
     stock_trading: Optional[StockTradingSettings] = None
-    signal_confirmation: Optional[SignalConfirmationSettings] = None
     market_alerts: Optional[MarketAlertsSettings] = None
 
     @model_validator(mode='after')
@@ -151,7 +144,7 @@ def validate_config(config: dict) -> None:
 
     # Build a flat dict for TradingSettings, pulling nested sections
     flat = {k: v for k, v in settings.items()
-            if k not in ('live_trading', 'stock_trading', 'signal_confirmation',
+            if k not in ('live_trading', 'stock_trading',
                          'market_alerts', 'watch_list', 'news_analysis',
                          'auto_trading', 'position_analyst', 'position_monitor',
                          'macro_regime', 'sector_limits', 'event_calendar',
@@ -169,8 +162,6 @@ def validate_config(config: dict) -> None:
                                               'pe_ratio_sell_threshold',
                                               'earnings_growth_sell_threshold',
                                               'volume_spike_multiplier')}
-    if 'signal_confirmation' in settings:
-        flat['signal_confirmation'] = settings['signal_confirmation']
     if 'market_alerts' in settings:
         flat['market_alerts'] = {k: v for k, v in settings['market_alerts'].items()
                                  if k not in ('breaking_news', 'sector_moves',

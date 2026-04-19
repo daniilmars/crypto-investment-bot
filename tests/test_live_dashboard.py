@@ -174,19 +174,24 @@ class TestDeletedMessageRecovery:
 class TestBuildDailyRecap:
     @patch('src.notify.telegram_live_dashboard.get_trades_closed_today')
     def test_format_with_trades(self, mock_trades):
+        # Manual strategy removed (Apr 19): recap now iterates
+        # auto / conservative / longterm.
         mock_trades.side_effect = [
             [{'symbol': 'BTC', 'entry_price': 50000, 'exit_price': 52000,
               'pnl': 200, 'exit_reason': 'take_profit',
               'entry_timestamp': '2026-03-08T06:00:00+00:00',
               'exit_timestamp': '2026-03-08T14:00:00+00:00',
-              'strategy_type': None}],
-            [],  # auto trades
+              'strategy_type': None}],  # auto
+            [],  # conservative
+            [],  # longterm
         ]
         text = build_daily_recap()
         assert 'DAILY RECAP' in text
         assert 'BTC' in text
         assert '+$200' in text
         assert 'take_profit' in text
+        assert 'Auto' in text
+        assert 'Manual' not in text
 
 
 class TestDailyRecapSkipsNoTrades:

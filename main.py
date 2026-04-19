@@ -24,9 +24,7 @@ from src.database import (initialize_database,
 from src.execution.circuit_breaker import (resolve_stale_circuit_breaker_events,
                                            load_session_peaks)
 from src.logger import log
-from src.notify.telegram_bot import (start_bot,
-                                     register_execute_callback,
-                                     cleanup_expired_signals)
+from src.notify.telegram_bot import start_bot
 from src.notify.telegram_live_dashboard import load_dashboard_state
 from src.orchestration import bot_state
 from src.orchestration.trade_executor import execute_confirmed_signal
@@ -88,16 +86,6 @@ async def periodic_summary_loop():
         except Exception as e:
             log.error(f"Periodic summary error: {e}", exc_info=True)
         await asyncio.sleep(interval)
-
-
-async def _signal_cleanup_loop():
-    """Periodically cleans up expired pending signals."""
-    while True:
-        try:
-            await cleanup_expired_signals()
-        except Exception as e:
-            log.error(f"Error in signal cleanup loop: {e}", exc_info=True)
-        await asyncio.sleep(60)
 
 
 async def daily_sector_review_loop():
@@ -444,8 +432,14 @@ async def startup_event():
         except Exception as e:
             log.error(f"Webhook registration failed: {e}", exc_info=True)
 
-    # Register signal confirmation callback
-    register_execute_callback(execute_confirmed_signal)
+    # Wire the trade-execution entrypoint into the AI chat handler so
+    # chat-suggested trades can still execute. (The historical signal-
+    # confirmation flow that used register_execute_callback is removed.)
+    try:
+        from src.notify.telegram_chat import set_execute_callback
+        set_execute_callback(execute_confirmed_signal)
+    except ImportError:
+        pass
 
     # Load sector convictions from DB (survives container restarts)
     try:
@@ -462,7 +456,6 @@ async def startup_event():
 
     # Start background tasks
     _background_tasks.append(asyncio.create_task(bot_loop()))
-    _background_tasks.append(asyncio.create_task(_signal_cleanup_loop()))
 
     _background_tasks.append(asyncio.create_task(periodic_summary_loop()))
     log.info("4h periodic summary loop started.")

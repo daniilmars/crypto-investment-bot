@@ -133,28 +133,19 @@ def test_breakdown_utilization_clamped_to_100(cfg):
     assert s["utilization_pct"] == 100.0
 
 
-def test_breakdown_manual_omitted_when_empty(cfg):
-    """Manual strategy with no positions and no realized PnL shouldn't appear."""
+def test_breakdown_manual_always_excluded_even_when_active(cfg):
+    """Manual strategy was removed (Apr 19). Any stale rows still tagged
+    'manual' in the DB should NOT appear in the capital breakdown.
+    """
     out = compute_capital_breakdown(
-        realized_by_strategy={"auto": 50.0},
-        deployed_by_strategy={"auto": 1000.0},
-        unrealized_by_strategy={"auto": 5.0},
-        open_count_by_strategy={"auto": 1},
+        realized_by_strategy={"auto": 50.0, "manual": 200.0},
+        deployed_by_strategy={"auto": 1000.0, "manual": 500.0},
+        unrealized_by_strategy={"auto": 5.0, "manual": 10.0},
+        open_count_by_strategy={"auto": 1, "manual": 2},
     )
     names = [s["name"] for s in out["by_strategy"]]
     assert "manual" not in names
-    assert names == ["auto"]
-
-
-def test_breakdown_manual_included_when_active(cfg):
-    out = compute_capital_breakdown(
-        realized_by_strategy={"auto": 0.0, "manual": 25.0},
-        deployed_by_strategy={"auto": 0.0, "manual": 500.0},
-        unrealized_by_strategy={"auto": 0.0, "manual": 12.0},
-        open_count_by_strategy={"auto": 0, "manual": 1},
-    )
-    names = [s["name"] for s in out["by_strategy"]]
-    assert "manual" in names
+    assert "auto" in names
 
 
 def test_breakdown_unknown_strategy_appended(cfg):
@@ -171,8 +162,9 @@ def test_breakdown_unknown_strategy_appended(cfg):
 
 
 def test_breakdown_includes_known_strategies_when_include_empty(cfg):
-    """include_empty=True surfaces auto/conservative/longterm even with 0 activity
-    (manual stays gated)."""
+    """include_empty=True surfaces auto/conservative/longterm even with
+    0 activity. Manual is removed and never appears.
+    """
     out = compute_capital_breakdown(
         realized_by_strategy={},
         deployed_by_strategy={},
@@ -184,7 +176,7 @@ def test_breakdown_includes_known_strategies_when_include_empty(cfg):
     assert "auto" in names
     assert "conservative" in names
     assert "longterm" in names
-    assert "manual" not in names  # always omitted when empty
+    assert "manual" not in names
     # All start at $10k, $0 deployed, $0 unrealized
     for s in out["by_strategy"]:
         assert s["total_usd"] == 10000.0

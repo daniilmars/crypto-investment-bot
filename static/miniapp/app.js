@@ -23,7 +23,7 @@
     lastCapital: null,             // {by_strategy: [...], total_value_usd, ...}
   };
 
-  const STRATEGY_ORDER = ['auto', 'conservative', 'longterm', 'manual'];
+  const STRATEGY_ORDER = ['auto', 'conservative', 'longterm'];
 
   // --------------------------------------------------------------- helpers
 
@@ -322,18 +322,24 @@
 
     title.textContent = `Open positions (${rows.length})`;
 
-    // Group by strategy, fixed order
+    // Group by strategy, fixed order. Any row with an unknown strategy
+    // (including legacy 'manual' rows) goes to a catch-all bucket rendered
+    // after the known strategies.
     const groups = {};
     for (const s of STRATEGY_ORDER) groups[s] = [];
     for (const r of rows) {
-      const s = groups[r.strategy] ? r.strategy : 'manual';
+      const s = STRATEGY_ORDER.includes(r.strategy) ? r.strategy : 'unknown';
+      if (!groups[s]) groups[s] = [];
       groups[s].push(r);
     }
 
     const stale = new Set(p.stale_prices || []);
 
-    const html = STRATEGY_ORDER
-      .filter((s) => groups[s].length > 0)
+    // Render known strategies first, then any 'unknown' bucket last.
+    const renderOrder = [...STRATEGY_ORDER];
+    if (groups.unknown && groups.unknown.length > 0) renderOrder.push('unknown');
+    const html = renderOrder
+      .filter((s) => groups[s] && groups[s].length > 0)
       .map((strat) => {
         const arr = groups[strat];
         // Sort within group by pnl_pct desc
