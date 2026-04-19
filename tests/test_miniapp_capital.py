@@ -185,7 +185,11 @@ def test_breakdown_includes_known_strategies_when_include_empty(cfg):
 
 
 def test_breakdown_response_shape(cfg):
-    """Lock the public shape of the capital object (frontend depends on it)."""
+    """Lock the public shape of the capital object (frontend depends on it).
+
+    Asserts that `deployed_return_pct` is present at both levels so the
+    Mini App badge has a stable contract.
+    """
     out = compute_capital_breakdown(
         realized_by_strategy={"auto": 50.0},
         deployed_by_strategy={"auto": 1000.0},
@@ -195,13 +199,94 @@ def test_breakdown_response_shape(cfg):
     assert set(out.keys()) >= {
         "total_value_usd", "cash_locked_usd", "cash_free_usd",
         "utilization_pct", "return_pct", "realized_return_pct",
+        "deployed_return_pct",
         "by_strategy", "fx_method", "as_of_ts",
     }
     assert set(out["by_strategy"][0].keys()) >= {
         "name", "starting_usd", "realized_usd", "deployed_usd",
         "unrealized_usd", "free_usd", "total_usd", "open_count",
         "utilization_pct", "return_pct", "realized_return_pct",
+        "deployed_return_pct",
     }
+
+
+# ---- deployed_return_pct (Option B: open + closed cost basis) ------------
+
+def test_deployed_return_pct_basic(cfg):
+    """Open deployed=1000, closed_cost=2000, realized=+50, unrealized=+10
+    → numer=60, denom=3000 → 2.00%."""
+    out = compute_capital_breakdown(
+        realized_by_strategy={"auto": 50.0},
+        deployed_by_strategy={"auto": 1000.0},
+        unrealized_by_strategy={"auto": 10.0},
+        open_count_by_strategy={"auto": 1},
+        closed_cost_basis_by_strategy={"auto": 2000.0},
+    )
+    s = out["by_strategy"][0]
+    assert s["deployed_return_pct"] == pytest.approx(2.00, abs=0.01)
+
+
+def test_deployed_return_pct_zero_cost_basis_is_none(cfg):
+    """No open positions and no closed cost basis → metric is None
+    so the UI can render '—' instead of dividing by zero."""
+    out = compute_capital_breakdown(
+        realized_by_strategy={"auto": 0.0},
+        deployed_by_strategy={"auto": 0.0},
+        unrealized_by_strategy={"auto": 0.0},
+        open_count_by_strategy={"auto": 0},
+        closed_cost_basis_by_strategy={"auto": 0.0},
+        include_empty=True,
+    )
+    s = out["by_strategy"][0]
+    assert s["deployed_return_pct"] is None
+
+
+def test_deployed_return_pct_catastrophic_loss_unclamped(cfg):
+    """closed_cost=100, realized=-200, unrealized=0 → -200% (no clamping).
+    User wants visibility into catastrophic losses."""
+    out = compute_capital_breakdown(
+        realized_by_strategy={"auto": -200.0},
+        deployed_by_strategy={"auto": 0.0},
+        unrealized_by_strategy={"auto": 0.0},
+        open_count_by_strategy={"auto": 0},
+        closed_cost_basis_by_strategy={"auto": 100.0},
+    )
+    s = out["by_strategy"][0]
+    assert s["deployed_return_pct"] == pytest.approx(-200.0, abs=0.01)
+
+
+def test_deployed_return_pct_aggregate_invariant(cfg):
+    """Top-level deployed_return_pct == (Σrealized + Σunrealized)
+    / Σ(open_cost + closed_cost) × 100."""
+    out = compute_capital_breakdown(
+        realized_by_strategy={"auto": 100.0, "conservative": 80.0, "longterm": 17.0},
+        deployed_by_strategy={"auto": 3898.0, "conservative": 5290.0, "longterm": 485.0},
+        unrealized_by_strategy={"auto": 140.0, "conservative": 112.0, "longterm": 7.0},
+        open_count_by_strategy={"auto": 13, "conservative": 10, "longterm": 1},
+        closed_cost_basis_by_strategy={
+            "auto": 12000.0, "conservative": 4000.0, "longterm": 200.0},
+    )
+    realized_sum = 100.0 + 80.0 + 17.0
+    unrealized_sum = 140.0 + 112.0 + 7.0
+    deployed_sum = 3898.0 + 5290.0 + 485.0
+    closed_sum = 12000.0 + 4000.0 + 200.0
+    expected = (realized_sum + unrealized_sum) / (deployed_sum + closed_sum) * 100.0
+    assert out["deployed_return_pct"] == pytest.approx(expected, abs=0.01)
+
+
+def test_deployed_return_pct_backward_compat_no_param(cfg):
+    """Calling without closed_cost_basis_by_strategy must not break.
+    Falls back to open-cost-only denominator (Option A semantics)."""
+    out = compute_capital_breakdown(
+        realized_by_strategy={"auto": 50.0},
+        deployed_by_strategy={"auto": 1000.0},
+        unrealized_by_strategy={"auto": 10.0},
+        open_count_by_strategy={"auto": 1},
+        # closed_cost_basis_by_strategy intentionally omitted
+    )
+    s = out["by_strategy"][0]
+    # Option-A fallback: 60 / 1000 = 6.00%
+    assert s["deployed_return_pct"] == pytest.approx(6.00, abs=0.01)
 
 
 # ---- return_pct / realized_return_pct ------------------------------------

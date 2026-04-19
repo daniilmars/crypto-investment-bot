@@ -254,6 +254,7 @@ def compute_capital_breakdown(
     unrealized_by_strategy: dict[str, float],
     open_count_by_strategy: dict[str, int],
     include_empty: bool = False,
+    closed_cost_basis_by_strategy: dict[str, float] | None = None,
 ) -> dict:
     """Build the ``capital`` payload for /api/miniapp/summary.
 
@@ -270,7 +271,15 @@ def compute_capital_breakdown(
 
     Aggregate:
         capital.total_value_usd == sum(s.total for s in by_strategy)
+
+    `deployed_return_pct` (Option B): (realized + unrealized) / total cost
+    basis, where total cost basis = open deployed + closed cost basis. When
+    `closed_cost_basis_by_strategy` is omitted, falls back to open-cost-only
+    (Option A semantics), which matches legacy behavior for callers that
+    don't have closed-cost data. Not clamped — returns < -100% are allowed
+    so catastrophic losses stay visible.
     """
+    closed_cost_basis_by_strategy = closed_cost_basis_by_strategy or {}
     seen = set(realized_by_strategy) | set(deployed_by_strategy) \
         | set(unrealized_by_strategy) | set(open_count_by_strategy)
     # Always emit auto/conservative/longterm if include_empty. Manual is
@@ -309,6 +318,17 @@ def compute_capital_breakdown(
             return_pct = None
             realized_return_pct = None
 
+        # ROI on capital actually deployed (open + closed cost basis).
+        # Answers "how good are the picks?" vs return_pct ("how is the
+        # account doing?"). Cost basis is monotonic non-decreasing.
+        closed_cost = float(closed_cost_basis_by_strategy.get(s) or 0)
+        total_cost_basis = deployed + closed_cost
+        if total_cost_basis > 0:
+            deployed_return_pct = round(
+                (realized + unrealized) / total_cost_basis * 100.0, 2)
+        else:
+            deployed_return_pct = None
+
         by_strategy.append({
             "name": s,
             "starting_usd": round(starting, 2),
@@ -321,6 +341,7 @@ def compute_capital_breakdown(
             "utilization_pct": (round(util_pct, 1) if util_pct is not None else None),
             "return_pct": return_pct,
             "realized_return_pct": realized_return_pct,
+            "deployed_return_pct": deployed_return_pct,
         })
 
     total_value = sum(s["total_usd"] for s in by_strategy)
@@ -342,6 +363,16 @@ def compute_capital_breakdown(
         overall_return_pct = None
         overall_realized_pct = None
 
+    # Aggregate ROI on deployed = total PnL / total cost basis (open + closed).
+    unrealized_total = sum(s["unrealized_usd"] for s in by_strategy)
+    closed_cost_total = sum(closed_cost_basis_by_strategy.values())
+    total_cost_basis = locked_total + closed_cost_total
+    if total_cost_basis > 0:
+        overall_deployed_return_pct = round(
+            (realized_total + unrealized_total) / total_cost_basis * 100.0, 2)
+    else:
+        overall_deployed_return_pct = None
+
     return {
         "total_value_usd": round(total_value, 2),
         "cash_locked_usd": round(locked_total, 2),
@@ -349,6 +380,7 @@ def compute_capital_breakdown(
         "utilization_pct": (round(overall_util, 1) if overall_util is not None else None),
         "return_pct": overall_return_pct,
         "realized_return_pct": overall_realized_pct,
+        "deployed_return_pct": overall_deployed_return_pct,
         "by_strategy": by_strategy,
         "fx_method": FX_METHOD_NOTE,
         "as_of_ts": _now_iso(),
@@ -367,9 +399,12 @@ def summary_data() -> dict:
 
     try:
         with _cursor(conn) as cur:
-            # All closed trades (small table; do USD conversion in Python)
+            # All closed trades (small table; do USD conversion in Python).
+            # entry_price + quantity drive both realized PnL bucketing and
+            # closed-cost-basis accumulation for deployed_return_pct.
             cur.execute(
-                "SELECT symbol, pnl, exit_timestamp, trading_strategy "
+                "SELECT symbol, pnl, exit_timestamp, trading_strategy, "
+                "entry_price, quantity "
                 "FROM trades WHERE status = 'CLOSED'"
             )
             closed = _rows_to_dicts(cur, cur.fetchall())
@@ -398,12 +433,17 @@ def summary_data() -> dict:
     bucket = {"d1": 0.0, "d7": 0.0, "d30": 0.0, "all": 0.0}
     wins_7d = losses_7d = 0
     realized_by_strategy: dict[str, float] = {}
+    closed_cost_basis_by_strategy: dict[str, float] = {}
     for t in closed:
         ccy = currency_for_symbol(t["symbol"])
         pnl_usd = to_usd(float(t["pnl"] or 0), ccy)
         bucket["all"] += pnl_usd
         strat = (t.get("trading_strategy") or "unknown")
         realized_by_strategy[strat] = realized_by_strategy.get(strat, 0.0) + pnl_usd
+        cost_usd = to_usd(
+            float(t.get("entry_price") or 0) * float(t.get("quantity") or 0), ccy)
+        closed_cost_basis_by_strategy[strat] = (
+            closed_cost_basis_by_strategy.get(strat, 0.0) + cost_usd)
         exit_ts = _parse_ts(t.get("exit_timestamp"))
         if exit_ts is None:
             continue
@@ -439,6 +479,7 @@ def summary_data() -> dict:
         deployed_by_strategy=deployed_by_strategy,
         unrealized_by_strategy=unrealized_by_strategy,
         open_count_by_strategy={k: int(v) for k, v in open_by_strat.items()},
+        closed_cost_basis_by_strategy=closed_cost_basis_by_strategy,
     )
 
     regime = None

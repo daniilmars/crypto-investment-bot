@@ -389,6 +389,11 @@
               `<span class="${klass(stratCap.return_pct)}">${fmtPctSigned(stratCap.return_pct)}</span>`
             );
           }
+          if (stratCap.deployed_return_pct != null) {
+            parts.push(
+              `<span class="${klass(stratCap.deployed_return_pct)}" title="ROI on deployed capital (open + closed cost basis)">D ${fmtPctSigned(stratCap.deployed_return_pct)}</span>`
+            );
+          }
           capLine = `<div class="group-capital">${parts.join(' · ')}</div>`;
         }
 
