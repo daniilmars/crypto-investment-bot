@@ -100,8 +100,49 @@ def _verify_init_data(init_data: str) -> dict:
     return user
 
 
+def _is_prod_like() -> bool:
+    """True if any signal suggests we're running in a production container.
+
+    Used to HARD-FAIL dev-mode auth if it ever accidentally leaks into prod.
+    """
+    return bool(
+        os.environ.get("K_SERVICE")           # Cloud Run / Knative
+        or os.environ.get("GCP_PROJECT_ID")    # set in our deploy workflow
+        or os.environ.get("SERVICE_URL")       # webhook URL = prod
+    )
+
+
 async def miniapp_auth(
-    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+    x_telegram_init_data: str | None = Header(
+        default=None, alias="X-Telegram-Init-Data"),
+    x_miniapp_dev_key: str | None = Header(
+        default=None, alias="X-Miniapp-Dev-Key"),
 ) -> dict:
-    """FastAPI dependency: verify initData header and return the user dict."""
+    """FastAPI dependency: verify initData header and return the user dict.
+
+    Supports a dev-mode bypass (MINIAPP_DEV_MODE=true + matching dev key
+    header) so the Mini App can be previewed locally with production data.
+    The dev-mode path refuses to run in prod-like environments as an
+    additional safety net — the flag alone is NOT a sufficient guard.
+    """
+    if os.environ.get("MINIAPP_DEV_MODE", "").lower() == "true":
+        if _is_prod_like():
+            log.error(
+                "MINIAPP_DEV_MODE is set but environment looks prod-like "
+                "(K_SERVICE / GCP_PROJECT_ID / SERVICE_URL present) — "
+                "refusing to authenticate.")
+            raise HTTPException(
+                status_code=503,
+                detail="dev mode blocked in prod-like env")
+        dev_key = os.environ.get("MINIAPP_DEV_KEY")
+        if not dev_key:
+            raise HTTPException(
+                status_code=503,
+                detail="MINIAPP_DEV_KEY not set")
+        if not x_miniapp_dev_key or not hmac.compare_digest(
+                x_miniapp_dev_key, dev_key):
+            log.warning("Mini App auth: dev-mode request with missing/bad key")
+            raise HTTPException(
+                status_code=401, detail="missing or invalid dev key")
+        return {"id": 0, "first_name": "dev", "username": "devuser"}
     return _verify_init_data(x_telegram_init_data or "")

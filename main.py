@@ -325,6 +325,17 @@ async def startup_event():
     and start the background tasks.
     """
     global application
+
+    # Local-dev read-only mode: serve FastAPI routes + static files only,
+    # skip the bot, webhook, and all background tasks. Set by scripts/local_dev.sh
+    # so laptop previews of the Mini App do NOT hijack Telegram updates from prod.
+    _readonly = os.environ.get("MINIAPP_READONLY_SERVER") or ""
+    if str(_readonly).lower() == "true":
+        log.info(
+            "MINIAPP_READONLY_SERVER=true — skipping bot startup, background "
+            "tasks, and webhook. FastAPI routes + /miniapp static stay active.")
+        return
+
     log.info("Starting application...")
 
     # Reload auto-tuned parameters from DB (survives restarts)

@@ -119,8 +119,15 @@ def get_db_connection(db_url=None):
 
     # Fallback to SQLite for local development without PostgreSQL
     log.debug("No PostgreSQL config found, falling back to SQLite.")
-    db_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
-    db_path = os.path.join(db_dir, 'crypto_data.db')
+    # BOT_DB_PATH lets local-dev tooling point at a copy of the production DB
+    # without colliding with tests that expect a fresh data/crypto_data.db.
+    db_path_env = os.environ.get('BOT_DB_PATH')
+    if db_path_env:
+        db_path = db_path_env
+        db_dir = os.path.dirname(db_path) or '.'
+    else:
+        db_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
+        db_path = os.path.join(db_dir, 'crypto_data.db')
     os.makedirs(db_dir, exist_ok=True)
     conn = sqlite3.connect(db_path, check_same_thread=False, timeout=30.0)
     conn.row_factory = sqlite3.Row

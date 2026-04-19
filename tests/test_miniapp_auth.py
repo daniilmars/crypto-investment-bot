@@ -129,3 +129,79 @@ def test_empty_whitelist_allows_all(monkeypatch):
     init_data = _sign(TEST_TOKEN, _good_fields(user_id=12345))
     user = _verify_init_data(init_data)
     assert user["id"] == 12345
+
+
+# --- dev-mode bypass (for local Mini App preview with prod DB) ---
+
+import asyncio as _asyncio
+
+
+def _run_auth(init_header=None, dev_key_header=None):
+    from src.api.miniapp_auth import miniapp_auth
+    return _asyncio.run(miniapp_auth(
+        x_telegram_init_data=init_header,
+        x_miniapp_dev_key=dev_key_header,
+    ))
+
+
+def test_dev_mode_accepts_correct_key(monkeypatch):
+    monkeypatch.setenv("MINIAPP_DEV_MODE", "true")
+    monkeypatch.setenv("MINIAPP_DEV_KEY", "correct-horse-battery-staple")
+    monkeypatch.delenv("K_SERVICE", raising=False)
+    monkeypatch.delenv("GCP_PROJECT_ID", raising=False)
+    monkeypatch.delenv("SERVICE_URL", raising=False)
+    user = _run_auth(dev_key_header="correct-horse-battery-staple")
+    assert user["id"] == 0
+    assert user["first_name"] == "dev"
+
+
+def test_dev_mode_rejects_wrong_key(monkeypatch):
+    monkeypatch.setenv("MINIAPP_DEV_MODE", "true")
+    monkeypatch.setenv("MINIAPP_DEV_KEY", "good-key")
+    monkeypatch.delenv("K_SERVICE", raising=False)
+    monkeypatch.delenv("GCP_PROJECT_ID", raising=False)
+    monkeypatch.delenv("SERVICE_URL", raising=False)
+    with pytest.raises(HTTPException) as exc:
+        _run_auth(dev_key_header="wrong-key")
+    assert exc.value.status_code == 401
+
+
+def test_dev_mode_rejects_missing_key(monkeypatch):
+    monkeypatch.setenv("MINIAPP_DEV_MODE", "true")
+    monkeypatch.setenv("MINIAPP_DEV_KEY", "good-key")
+    monkeypatch.delenv("K_SERVICE", raising=False)
+    monkeypatch.delenv("GCP_PROJECT_ID", raising=False)
+    monkeypatch.delenv("SERVICE_URL", raising=False)
+    with pytest.raises(HTTPException) as exc:
+        _run_auth(dev_key_header=None)
+    assert exc.value.status_code == 401
+
+
+def test_dev_mode_blocked_in_prod_like_env(monkeypatch):
+    """K_SERVICE / GCP_PROJECT_ID / SERVICE_URL all block dev-mode."""
+    monkeypatch.setenv("MINIAPP_DEV_MODE", "true")
+    monkeypatch.setenv("MINIAPP_DEV_KEY", "any")
+    monkeypatch.setenv("K_SERVICE", "production-service")
+    with pytest.raises(HTTPException) as exc:
+        _run_auth(dev_key_header="any")
+    assert exc.value.status_code == 503
+
+    monkeypatch.delenv("K_SERVICE")
+    monkeypatch.setenv("GCP_PROJECT_ID", "my-prod-project")
+    with pytest.raises(HTTPException) as exc:
+        _run_auth(dev_key_header="any")
+    assert exc.value.status_code == 503
+
+    monkeypatch.delenv("GCP_PROJECT_ID")
+    monkeypatch.setenv("SERVICE_URL", "https://example.com")
+    with pytest.raises(HTTPException) as exc:
+        _run_auth(dev_key_header="any")
+    assert exc.value.status_code == 503
+
+
+def test_dev_mode_off_uses_initdata_path(patch_config, monkeypatch):
+    """When MINIAPP_DEV_MODE is not set, the normal initData path runs."""
+    monkeypatch.delenv("MINIAPP_DEV_MODE", raising=False)
+    init_data = _sign(TEST_TOKEN, _good_fields())
+    user = _run_auth(init_header=init_data)
+    assert user["id"] == TEST_USER_ID
