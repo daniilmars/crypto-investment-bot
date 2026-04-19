@@ -1,5 +1,4 @@
 import asyncio
-from datetime import datetime, timezone
 from functools import wraps
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
