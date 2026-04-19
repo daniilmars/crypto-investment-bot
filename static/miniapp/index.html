@@ -7,7 +7,7 @@
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-  <link rel="stylesheet" href="styles.css?v=8" />
+  <link rel="stylesheet" href="styles.css?v=10" />
 </head>
 <body>
   <div id="app">
@@ -67,6 +67,33 @@
       </div>
     </section>
 
+    <!-- Capital allocation: dry powder vs deployed across all strategies -->
+    <div class="row-label">
+      <span>Capital</span>
+      <span class="row-hint" id="capital-util-hint">—</span>
+    </div>
+    <section id="capital-bar" class="capital-bar">
+      <div class="capital-numbers">
+        <span class="cap-item">
+          <span class="cap-label">Total</span>
+          <span class="cap-value" id="cap-total">—</span>
+        </span>
+        <span class="cap-sep">·</span>
+        <span class="cap-item">
+          <span class="cap-label">Locked</span>
+          <span class="cap-value cap-locked" id="cap-locked">—</span>
+        </span>
+        <span class="cap-sep">·</span>
+        <span class="cap-item">
+          <span class="cap-label">Free</span>
+          <span class="cap-value cap-free" id="cap-free">—</span>
+        </span>
+      </div>
+      <div class="capital-meter">
+        <div class="capital-meter-fill" id="cap-meter-fill" style="width: 0%"></div>
+      </div>
+    </section>
+
     <section id="equity-section">
       <div class="section-header">
         <span>Equity curve</span>
@@ -108,6 +135,6 @@
     </footer>
   </div>
 
-  <script src="app.js?v=8"></script>
+  <script src="app.js?v=10"></script>
 </body>
 </html>

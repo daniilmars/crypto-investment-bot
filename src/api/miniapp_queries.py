@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 from src.analysis.display_names import display_name
 from src.analysis.fx import currency_for_symbol, to_usd
+from src.config import app_config
 from src.logger import log
 
 
@@ -214,6 +215,150 @@ def positions_data() -> dict:
     }
 
 
+# ---------------------------------------------------------------- capital
+
+# Strategies the UI knows about; aligned with STRATEGY_ORDER in app.js so
+# the Mini App's group ordering matches the capital section.
+_KNOWN_STRATEGIES = ("auto", "conservative", "longterm", "manual")
+_DEFAULT_STARTING_CAPITAL = 10000.0
+_warned_strategies: set[str] = set()
+
+
+def _starting_capital_for_strategy(strategy: str) -> float:
+    """Mirror the precedence used by binance_trader._get_paper_balance so the
+    Mini App's capital numbers stay consistent with Telegram /status output.
+
+    - 'auto'  → settings.auto_trading.paper_trading_initial_capital
+    - everything else → settings.paper_trading_initial_capital (shared pool)
+    - missing → $10,000 default, warn once per unknown strategy name
+    """
+    settings = app_config.get('settings', {}) or {}
+    if strategy == 'auto':
+        cfg = settings.get('auto_trading', {}) or {}
+        v = cfg.get('paper_trading_initial_capital')
+        if v is not None:
+            return float(v)
+    v = settings.get('paper_trading_initial_capital')
+    if v is not None:
+        return float(v)
+    if strategy not in _warned_strategies:
+        log.warning("Unknown strategy '%s' for starting-capital lookup, "
+                    "defaulting to $%.0f", strategy, _DEFAULT_STARTING_CAPITAL)
+        _warned_strategies.add(strategy)
+    return _DEFAULT_STARTING_CAPITAL
+
+
+def compute_capital_breakdown(
+    realized_by_strategy: dict[str, float],
+    deployed_by_strategy: dict[str, float],
+    unrealized_by_strategy: dict[str, float],
+    open_count_by_strategy: dict[str, int],
+    include_empty: bool = False,
+) -> dict:
+    """Build the ``capital`` payload for /api/miniapp/summary.
+
+    Pure function — no DB calls, no FX conversion. Caller passes already-
+    USD-normalized per-strategy aggregates (FX is done upstream by
+    positions_data + the closed-trade loop in summary_data).
+
+    Per-strategy invariants:
+        free      = starting + realized − deployed
+        total     = free + deployed + unrealized
+                  = starting + realized + unrealized
+        util_pct  = 100 × deployed / (deployed + free), clamped [0, 100]
+                    (None if denominator <= 0)
+
+    Aggregate:
+        capital.total_value_usd == sum(s.total for s in by_strategy)
+    """
+    seen = set(realized_by_strategy) | set(deployed_by_strategy) \
+        | set(unrealized_by_strategy) | set(open_count_by_strategy)
+    # Always emit auto/conservative/longterm if include_empty; manual only
+    # when it actually has activity to avoid visual clutter.
+    candidates = list(_KNOWN_STRATEGIES)
+    for s in seen:
+        if s not in candidates:
+            candidates.append(s)
+
+    by_strategy: list[dict] = []
+    for s in candidates:
+        realized = float(realized_by_strategy.get(s) or 0)
+        deployed = float(deployed_by_strategy.get(s) or 0)
+        unrealized = float(unrealized_by_strategy.get(s) or 0)
+        open_count = int(open_count_by_strategy.get(s) or 0)
+
+        # Skip empties unless caller asks otherwise. Manual is always
+        # skipped when totally empty regardless of include_empty.
+        is_active = (open_count > 0) or (abs(realized) > 0.005)
+        if not is_active:
+            if s == 'manual':
+                continue
+            if not include_empty:
+                continue
+
+        starting = _starting_capital_for_strategy(s)
+        free = starting + realized - deployed
+        total = free + deployed + unrealized
+        denom = deployed + free
+        util_pct = (100.0 * deployed / denom) if denom > 0 else None
+        if util_pct is not None:
+            util_pct = max(0.0, min(100.0, util_pct))
+
+        # Return % on starting capital. None when starting==0 so the UI can
+        # render a dash instead of dividing by zero.
+        if starting > 0:
+            return_pct = round((total - starting) / starting * 100.0, 2)
+            realized_return_pct = round(realized / starting * 100.0, 2)
+        else:
+            return_pct = None
+            realized_return_pct = None
+
+        by_strategy.append({
+            "name": s,
+            "starting_usd": round(starting, 2),
+            "realized_usd": round(realized, 2),
+            "deployed_usd": round(deployed, 2),
+            "unrealized_usd": round(unrealized, 2),
+            "free_usd": round(free, 2),
+            "total_usd": round(total, 2),
+            "open_count": open_count,
+            "utilization_pct": (round(util_pct, 1) if util_pct is not None else None),
+            "return_pct": return_pct,
+            "realized_return_pct": realized_return_pct,
+        })
+
+    total_value = sum(s["total_usd"] for s in by_strategy)
+    locked_total = sum(s["deployed_usd"] for s in by_strategy)
+    free_total = sum(s["free_usd"] for s in by_strategy)
+    starting_total = sum(s["starting_usd"] for s in by_strategy)
+    realized_total = sum(s["realized_usd"] for s in by_strategy)
+    denom = locked_total + free_total
+    overall_util = (100.0 * locked_total / denom) if denom > 0 else None
+    if overall_util is not None:
+        overall_util = max(0.0, min(100.0, overall_util))
+
+    if starting_total > 0:
+        overall_return_pct = round(
+            (total_value - starting_total) / starting_total * 100.0, 2)
+        overall_realized_pct = round(
+            realized_total / starting_total * 100.0, 2)
+    else:
+        overall_return_pct = None
+        overall_realized_pct = None
+
+    return {
+        "total_value_usd": round(total_value, 2),
+        "cash_locked_usd": round(locked_total, 2),
+        "cash_free_usd": round(free_total, 2),
+        "utilization_pct": (round(overall_util, 1) if overall_util is not None else None),
+        "return_pct": overall_return_pct,
+        "realized_return_pct": overall_realized_pct,
+        "by_strategy": by_strategy,
+        "fx_method": FX_METHOD_NOTE,
+        "as_of_ts": _now_iso(),
+    }
+
+
 # ---------------------------------------------------------------- summary
 
 def summary_data() -> dict:
@@ -256,10 +401,13 @@ def summary_data() -> dict:
 
     bucket = {"d1": 0.0, "d7": 0.0, "d30": 0.0, "all": 0.0}
     wins_7d = losses_7d = 0
+    realized_by_strategy: dict[str, float] = {}
     for t in closed:
         ccy = currency_for_symbol(t["symbol"])
         pnl_usd = to_usd(float(t["pnl"] or 0), ccy)
         bucket["all"] += pnl_usd
+        strat = (t.get("trading_strategy") or "manual")
+        realized_by_strategy[strat] = realized_by_strategy.get(strat, 0.0) + pnl_usd
         exit_ts = _parse_ts(t.get("exit_timestamp"))
         if exit_ts is None:
             continue
@@ -274,12 +422,27 @@ def summary_data() -> dict:
         if exit_ts >= d1_ago:
             bucket["d1"] += pnl_usd
 
-    # Unrealized now — reuse positions_data
+    # Unrealized now — reuse positions_data + per-strategy buckets for capital
     pos_blob = positions_data()
     unrealized_now = sum(float(p["pnl_usd"] or 0) for p in pos_blob.get("positions", []))
     capital_deployed = sum(
         to_usd(float(p["entry_price"]) * float(p["quantity"]), p["currency"])
         for p in pos_blob.get("positions", [])
+    )
+    deployed_by_strategy: dict[str, float] = {}
+    unrealized_by_strategy: dict[str, float] = {}
+    for p in pos_blob.get("positions", []):
+        s = p.get("strategy") or "manual"
+        deployed_by_strategy[s] = deployed_by_strategy.get(s, 0.0) + to_usd(
+            float(p["entry_price"]) * float(p["quantity"]), p["currency"])
+        unrealized_by_strategy[s] = unrealized_by_strategy.get(s, 0.0) + float(
+            p["pnl_usd"] or 0)
+
+    capital = compute_capital_breakdown(
+        realized_by_strategy=realized_by_strategy,
+        deployed_by_strategy=deployed_by_strategy,
+        unrealized_by_strategy=unrealized_by_strategy,
+        open_count_by_strategy={k: int(v) for k, v in open_by_strat.items()},
     )
 
     regime = None
@@ -301,6 +464,7 @@ def summary_data() -> dict:
         "realized": bucket,
         "unrealized_now_usd": unrealized_now,
         "capital_deployed_usd": capital_deployed,
+        "capital": capital,
         "open_by_strategy": open_by_strat,
         "win_rate_7d": win_rate_7d,
         "wins_7d": wins_7d,

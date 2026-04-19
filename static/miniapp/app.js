@@ -20,6 +20,7 @@
     closedLimit: parseInt(localStorage.getItem('miniapp.v2.closedLimit') || '10', 10),
     lastPositions: null,
     lastClosed: null,
+    lastCapital: null,             // {by_strategy: [...], total_value_usd, ...}
   };
 
   const STRATEGY_ORDER = ['auto', 'conservative', 'longterm', 'manual'];
@@ -33,11 +34,28 @@
       minimumFractionDigits: 2, maximumFractionDigits: 2,
     })}`;
   };
+  // Compact form for the capital bar / group header — no leading +/− sign,
+  // since these are absolute values, not deltas.
+  const fmtUsdAbs = (n) => {
+    if (n == null || isNaN(n)) return '—';
+    return `$${n.toLocaleString('en-US', {
+      minimumFractionDigits: 2, maximumFractionDigits: 2,
+    })}`;
+  };
+  const fmtUsdK = (n) => {
+    if (n == null || isNaN(n)) return '—';
+    const abs = Math.abs(n);
+    if (abs >= 1000) return `$${(n / 1000).toFixed(1)}k`;
+    return `$${n.toFixed(0)}`;
+  };
   const fmtPct = (n, digits = 1) => {
     if (n == null || isNaN(n)) return '—';
     const sign = n >= 0 ? '+' : '−';
     return `${sign}${Math.abs(n).toFixed(digits)}%`;
   };
+  // 2-decimal variant used by return-on-capital badges (e.g. "+2.43%").
+  // Always-signed so 0.00% is "+0.00%" not "0.00%" — matches the rest of the UI.
+  const fmtPctSigned = (n) => fmtPct(n, 2);
   const fmtPrice = (n) => {
     if (n == null || isNaN(n)) return '—';
     const abs = Math.abs(n);
@@ -93,10 +111,17 @@
     const lifetime = realized.all || 0;
     const unrealized = s.unrealized_now_usd || 0;
 
-    // --- Header: lifetime realized as the hero ---
+    // --- Header: lifetime realized as the hero, with total-return % badge ---
     const realEl = document.getElementById('headline-realized');
-    realEl.textContent = fmtUsd(lifetime);
     realEl.className = `value ${klass(lifetime)}`;
+    const retPctAgg = s.capital && s.capital.return_pct;
+    if (retPctAgg != null) {
+      realEl.innerHTML =
+        `${escapeHtml(fmtUsd(lifetime))}` +
+        ` <span class="return-pct ${klass(retPctAgg)}">${fmtPctSigned(retPctAgg)}</span>`;
+    } else {
+      realEl.textContent = fmtUsd(lifetime);
+    }
 
     // --- Row 1: realized PnL over time (the connected period bar) ---
     const setTile = (id, value, useClass = true) => {
@@ -167,6 +192,39 @@
 
     const asOf = s.as_of_ts ? new Date(s.as_of_ts).toLocaleTimeString() : '—';
     document.getElementById('as-of').textContent = `updated ${asOf}`;
+
+    // Capital section — render aggregate bar + stash per-strategy for group headers
+    renderCapital(s.capital);
+    state.lastCapital = (s.capital && s.capital.by_strategy) || [];
+  }
+
+  // ---------------------------------------------------------- render: capital
+
+  function renderCapital(c) {
+    const totalEl = document.getElementById('cap-total');
+    const lockedEl = document.getElementById('cap-locked');
+    const freeEl = document.getElementById('cap-free');
+    const meterEl = document.getElementById('cap-meter-fill');
+    const hintEl = document.getElementById('capital-util-hint');
+    if (!c || c.total_value_usd == null) {
+      totalEl.textContent = '—';
+      lockedEl.textContent = '—';
+      freeEl.textContent = '—';
+      if (meterEl) meterEl.style.width = '0%';
+      if (hintEl) hintEl.textContent = '—';
+      return;
+    }
+    totalEl.textContent = fmtUsdAbs(c.total_value_usd);
+    lockedEl.textContent = fmtUsdAbs(c.cash_locked_usd);
+    freeEl.textContent = fmtUsdAbs(c.cash_free_usd);
+    const util = c.utilization_pct;
+    if (util != null) {
+      if (meterEl) meterEl.style.width = `${util}%`;
+      if (hintEl) hintEl.textContent = `${util.toFixed(1)}% deployed`;
+    } else {
+      if (meterEl) meterEl.style.width = '0%';
+      if (hintEl) hintEl.textContent = '—';
+    }
   }
 
   // -------------------------------------------------------- rationale render
@@ -309,15 +367,37 @@
           `;
         }).join('');
 
+        // Capital line for this strategy (free / total · util% · return%)
+        // from the /summary capital.by_strategy payload.
+        const stratCap = (state.lastCapital || []).find((x) => x.name === strat);
+        let capLine = '';
+        if (stratCap) {
+          const parts = [
+            `${fmtUsdK(stratCap.free_usd)} free / ${fmtUsdK(stratCap.total_usd)} total`,
+          ];
+          if (stratCap.utilization_pct != null) {
+            parts.push(`${stratCap.utilization_pct.toFixed(0)}% deployed`);
+          }
+          if (stratCap.return_pct != null) {
+            parts.push(
+              `<span class="${klass(stratCap.return_pct)}">${fmtPctSigned(stratCap.return_pct)}</span>`
+            );
+          }
+          capLine = `<div class="group-capital">${parts.join(' · ')}</div>`;
+        }
+
         return `
           <div class="group ${isCollapsed}" data-strategy="${strat}">
             <div class="group-header">
-              <div class="group-title">
-                <span class="group-chevron">▼</span>
-                ${strat}
-                <span style="color:var(--text-dim);font-weight:400;font-size:12px">(${arr.length})</span>
+              <div class="group-title-col">
+                <div class="group-title">
+                  <span class="group-chevron">▼</span>
+                  ${strat}
+                  <span style="color:var(--text-dim);font-weight:400;font-size:12px">(${arr.length})</span>
+                </div>
+                ${capLine}
               </div>
-              <div class="group-meta">
+              <div class="group-meta-col">
                 <span class="subtotal ${subtotalClass}">${fmtUsd(subtotal)}</span>
               </div>
             </div>
