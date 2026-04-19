@@ -24,7 +24,7 @@ data/
 *.db
 
 # Ignore dev-only files
-scripts/
+# scripts/ kept in image — calibration + utility scripts run inside container
 requirements-dev.txt
 
 # Note: config/settings.yaml is generated during CI deploy and must NOT be ignored
