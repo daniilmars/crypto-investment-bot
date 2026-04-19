@@ -11,12 +11,16 @@ from src.logger import log
 from src.notify.telegram_bot import send_news_alert, send_market_event_alert
 
 
-def build_trade_feedback_context(days=14, limit=20) -> str:
-    """Build trade outcome feedback string for Gemini prompt injection."""
+def build_trade_feedback_context(days=14, limit=20, min_outcomes=1) -> str:
+    """Build trade outcome feedback string for Gemini prompt injection.
+
+    Returns '' if fewer than ``min_outcomes`` resolved trades are found —
+    avoids feeding sparse/misleading data into the prompt.
+    """
     try:
         from src.analysis.signal_attribution import get_recent_trade_outcomes
         outcomes = get_recent_trade_outcomes(days=days, limit=limit)
-        if not outcomes:
+        if not outcomes or len(outcomes) < min_outcomes:
             return ''
 
         lines = []
@@ -77,8 +81,14 @@ def build_regime_context(macro_regime_result: dict = None) -> str:
         return ''
 
 
-def build_source_reliability_context(days=30, min_signals=3) -> str:
-    """Build source reliability context string for Gemini prompt injection."""
+def build_source_reliability_context(days=30, min_signals=3,
+                                      min_qualified_sources=2) -> str:
+    """Build source reliability context string for Gemini prompt injection.
+
+    Sparse-data guard: returns '' unless at least ``min_qualified_sources``
+    sources each have ≥ ``min_signals`` resolved trades. Until WS1 backfills
+    enough attribution rows, this gate keeps the prompt clean.
+    """
     try:
         from src.analysis.signal_attribution import get_source_performance
         sources = get_source_performance(days=days)
@@ -87,7 +97,7 @@ def build_source_reliability_context(days=30, min_signals=3) -> str:
 
         # Filter to sources with enough trades
         qualified = [s for s in sources if s.get('total_signals', 0) >= min_signals]
-        if len(qualified) < 2:
+        if len(qualified) < min_qualified_sources:
             return ''
 
         qualified.sort(key=lambda s: s.get('win_rate', 0), reverse=True)
@@ -113,8 +123,13 @@ def build_source_reliability_context(days=30, min_signals=3) -> str:
         return ''
 
 
-def build_symbol_memory_context(days=30, min_trades=3) -> str:
-    """Build symbol win rate memory context string for Gemini prompt injection."""
+def build_symbol_memory_context(days=30, min_trades=3,
+                                 min_symbols_with_track_record=1) -> str:
+    """Build symbol win rate memory context string for Gemini prompt injection.
+
+    Sparse-data guard: requires at least ``min_symbols_with_track_record``
+    symbols with both caution-level OR strong-level history before emitting.
+    """
     try:
         from src.analysis.signal_attribution import get_symbol_win_rates
         win_rates = get_symbol_win_rates(days=days, min_trades=min_trades)
@@ -124,7 +139,7 @@ def build_symbol_memory_context(days=30, min_trades=3) -> str:
         caution = {s: d for s, d in win_rates.items() if d['win_rate'] < 0.30}
         strong = {s: d for s, d in win_rates.items() if d['win_rate'] > 0.60}
 
-        if not caution and not strong:
+        if (len(caution) + len(strong)) < min_symbols_with_track_record:
             return ''
 
         lines = ["SYMBOL TRACK RECORD (from our recent trades):"]
@@ -207,11 +222,33 @@ async def collect_and_analyze_news(
         cache_ttl = news_config.get('cache_ttl_minutes', 15)
         batches = _split_symbols_into_batches(all_symbols, settings)
 
-        # Build feedback context once (shared across all batches)
-        trade_feedback = await asyncio.to_thread(build_trade_feedback_context)
+        # Build feedback context once (shared across all batches).
+        # Thresholds are configurable so the user can tighten them as data
+        # quality improves (settings.news_analysis.context_gates).
+        gates = (settings.get('news_analysis', {}) or {}).get('context_gates', {}) or {}
+        tf_cfg = gates.get('trade_feedback', {})
+        sr_cfg = gates.get('source_reliability', {})
+        sm_cfg = gates.get('symbol_memory', {})
+        trade_feedback = await asyncio.to_thread(
+            build_trade_feedback_context,
+            days=tf_cfg.get('days', 14),
+            limit=tf_cfg.get('limit', 20),
+            min_outcomes=tf_cfg.get('min_outcomes', 1),
+        )
         regime_context = build_regime_context(macro_regime_result)
-        source_reliability = await asyncio.to_thread(build_source_reliability_context)
-        symbol_memory = await asyncio.to_thread(build_symbol_memory_context)
+        source_reliability = await asyncio.to_thread(
+            build_source_reliability_context,
+            days=sr_cfg.get('days', 30),
+            min_signals=sr_cfg.get('min_signals_per_source', 3),
+            min_qualified_sources=sr_cfg.get('min_qualified_sources', 2),
+        )
+        symbol_memory = await asyncio.to_thread(
+            build_symbol_memory_context,
+            days=sm_cfg.get('days', 30),
+            min_trades=sm_cfg.get('min_trades_per_symbol', 3),
+            min_symbols_with_track_record=sm_cfg.get(
+                'min_symbols_with_track_record', 1),
+        )
 
         # Sequential batch calls with small delay to avoid overwhelming flash-lite.
         batch_results = []

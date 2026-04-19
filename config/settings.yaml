@@ -192,6 +192,23 @@ settings:
     # Cache Gemini grounded search per batch (90 min = every 6th cycle)
     # 10 batches × ~8 uncached cycles/day = ~80 calls/day (within 500 free RPD)
     cache_ttl_minutes: 90
+    # Sparse-data gates for the four feedback contexts injected into the
+    # Gemini prompt. Each context is suppressed unless the underlying data
+    # meets the threshold — avoids feeding the model misleading near-empty
+    # sections. Tighten as attribution data accumulates.
+    context_gates:
+      trade_feedback:
+        days: 14
+        limit: 20
+        min_outcomes: 1            # need ≥N resolved trades to inject
+      source_reliability:
+        days: 30
+        min_signals_per_source: 3  # source needs ≥N resolved trades to count
+        min_qualified_sources: 2   # need ≥N qualifying sources to inject
+      symbol_memory:
+        days: 30
+        min_trades_per_symbol: 3
+        min_symbols_with_track_record: 1
     # Freshness decay half-life: articles older than this (hours) get half weight
     freshness_half_life_hours: 6
     # Volume spike: trigger Gemini if current_volume > previous_volume * multiplier

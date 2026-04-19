@@ -522,6 +522,13 @@ async def run_bot_cycle():
             signal['gemini_direction'] = ga.get('direction')
             signal['catalyst_type'] = ga.get('catalyst_type')
             signal['catalyst_freshness'] = ga.get('catalyst_freshness')
+            # Attach the contributing scored articles so attribution can
+            # record real (source, title_hash) pairs instead of re-querying
+            # scraped_articles by symbol (which is sparsely populated).
+            sym_news = (news_per_symbol or {}).get(symbol, {})
+            articles = sym_news.get('top_scored_articles') or []
+            if articles:
+                signal['attribution_articles'] = articles[:20]
 
         await save_signal(signal)
 
@@ -1136,6 +1143,13 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
             signal['gemini_direction'] = ga.get('direction')
             signal['catalyst_type'] = ga.get('catalyst_type')
             signal['catalyst_freshness'] = ga.get('catalyst_freshness')
+            # Attach the contributing scored articles so attribution can
+            # record real (source, title_hash) pairs instead of re-querying
+            # scraped_articles by symbol (which is sparsely populated).
+            sym_news = (news_per_symbol or {}).get(symbol, {})
+            articles = sym_news.get('top_scored_articles') or []
+            if articles:
+                signal['attribution_articles'] = articles[:20]
 
         await save_signal(signal)
 

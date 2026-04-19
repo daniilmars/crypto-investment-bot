@@ -986,6 +986,8 @@ def collect_news_sentiment(symbols):
                     'title': title,
                     'score': gemini_score,
                     'published_at': article.get('published_at', ''),
+                    'source': article.get('source', ''),
+                    'title_hash': title_hash,
                 })
 
             # Accumulate archive rows for DB storage
@@ -1048,7 +1050,12 @@ def collect_news_sentiment(symbols):
                 for a in articles
             ],
             'top_scored_articles': [
-                {'title': a['title'], 'score': a['score']}
+                {
+                    'title': a['title'],
+                    'score': a['score'],
+                    'source': a.get('source', ''),
+                    'title_hash': a.get('title_hash'),
+                }
                 for a in top_scored
             ],
         }

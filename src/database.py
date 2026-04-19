@@ -40,7 +40,7 @@ def _cursor(conn):
 # --- Connection Pool (for PostgreSQL) ---
 _pg_pool = None
 
-ALLOWED_TABLES = frozenset({"market_prices", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles", "stoploss_cooldowns", "position_additions", "ipo_events", "macro_regime_history", "source_registry", "signal_attribution", "experiment_log", "tuning_history", "session_peaks", "watchlist_items", "bot_state_kv", "signal_decisions", "sector_convictions", "gemini_assessments", "strategy_scores", "longterm_thesis", "fx_rates"})
+ALLOWED_TABLES = frozenset({"market_prices", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles", "stoploss_cooldowns", "position_additions", "ipo_events", "macro_regime_history", "source_registry", "signal_attribution", "experiment_log", "tuning_history", "session_peaks", "watchlist_items", "bot_state_kv", "signal_decisions", "sector_convictions", "gemini_assessments", "strategy_scores", "longterm_thesis", "fx_rates", "gemini_calibration"})
 
 # --- Database Connection Management ---
 
@@ -500,6 +500,7 @@ def initialize_database(db_url=None):
                 trade_duration_hours REAL,
                 exit_reason TEXT,
                 attribution_score REAL,
+                assessment_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 resolved_at TIMESTAMP
             )''' if is_postgres_conn else '''
@@ -521,6 +522,7 @@ def initialize_database(db_url=None):
                 trade_duration_hours REAL,
                 exit_reason TEXT,
                 attribution_score REAL,
+                assessment_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 resolved_at TIMESTAMP
             )'''
@@ -818,6 +820,19 @@ def initialize_database(db_url=None):
                 if is_postgres_conn:
                     conn.rollback()
 
+        # --- Migrate signal_attribution: add assessment_id (foreign key to
+        # gemini_assessments.id) for robust calibration joins ---
+        try:
+            cursor.execute("ALTER TABLE signal_attribution ADD COLUMN assessment_id INTEGER")
+            log.info("Added column 'assessment_id' to signal_attribution table.")
+        except (sqlite3.OperationalError, psycopg2.errors.DuplicateColumn):
+            if is_postgres_conn:
+                conn.rollback()
+        except Exception as e:
+            log.warning(f"Could not add column 'assessment_id' to signal_attribution: {e}")
+            if is_postgres_conn:
+                conn.rollback()
+
         # --- Migrate circuit_breaker_events: add asset_type column ---
         try:
             cursor.execute("ALTER TABLE circuit_breaker_events ADD COLUMN asset_type TEXT DEFAULT 'crypto'")
@@ -993,6 +1008,37 @@ def initialize_database(db_url=None):
                 fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )'''
         cursor.execute(fx_rates_sql)
+
+        # Gemini Calibration — bucketed win-rate snapshots over time, lets us
+        # detect drift in raw_confidence → realized_outcome calibration.
+        gemini_calibration_sql = '''
+            CREATE TABLE IF NOT EXISTS gemini_calibration (
+                id SERIAL PRIMARY KEY,
+                computed_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                stratify_by TEXT NOT NULL,
+                stratify_value TEXT NOT NULL,
+                conf_bucket TEXT NOT NULL,
+                n INTEGER NOT NULL,
+                wins INTEGER NOT NULL,
+                win_rate REAL,
+                avg_pnl REAL,
+                ci_low REAL,
+                ci_high REAL
+            )''' if is_postgres_conn else '''
+            CREATE TABLE IF NOT EXISTS gemini_calibration (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                stratify_by TEXT NOT NULL,
+                stratify_value TEXT NOT NULL,
+                conf_bucket TEXT NOT NULL,
+                n INTEGER NOT NULL,
+                wins INTEGER NOT NULL,
+                win_rate REAL,
+                avg_pnl REAL,
+                ci_low REAL,
+                ci_high REAL
+            )'''
+        cursor.execute(gemini_calibration_sql)
 
         # --- Performance indexes ---
         perf_indexes = [

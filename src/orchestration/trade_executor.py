@@ -63,7 +63,10 @@ def _record_trade_attribution(symbol, signal, order_id, trading_strategy):
             link_attribution_to_order,
             record_signal_attribution,
         )
-        articles = build_attribution_articles(symbol)
+        # Prefer the per-symbol scored articles already routed through the
+        # cycle (signal['attribution_articles']). Falls back to a DB lookup
+        # for legacy code paths that don't attach them.
+        articles = signal.get('attribution_articles') or build_attribution_articles(symbol)
         gemini = None
         if signal.get('gemini_confidence') is not None:
             gemini = {
