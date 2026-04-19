@@ -108,13 +108,14 @@ class TestPDTRecordedOnStockExit:
     """Tests that PDT is recorded when stock positions exit same-day."""
 
     @patch('src.orchestration.position_monitor.process_closed_trade')
+    @patch('src.orchestration.position_monitor._send_trade_exit_alert', new_callable=AsyncMock)
     @patch('src.orchestration.position_monitor.send_telegram_alert', new_callable=AsyncMock)
     @patch('src.orchestration.position_monitor.save_stoploss_cooldown', new_callable=AsyncMock)
     @patch('src.orchestration.position_monitor.place_order')
     @patch('src.orchestration.position_monitor.bot_state')
     def test_pdt_recorded_on_stock_stop_loss(self, mock_state, mock_order,
                                               mock_cooldown, mock_alert,
-                                              mock_feedback):
+                                              mock_trade_alert, mock_feedback):
         """PDT recorded when stock position hits stop-loss on same day."""
         from src.orchestration.position_monitor import monitor_position
         from src.execution.stock_trader import _day_trades
@@ -139,11 +140,13 @@ class TestPDTRecordedOnStockExit:
         assert len(_day_trades) == 1
 
     @patch('src.orchestration.position_monitor.process_closed_trade')
+    @patch('src.orchestration.position_monitor._send_trade_exit_alert', new_callable=AsyncMock)
     @patch('src.orchestration.position_monitor.send_telegram_alert', new_callable=AsyncMock)
     @patch('src.orchestration.position_monitor.place_order')
     @patch('src.orchestration.position_monitor.bot_state')
     def test_pdt_not_recorded_on_old_position(self, mock_state, mock_order,
-                                               mock_alert, mock_feedback):
+                                               mock_alert, mock_trade_alert,
+                                               mock_feedback):
         """PDT NOT recorded when stock position opened 2 days ago hits stop-loss."""
         from src.orchestration.position_monitor import monitor_position
         from src.execution.stock_trader import _day_trades

@@ -154,9 +154,10 @@ class TestPositionMonitorDynamicSLTP:
     """
 
     @patch('src.orchestration.position_monitor.place_order')
+    @patch('src.orchestration.position_monitor._send_trade_exit_alert', new_callable=AsyncMock)
     @patch('src.orchestration.position_monitor.send_telegram_alert', new_callable=AsyncMock)
     @patch('src.orchestration.position_monitor.bot_state')
-    def test_wider_sl_prevents_premature_exit(self, mock_state, mock_alert, mock_order):
+    def test_wider_sl_prevents_premature_exit(self, mock_state, mock_alert, mock_trade_alert, mock_order):
         from src.orchestration.position_monitor import monitor_position
         mock_state.update_trailing_stop.return_value = 100.0
 
@@ -179,9 +180,10 @@ class TestPositionMonitorDynamicSLTP:
         assert result == 'none'
 
     @patch('src.orchestration.position_monitor.place_order')
+    @patch('src.orchestration.position_monitor._send_trade_exit_alert', new_callable=AsyncMock)
     @patch('src.orchestration.position_monitor.send_telegram_alert', new_callable=AsyncMock)
     @patch('src.orchestration.position_monitor.bot_state')
-    def test_default_sl_triggers_at_3_5_pct(self, mock_state, mock_alert, mock_order):
+    def test_default_sl_triggers_at_3_5_pct(self, mock_state, mock_alert, mock_trade_alert, mock_order):
         from src.orchestration.position_monitor import monitor_position
         mock_state.update_trailing_stop.return_value = 100.0
 
