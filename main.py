@@ -426,10 +426,23 @@ async def startup_event():
         webhook_url = f"{service_url}/webhook"
         webhook_secret = os.environ.get("TELEGRAM_WEBHOOK_SECRET")
         log.info(f"Setting webhook to: {webhook_url}")
-        await application.bot.set_webhook(
-            url=webhook_url,
-            secret_token=webhook_secret
-        )
+        try:
+            ok = await application.bot.set_webhook(
+                url=webhook_url,
+                secret_token=webhook_secret,
+                allowed_updates=["message", "edited_message", "callback_query"],
+            )
+            log.info(f"set_webhook returned: {ok}")
+            info = await application.bot.get_webhook_info()
+            log.info(
+                f"Webhook info: url={info.url or '(empty)'} "
+                f"pending={info.pending_update_count} "
+                f"allowed_updates={info.allowed_updates}")
+            if not info.url:
+                log.error("Webhook URL is empty after set_webhook — "
+                          "user commands (/dashboard etc.) will not be received.")
+        except Exception as e:
+            log.error(f"Webhook registration failed: {e}", exc_info=True)
 
     # Register signal confirmation callback
     register_execute_callback(execute_confirmed_signal)

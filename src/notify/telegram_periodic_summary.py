@@ -197,7 +197,7 @@ async def send_periodic_summary():
         rows = []
 
         for strat in strategies:
-            realized = 0
+            realized = 0.0
             try:
                 conn = get_db_connection()
                 is_pg = isinstance(conn, psycopg2.extensions.connection)
@@ -208,19 +208,19 @@ async def send_periodic_summary():
                         f"WHERE status='CLOSED' AND trading_strategy={ph}",
                         (strat,))
                     row = cur.fetchone()
-                    realized = float(row[0] if isinstance(row, (list, tuple))
-                                     else (row.get('coalesce') or row.get('sum')
-                                           or 0)) or 0
+                    # row is sqlite3.Row OR tuple (postgres) — both support [0].
+                    realized = float(row[0]) if row and row[0] is not None else 0.0
                 release_db_connection(conn)
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning(f"realized query failed for {strat}: {e}")
 
             positions = []
             try:
-                positions = get_open_positions.sync(
-                    asset_type='all', trading_strategy=strat)
-            except Exception:
-                pass
+                # get_open_positions is a sync function; asset_type=None covers both
+                # crypto and stock. (asset_type='all' was an invalid filter.)
+                positions = get_open_positions(trading_strategy=strat)
+            except Exception as e:
+                log.warning(f"open positions query failed for {strat}: {e}")
             open_count = len(positions)
 
             unrealized = 0.0
@@ -233,13 +233,12 @@ async def send_periodic_summary():
                             f"ORDER BY id DESC LIMIT 1",
                             (p['symbol'],))
                         row = cur2.fetchone()
-                        if row:
-                            price = float(row[0] if isinstance(row, (list, tuple))
-                                          else row['price'])
+                        if row and row[0] is not None:
+                            price = float(row[0])
                             unrealized += (price - p['entry_price']) * p['quantity']
                 release_db_connection(conn2)
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning(f"unrealized query failed for {strat}: {e}")
 
             streak = bot_state.strategy_get_streak_state(strat)
             cw = streak.get('consecutive_wins', 0)
@@ -256,10 +255,8 @@ async def send_periodic_summary():
                             f"WHERE symbol={ph} ORDER BY id DESC LIMIT 1",
                             (p['symbol'],))
                         row = cur_p.fetchone()
-                        if row:
-                            price = float(
-                                row[0] if isinstance(row, (list, tuple))
-                                else row['price'])
+                        if row and row[0] is not None:
+                            price = float(row[0])
                             pp = (price - p['entry_price']) / p['entry_price'] * 100
                             pos_details.append((p['symbol'], pp))
                         else:

@@ -285,7 +285,7 @@ def _calculate_source_uniqueness(source_name):
                 f"SELECT COUNT(*) AS cnt FROM scraped_articles "
                 f"WHERE source = {ph} AND {date_filter}", (source_name,))
             row = cur.fetchone()
-            total = int(row[0] if isinstance(row, (list, tuple)) else row['cnt'])
+            total = int(row[0]) if row else 0
 
             if total < 10:
                 return 0.5
