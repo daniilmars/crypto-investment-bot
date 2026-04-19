@@ -105,9 +105,12 @@
     }
 
     const realized = s.realized || {};
+    // Non-overlapping bands so the row sums to lifetime and any losing
+    // window appears explicitly in red.
     const today = realized.d1 || 0;
-    const week = realized.d7 || 0;
-    const month = realized.d30 || 0;
+    const week2to7 = realized.d2_to_7 || 0;
+    const month8to30 = realized.d8_to_30 || 0;
+    const olderThan30 = realized.older_than_30d || 0;
     const lifetime = realized.all || 0;
     const unrealized = s.unrealized_now_usd || 0;
 
@@ -131,9 +134,9 @@
       if (useClass) el.className = `tile-value ${klass(value)}`;
     };
     setTile('tile-today-realized', today);
-    setTile('tile-7d-realized', week);
-    setTile('tile-30d-realized', month);
-    setTile('tile-lifetime-realized', lifetime);
+    setTile('tile-2to7-realized', week2to7);
+    setTile('tile-8to30-realized', month8to30);
+    setTile('tile-older-realized', olderThan30);
 
     // --- Row 2: live portfolio snapshot ---
     const urEl = document.getElementById('tile-unrealized');
@@ -172,9 +175,10 @@
       const biggest = movers.reduce((m, r) =>
         Math.abs(r.pnl_pct || 0) > Math.abs(m.pnl_pct || 0) ? r : m);
       const pctClass = klass(biggest.pnl_pct);
-      const label = biggest.display_name || biggest.symbol;
+      // Use the raw ticker (not display name) so the tile width is bounded.
+      // Display names like "Nvidia" + percent push the row past the viewport.
       biggestEl.innerHTML =
-        `${escapeHtml(label)}\u00A0<span class="${pctClass}">${fmtPct(biggest.pnl_pct)}</span>`;
+        `${escapeHtml(biggest.symbol || '')} <span class="${pctClass}">${fmtPct(biggest.pnl_pct)}</span>`;
     } else {
       biggestEl.textContent = '—';
     }

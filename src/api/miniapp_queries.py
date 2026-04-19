@@ -497,6 +497,14 @@ def summary_data() -> dict:
     total_7d = wins_7d + losses_7d
     win_rate_7d = (wins_7d / total_7d) if total_7d else None
 
+    # Non-overlapping bands so the UI can render distinct periods that sum
+    # to lifetime. Avoids the "30d < 7d" visual paradox when an older
+    # window had losses (rolling-window math is correct but counter-
+    # intuitive; non-overlapping makes losses in any period explicit).
+    bucket["d2_to_7"] = bucket["d7"] - bucket["d1"]
+    bucket["d8_to_30"] = bucket["d30"] - bucket["d7"]
+    bucket["older_than_30d"] = bucket["all"] - bucket["d30"]
+
     return {
         "realized": bucket,
         "unrealized_now_usd": unrealized_now,
