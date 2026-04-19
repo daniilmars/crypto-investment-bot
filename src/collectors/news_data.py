@@ -294,7 +294,7 @@ _MACRO_KEYWORD_SECTORS_RAW = {
     r'oil\b|crude|petroleum|Hormuz|OPEC|Brent\b|WTI\b': ['energy'],
     r'tariff|trade war|China trade|import dut|export ban': ['tech_mega', 'semiconductors', 'consumer_disc', 'industrials'],
     r'fertilizer|commodit': ['materials', 'commodities'],
-    r'defense|military|Pentagon|NATO\b|weapons?\b|missile': ['defense'],
+    r'defense|military|Pentagon|NATO\b|weapons?\b|missile|drone\b|Power-to-X|synthetic fuel|MoD\b|Bundeswehr|defence procurement': ['defense'],
     r'interest rate|Fed |federal reserve|inflation\b|CPI\b': ['financials_banks', 'utilities_reits'],
     r'crypto|Bitcoin|digital asset|SEC crypto|stablecoin': ['l1_major', 'defi'],
     r'nuclear|uranium': ['nuclear_power'],
@@ -387,6 +387,28 @@ RSS_FEEDS = [
     {'url': 'https://www.rigzone.com/news/rss/rigzone_latest.aspx', 'category': 'sector'},
     {'url': 'https://www.eetimes.com/feed/', 'category': 'sector'},
     {'url': 'https://deadline.com/feed/', 'category': 'sector'},
+    # Defense / aerospace coverage — closes the European-defense blind spot.
+    # Verified working Apr 2026; carries Rheinmetall, ITM, Anduril, Destinus stories
+    # that none of our existing financial feeds covered.
+    {'url': 'https://www.defensenews.com/arc/outboundfeeds/rss/?outputType=xml', 'category': 'sector'},
+    {'url': 'https://www.defensenews.com/arc/outboundfeeds/rss/category/industry/?outputType=xml', 'category': 'sector'},
+    {'url': 'https://breakingdefense.com/feed/', 'category': 'sector'},
+    {'url': 'https://defence-industry.eu/feed/', 'category': 'sector'},
+    {'url': 'https://www.navalnews.com/feed/', 'category': 'sector'},
+    {'url': 'https://www.gov.uk/government/organisations/ministry-of-defence.atom', 'category': 'regulatory'},
+    # Pharma / biotech — closes the healthcare blind spot (MRK open position
+    # had only 2 articles/30d; Pfizer/AbbVie/AstraZeneca zero). Verified Apr 2026.
+    {'url': 'https://www.fiercebiotech.com/rss/xml', 'category': 'sector'},
+    {'url': 'https://www.fiercepharma.com/rss/xml', 'category': 'sector'},
+    {'url': 'https://www.biopharmadive.com/feeds/news/', 'category': 'sector'},
+    # Nuclear / utilities — VST, CEG, OKLO, SMR are active conservative positions
+    # but got near-zero direct coverage. Verified Apr 2026.
+    {'url': 'https://www.utilitydive.com/feeds/news/', 'category': 'sector'},
+    {'url': 'https://www.powermag.com/feed/', 'category': 'sector'},
+    {'url': 'https://www.world-nuclear-news.org/rss', 'category': 'sector'},
+    # European / offshore energy — BP.L, NESTE.HE, EQNR.OL had <5 articles/30d.
+    # Verified Apr 2026.
+    {'url': 'https://www.offshore-technology.com/feed/', 'category': 'sector'},
     # Layer C — KOL / Key person feeds
     {'url': 'https://decrypt.co/feed', 'category': 'kol'},
     {'url': 'https://blockworks.co/feed', 'category': 'kol'},
@@ -836,32 +858,82 @@ def _score_with_gemini(articles_with_hashes: list) -> dict:
     return merged
 
 
-_UNKNOWN_TIMESTAMP_WEIGHT = 0.3
+# Article age thresholds and weights. Defaults chosen so a month-old
+# article without a timestamp still contributes ~zero to the aggregate.
+# _UNKNOWN_TIMESTAMP_WEIGHT was previously 0.3 — tightened so timestamp-less
+# articles can no longer meaningfully inflate sentiment.
+_UNKNOWN_TIMESTAMP_WEIGHT = 0.1
+# _COLLECTED_AT_FALLBACK_WEIGHT is applied when we fall back to scrape time
+# (which is an upper bound on article age, not ground truth).
+_COLLECTED_AT_FALLBACK_WEIGHT = 0.5
 
 
-def _compute_freshness_weight(published_at_str, half_life_hours=6):
-    """Compute exponential decay weight based on article age.
-
-    weight = exp(-age_hours * ln(2) / half_life)
-    0h → 1.0, 6h → 0.5, 12h → 0.25, 24h → 0.06 (with default half_life=6).
-    Articles with missing/unparseable timestamps get reduced weight (0.3)
-    to avoid stale articles inflating sentiment.
+def _article_age_hours(published_at_str):
+    """Parse an article timestamp string and return its age in hours, or None
+    if the input is empty / unparseable / future-dated. Shared by both the
+    freshness-weight decay and the hard-cutoff filter so we don't maintain
+    two parsers with subtly different rules.
     """
-    if not published_at_str or half_life_hours <= 0:
-        return _UNKNOWN_TIMESTAMP_WEIGHT
+    if not published_at_str:
+        return None
     try:
         from email.utils import parsedate_to_datetime
-        pub_dt = parsedate_to_datetime(published_at_str)
+        pub_dt = parsedate_to_datetime(str(published_at_str))
+        if pub_dt is None:
+            return None
         if pub_dt.tzinfo is None:
             pub_dt = pub_dt.replace(tzinfo=timezone.utc)
         age_hours = (datetime.now(timezone.utc) - pub_dt).total_seconds() / 3600.0
         if age_hours < 0:
-            # Future timestamp — likely timezone error; treat with suspicion
-            return 0.5
-        return math.exp(-age_hours * math.log(2) / half_life_hours)
+            # Future timestamp — likely timezone error. Treat as unknown
+            # so the caller uses the fallback weight rather than 1.0.
+            return None
+        return age_hours
     except Exception:
         log.debug(f"Unparseable article timestamp: {published_at_str!r}")
+        return None
+
+
+def _compute_freshness_weight(article_or_str, half_life_hours=6):
+    """Compute exponential decay weight based on article age, with a
+    fallback chain so timestamp-less articles still get a reasonable weight.
+
+    Accepts either a legacy plain string (backward-compatible) or the full
+    article dict.
+
+    Resolution order:
+      1. published / published_at
+      2. updated (many RSS entries populate this when published is empty)
+      3. collected_at × _COLLECTED_AT_FALLBACK_WEIGHT penalty
+      4. _UNKNOWN_TIMESTAMP_WEIGHT (default 0.1)
+
+    Returns a weight in [0, 1].
+    """
+    if half_life_hours <= 0:
         return _UNKNOWN_TIMESTAMP_WEIGHT
+
+    # Back-compat path: caller passed a bare timestamp string
+    if article_or_str is None or isinstance(article_or_str, str):
+        age = _article_age_hours(article_or_str)
+        if age is None:
+            return _UNKNOWN_TIMESTAMP_WEIGHT
+        return math.exp(-age * math.log(2) / half_life_hours)
+
+    # Rich path: caller passed the article dict — walk the fallback chain
+    a = article_or_str
+    for field in ("published", "published_at", "updated"):
+        age = _article_age_hours(a.get(field))
+        if age is not None:
+            return math.exp(-age * math.log(2) / half_life_hours)
+
+    # Fall back to collected_at with a penalty — scrape time is an upper
+    # bound on article age, not ground truth.
+    age = _article_age_hours(a.get("collected_at"))
+    if age is not None:
+        weight = math.exp(-age * math.log(2) / half_life_hours)
+        return weight * _COLLECTED_AT_FALLBACK_WEIGHT
+
+    return _UNKNOWN_TIMESTAMP_WEIGHT
 
 
 def collect_news_sentiment(symbols):
@@ -898,6 +970,28 @@ def collect_news_sentiment(symbols):
 
     # 2. Combine and deduplicate
     all_articles = _deduplicate_articles(rss_articles + web_articles)
+
+    # 2a. Freshness hard cutoff — drop articles whose parsed age exceeds
+    # max_article_age_hours. Exponential decay alone would weight these
+    # ~1e-6, but filtering here saves Gemini tokens and protects against
+    # feed backfills suddenly emitting months of old posts. Articles with
+    # unparseable/missing timestamps are kept (handled by weight fallback).
+    max_age_h = news_config.get('max_article_age_hours', 72)
+    if max_age_h and max_age_h > 0:
+        original_count = len(all_articles)
+        kept = []
+        dropped_stale = 0
+        for a in all_articles:
+            age = _article_age_hours(
+                a.get('published') or a.get('published_at') or a.get('updated'))
+            if age is not None and age > max_age_h:
+                dropped_stale += 1
+                continue
+            kept.append(a)
+        if dropped_stale:
+            log.info(f"Freshness filter: dropped {dropped_stale}/"
+                     f"{original_count} articles older than {max_age_h}h")
+        all_articles = kept
 
     if not all_articles:
         log.info("No news articles found.")
@@ -1021,8 +1115,9 @@ def collect_news_sentiment(symbols):
             continue
 
         scores = [a['score'] for a in articles]
-        weights = [_compute_freshness_weight(a.get('published_at', ''), half_life)
-                   for a in articles]
+        # Pass the full article dict so the weight function can walk
+        # published → updated → collected_at fallback.
+        weights = [_compute_freshness_weight(a, half_life) for a in articles]
         total_weight = sum(weights)
         if total_weight > 0:
             avg_score = sum(s * w for s, w in zip(scores, weights)) / total_weight

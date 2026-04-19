@@ -16,7 +16,9 @@ class TestRSSFeedConfig:
     """Validates the RSS_FEEDS list structure and category distribution."""
 
     def test_total_feed_count(self):
-        assert len(RSS_FEEDS) == 100
+        # +6 defense feeds + 7 Tier-1 sector feeds (pharma, nuclear, utilities,
+        # offshore energy) added Apr 2026 to close blind-spot audit findings.
+        assert len(RSS_FEEDS) == 113
 
     def test_all_feeds_have_required_keys(self):
         for feed in RSS_FEEDS:
@@ -48,11 +50,13 @@ class TestRSSFeedConfig:
 
     def test_regulatory_feed_count(self):
         reg_feeds = [f for f in RSS_FEEDS if f['category'] == 'regulatory']
-        assert len(reg_feeds) == 14
+        assert len(reg_feeds) == 15  # +1 UK MoD atom (Apr 2026)
 
     def test_sector_feed_count(self):
+        # +5 defense feeds + 7 Tier-1 sector feeds (pharma, nuclear, utilities,
+        # offshore energy) added Apr 2026 to close blind-spot audit findings.
         sector_feeds = [f for f in RSS_FEEDS if f['category'] == 'sector']
-        assert len(sector_feeds) == 5
+        assert len(sector_feeds) == 17
 
     def test_kol_feed_count(self):
         kol_feeds = [f for f in RSS_FEEDS if f['category'] == 'kol']
@@ -563,7 +567,8 @@ class TestGeminiArticleScoring:
 
         assert 'BTC' in result['per_symbol']
         # Gemini score of 0.8 should be used (VADER would give something different)
-        assert result['per_symbol']['BTC']['avg_sentiment_score'] == 0.8
+        # pytest.approx tolerates ~1e-16 float drift from weighted-avg arithmetic
+        assert result['per_symbol']['BTC']['avg_sentiment_score'] == pytest.approx(0.8)
 
     @patch('src.collectors.news_data.get_latest_news_sentiment', return_value={})
     @patch('src.collectors.news_data.save_news_sentiment_batch')

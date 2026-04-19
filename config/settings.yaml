@@ -211,6 +211,10 @@ settings:
         min_symbols_with_track_record: 1
     # Freshness decay half-life: articles older than this (hours) get half weight
     freshness_half_life_hours: 6
+    # Hard cutoff: articles older than this are dropped at fetch time before
+    # scoring/Gemini. Set to 0 to disable. Defaults to 72h (survives weekends
+    # + Monday catch-up without letting weeks-old backfill into the pipeline).
+    max_article_age_hours: 72
     # Volume spike: trigger Gemini if current_volume > previous_volume * multiplier
     volume_spike_multiplier: 3.0
     # Sentiment shift: trigger Gemini if abs(current - previous) >= threshold
