@@ -87,3 +87,45 @@ def test_db_error_returns_none():
                side_effect=Exception("connection lost")):
         from src.analysis.recent_assessment import get_recent_bearish_assessment
         assert get_recent_bearish_assessment("NVDA", 8) is None
+
+
+# --- get_recent_assessment (direction-agnostic — for rotation attribution) ---
+
+def test_recent_assessment_returns_any_direction():
+    conn = _make_conn_with_row("XOM", "bullish", hours_ago=0.2)
+    conn.execute(
+        "UPDATE gemini_assessments SET catalyst_type=?, catalyst_freshness=? "
+        "WHERE symbol=?",
+        ("macro", "recent", "XOM"))
+    conn.commit()
+    with patch("src.analysis.recent_assessment.get_db_connection",
+               return_value=conn), \
+         patch("src.analysis.recent_assessment.release_db_connection"):
+        from src.analysis.recent_assessment import get_recent_assessment
+        row = get_recent_assessment("XOM", hours=0.5)
+        assert row is not None
+        assert row["direction"] == "bullish"
+        assert row["catalyst_type"] == "macro"
+
+
+def test_recent_assessment_respects_window():
+    """30-min lookup window — 2h-old row is outside 0.5h window."""
+    conn = _make_conn_with_row("XOM", "bullish", hours_ago=2)
+    with patch("src.analysis.recent_assessment.get_db_connection",
+               return_value=conn), \
+         patch("src.analysis.recent_assessment.release_db_connection"):
+        from src.analysis.recent_assessment import get_recent_assessment
+        assert get_recent_assessment("XOM", hours=0.5) is None
+
+
+def test_recent_assessment_empty_symbol():
+    from src.analysis.recent_assessment import get_recent_assessment
+    assert get_recent_assessment("", hours=0.5) is None
+    assert get_recent_assessment(None, hours=0.5) is None
+
+
+def test_recent_assessment_db_error_returns_none():
+    with patch("src.analysis.recent_assessment.get_db_connection",
+               side_effect=Exception("connection lost")):
+        from src.analysis.recent_assessment import get_recent_assessment
+        assert get_recent_assessment("NVDA", hours=0.5) is None

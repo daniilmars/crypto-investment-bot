@@ -85,6 +85,68 @@ def _record_trade_attribution(symbol, signal, order_id, trading_strategy):
         log.warning(f"Attribution recording failed for {symbol}/{order_id}: {e}")
 
 
+def _record_rotation_attribution(symbol, signal, order_id, trading_strategy,
+                                 rotate_sym: str):
+    """Attribution write for rotation-entry trades.
+
+    Fallback chain (mirrors _record_trade_attribution but extends it):
+        1. signal['attribution_articles'] (if rotation fired from a fresh BUY signal)
+        2. build_attribution_articles(symbol) — DB lookup
+        3. get_recent_assessment(symbol, 0.5h) — direction-agnostic Gemini row
+        4. Empty sources + catalyst_type='rotation_pick' — invariant: row always written
+    """
+    try:
+        from src.analysis.signal_attribution import (
+            build_attribution_articles,
+            link_attribution_to_order,
+            record_signal_attribution,
+        )
+        articles = signal.get('attribution_articles') or build_attribution_articles(symbol)
+
+        gemini = None
+        if signal.get('gemini_confidence') is not None:
+            gemini = {
+                'direction': signal.get('gemini_direction'),
+                'confidence': signal.get('gemini_confidence'),
+                'catalyst_type': signal.get('catalyst_type'),
+            }
+        else:
+            # Fallback: look up most recent assessment (any direction)
+            try:
+                from src.analysis.recent_assessment import get_recent_assessment
+                recent = get_recent_assessment(symbol, hours=0.5)
+                if recent is not None:
+                    gemini = {
+                        'direction': recent.get('direction'),
+                        'confidence': recent.get('confidence'),
+                        'catalyst_type': recent.get('catalyst_type') or 'rotation_pick',
+                    }
+            except Exception as e:
+                log.debug(f"get_recent_assessment fallback failed for {symbol}: {e}")
+
+        # Invariant: write SOMETHING so signal_attribution is 1:1 with trades.
+        if gemini is None:
+            gemini = {'direction': None, 'confidence': None,
+                      'catalyst_type': 'rotation_pick'}
+
+        # Decorate signal with a trade_reason so the stored row shows this
+        # entry came from a rotation swap (useful in post-hoc analysis).
+        enriched_signal = dict(signal)
+        if not enriched_signal.get('trade_reason'):
+            enriched_signal['trade_reason'] = f'rotation_from_{rotate_sym}'
+
+        attr_id = record_signal_attribution(
+            enriched_signal, articles=articles, gemini_assessment=gemini)
+        if attr_id:
+            link_attribution_to_order(attr_id, order_id)
+            log.info(
+                f"Rotation attribution #{attr_id} -> order {order_id} "
+                f"({trading_strategy}/{symbol}, {len(articles)} articles, "
+                f"catalyst={gemini.get('catalyst_type')})")
+    except Exception as e:
+        log.warning(f"Rotation attribution failed for {symbol}/{order_id}: {e}")
+
+
 async def process_trade_signal(
     symbol: str,
     signal: dict,
@@ -227,7 +289,13 @@ async def process_trade_signal(
                     risk_pct, macro_multiplier, signal_cooldown_hours,
                     current_prices=current_prices,
                     asset_type=asset_type, trading_strategy=trading_strategy,
-                    broker=broker, label=label, is_auto=is_auto)
+                    broker=broker, label=label, is_auto=is_auto,
+                    # Forward dynamic SL/TP + strategy_config so the
+                    # rotation entry inherits the same risk budget the
+                    # normal BUY path would have used.
+                    dynamic_sl_pct=dynamic_sl_pct,
+                    dynamic_tp_pct=dynamic_tp_pct,
+                    strategy_config=strategy_config)
                 if rotation_result:
                     return rotation_result
             signal['signal'] = 'HOLD'
@@ -582,6 +650,9 @@ async def _try_rotation(
     broker: str | None = None,
     label: str = '',
     is_auto: bool = False,
+    dynamic_sl_pct: float | None = None,
+    dynamic_tp_pct: float | None = None,
+    strategy_config: dict | None = None,
 ) -> dict | None:
     """Attempt position rotation when max positions blocks a BUY.
 
@@ -643,7 +714,42 @@ async def _try_rotation(
             log.warning(f"{prefix}Rotation buy skipped: insufficient balance after sell")
             return sell_result
 
-        buy_kw = {'trading_strategy': 'auto'}
+        # --- Resolve SL/TP with fallback tree so no rotation entry ever writes
+        # NULL protection fields. Caller may have pre-computed values; we also
+        # pass strategy-scoped settings so conservative/auto get their own
+        # stop_loss_percentage / take_profit_percentage where configured. ---
+        from src.analysis.dynamic_risk import resolve_sl_tp_for_entry
+        resolve_settings = dict(app_config.get('settings', {}))
+        if strategy_config:
+            # Per-strategy overrides (risk_params block) take precedence
+            strat_risk = (strategy_config.get('risk_params')
+                          or strategy_config) if isinstance(strategy_config, dict) else {}
+            if isinstance(strat_risk, dict):
+                if 'stop_loss_percentage' in strat_risk:
+                    resolve_settings['stop_loss_percentage'] = strat_risk['stop_loss_percentage']
+                if 'take_profit_percentage' in strat_risk:
+                    resolve_settings['take_profit_percentage'] = strat_risk['take_profit_percentage']
+        cache_seed = {}
+        if dynamic_sl_pct is not None and dynamic_tp_pct is not None:
+            # Caller already computed — derive atr_pct back from sl for cache seed.
+            # compute_dynamic_sl_tp inverts cleanly: atr_pct ≈ sl / sl_atr_mult.
+            dyn_cfg = resolve_settings.get('dynamic_risk', {}) or {}
+            mult = float(dyn_cfg.get('sl_atr_multiplier', 1.5))
+            if mult > 0:
+                cache_seed[symbol] = float(dynamic_sl_pct) / mult
+        sl_pct, tp_pct, sl_source = resolve_sl_tp_for_entry(
+            symbol, current_price, asset_type, resolve_settings,
+            cycle_atr_cache=cache_seed or None,
+        )
+        log.info(f"{prefix}Rotation SL/TP for {symbol}: "
+                 f"SL={sl_pct:.2%} TP={tp_pct:.2%} (source={sl_source})")
+
+        buy_kw = {
+            'trading_strategy': 'auto',
+            'trade_reason': f'rotation_from_{rotate_sym}',
+            'dynamic_sl_pct': sl_pct,
+            'dynamic_tp_pct': tp_pct,
+        }
         if asset_type == 'stock':
             buy_kw['asset_type'] = 'stock'
         buy_result = place_order(symbol, "BUY", quantity, current_price, **buy_kw)
@@ -657,6 +763,16 @@ async def _try_rotation(
                 now + timedelta(hours=cooldown_hours),
                 is_auto=is_auto)
             _set_cooldown(symbol, "BUY", signal_cooldown_hours, is_auto)
+
+            # Write attribution row with rotation-aware fallback chain.
+            try:
+                _record_rotation_attribution(
+                    symbol, signal, buy_result.get('order_id'),
+                    trading_strategy, rotate_sym)
+            except Exception as e:
+                log.warning(
+                    f"{prefix}Rotation attribution wrapper failed for "
+                    f"{symbol}/{buy_result.get('order_id')}: {e}")
         else:
             log.warning(f"{prefix}Rotation buy failed for {symbol}: {buy_result} — no cooldown set")
 

@@ -2,7 +2,7 @@
 
 import pytest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch, AsyncMock
 
 from src.orchestration.position_rotation import (
     compute_pnl_velocity,
@@ -321,3 +321,179 @@ class TestProcessTradeSignalRotation:
                     0.03, 4.0, 1, False, 1.0,
                     asset_type='stock', is_auto=True))
             assert result is None
+
+
+# =========================================================================
+# WS-Rotation: SL/TP + attribution write-path invariant tests
+# =========================================================================
+
+ROTATION_CFG_PATCH = {
+    'settings': {'position_rotation': {
+        'enabled': True, 'min_hold_hours': 24,
+        'min_signal_strength': 0.6, 'min_strength_advantage': 0.15,
+        'min_pnl_velocity_threshold': -0.005,
+        'rotation_cooldown_hours': 4,
+    }}
+}
+
+
+def _run_rotation(signal, positions, prices, **overrides):
+    """Drive process_trade_signal into the rotation branch and return the
+    mocked place_order calls so assertions can inspect SL/TP + trade_reason.
+    """
+    import asyncio
+    from src.orchestration.trade_executor import process_trade_signal
+    bot_state.clear_all()
+
+    kwargs = {
+        'asset_type': 'stock', 'trading_strategy': 'auto',
+        'label': 'AUTO', 'is_auto': True,
+        'current_prices': prices,
+    }
+    kwargs.update(overrides)
+
+    with patch('src.orchestration.trade_executor.place_order') as mock_place, \
+         patch('src.orchestration.trade_executor.send_telegram_alert',
+               new_callable=AsyncMock), \
+         patch('src.orchestration.trade_executor.check_buy_gates') as mock_gates, \
+         patch('src.orchestration.trade_executor.check_stoploss_cooldown',
+               new_callable=AsyncMock, return_value=False), \
+         patch('src.orchestration.trade_executor.check_signal_cooldown',
+               new_callable=AsyncMock, return_value=False), \
+         patch('src.orchestration.position_rotation.app_config',
+               ROTATION_CFG_PATCH), \
+         patch('src.orchestration.trade_executor._record_rotation_attribution'
+               ) as mock_attr, \
+         patch('src.execution.binance_trader.get_account_balance',
+               return_value={'USDT': 1000, 'total_usd': 1000}):
+
+        mock_gates.return_value = (
+            False, 0.0, 'Max concurrent positions (1) reached.')
+        mock_place.return_value = {
+            'status': 'FILLED', 'symbol': signal['symbol'], 'order_id': 'P_42',
+        }
+
+        asyncio.new_event_loop().run_until_complete(
+            process_trade_signal(
+                signal['symbol'], signal, signal['current_price'],
+                positions, 1000.0, 0.03, 4.0, 1, False, 1.0,
+                **kwargs))
+
+        return mock_place, mock_attr
+
+
+class TestRotationEntryWritePath:
+    """Invariant: rotation entries MUST have SL/TP + attribution."""
+
+    def _new_buy_signal(self, sym='NEW', price=50.0, strength=0.8, **extras):
+        base = {
+            'signal': 'BUY', 'symbol': sym, 'current_price': price,
+            'reason': 'rotation test', 'signal_strength': strength,
+        }
+        base.update(extras)
+        return base
+
+    def test_caller_dynamic_sltp_flows_to_place_order(self):
+        """When process_trade_signal receives dynamic_sl_pct/_tp_pct, the
+        rotation BUY passes equivalent values down to place_order."""
+        positions = [_make_position('OLD', 100.0, hours_held=72, order_id='ord_1')]
+        signal = self._new_buy_signal()
+        prices = {'OLD': 94.0, 'NEW': 50.0}
+
+        mock_place, _ = _run_rotation(
+            signal, positions, prices,
+            dynamic_sl_pct=0.04, dynamic_tp_pct=0.12)
+
+        # place_order is called twice: SELL first, BUY second
+        assert mock_place.call_count == 2
+        buy_kwargs = mock_place.call_args_list[1].kwargs
+        assert buy_kwargs.get('dynamic_sl_pct') is not None
+        assert buy_kwargs.get('dynamic_tp_pct') is not None
+        # Caller-seeded cache → resolved SL should be in a reasonable range
+        assert 0.02 <= buy_kwargs['dynamic_sl_pct'] <= 0.10
+
+    def test_missing_dynamic_sltp_falls_back_to_config(self):
+        """With no caller SL/TP and no ATR, resolve helper falls back to
+        static settings — invariant: SL/TP NEVER NULL."""
+        positions = [_make_position('OLD', 100.0, hours_held=72, order_id='ord_1')]
+        signal = self._new_buy_signal()
+        prices = {'OLD': 94.0, 'NEW': 50.0}
+
+        mock_place, _ = _run_rotation(signal, positions, prices)
+        # dynamic_sl/tp not passed — resolve falls back to config
+        assert mock_place.call_count == 2
+        buy_kwargs = mock_place.call_args_list[1].kwargs
+        assert buy_kwargs['dynamic_sl_pct'] is not None
+        assert buy_kwargs['dynamic_tp_pct'] is not None
+        assert buy_kwargs['dynamic_sl_pct'] > 0
+        assert buy_kwargs['dynamic_tp_pct'] > 0
+
+    def test_rotation_writes_trade_reason(self):
+        """trade_reason is populated with 'rotation_from_{old_symbol}'."""
+        positions = [_make_position('OLD', 100.0, hours_held=72, order_id='ord_1')]
+        signal = self._new_buy_signal()
+        prices = {'OLD': 94.0, 'NEW': 50.0}
+
+        mock_place, _ = _run_rotation(signal, positions, prices)
+        buy_kwargs = mock_place.call_args_list[1].kwargs
+        assert buy_kwargs.get('trade_reason') == 'rotation_from_OLD'
+
+    def test_rotation_calls_attribution_on_success(self):
+        """_record_rotation_attribution must fire after a filled BUY."""
+        positions = [_make_position('OLD', 100.0, hours_held=72, order_id='ord_1')]
+        signal = self._new_buy_signal()
+        prices = {'OLD': 94.0, 'NEW': 50.0}
+
+        _, mock_attr = _run_rotation(signal, positions, prices)
+        mock_attr.assert_called_once()
+        args, _ = mock_attr.call_args
+        # _record_rotation_attribution(symbol, signal, order_id, strategy, rotate_sym)
+        assert args[0] == 'NEW'
+        assert args[2] == 'P_42'
+        assert args[4] == 'OLD'
+
+    def test_sl_tp_never_null_invariant(self):
+        """Parametric over 3 scenarios — SL/TP must be populated in all cases."""
+        for case, caller_sl, caller_tp in [
+            ('caller provided', 0.05, 0.15),
+            ('caller None', None, None),
+            ('caller partial', 0.04, None),
+        ]:
+            mock_place, _ = _run_rotation(
+                self._new_buy_signal(sym=f'N{case[:3]}'),
+                [_make_position('OLD', 100.0, hours_held=72,
+                                order_id=f'ord_{case[:3]}')],
+                {'OLD': 94.0, f'N{case[:3]}': 50.0},
+                dynamic_sl_pct=caller_sl, dynamic_tp_pct=caller_tp)
+            assert mock_place.call_count == 2, f"{case}: expected 2 place_order calls"
+            buy_kwargs = mock_place.call_args_list[1].kwargs
+            assert buy_kwargs['dynamic_sl_pct'] is not None, f"{case}: SL was None"
+            assert buy_kwargs['dynamic_tp_pct'] is not None, f"{case}: TP was None"
+            assert buy_kwargs['dynamic_sl_pct'] > 0
+            assert buy_kwargs['dynamic_tp_pct'] > 0
+
+    def test_attribution_fallback_synthesizes_rotation_pick_when_no_gemini(self):
+        """_record_rotation_attribution writes a row even with zero Gemini data."""
+        from src.orchestration.trade_executor import _record_rotation_attribution
+
+        signal = {'signal': 'BUY', 'symbol': 'NEW', 'current_price': 50.0,
+                  'reason': 'rotation'}  # no gemini_* fields, no articles
+
+        with patch('src.analysis.signal_attribution.record_signal_attribution',
+                   return_value=123) as mock_rec, \
+             patch('src.analysis.signal_attribution.link_attribution_to_order'), \
+             patch('src.analysis.signal_attribution.build_attribution_articles',
+                   return_value=[]), \
+             patch('src.analysis.recent_assessment.get_recent_assessment',
+                   return_value=None):
+
+            _record_rotation_attribution('NEW', signal, 'P_77', 'auto', 'OLD')
+
+            mock_rec.assert_called_once()
+            call_kwargs = mock_rec.call_args.kwargs
+            gemini = call_kwargs.get('gemini_assessment')
+            assert gemini is not None
+            assert gemini.get('catalyst_type') == 'rotation_pick'
+            # Enriched signal carries trade_reason
+            enriched = mock_rec.call_args.args[0]
+            assert enriched.get('trade_reason') == 'rotation_from_OLD'

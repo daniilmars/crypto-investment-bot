@@ -940,6 +940,11 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
     trailing_stop_activation = settings.get('trailing_stop_activation', 0.02)
     trailing_stop_distance = settings.get('trailing_stop_distance', 0.015)
 
+    # Dynamic SL/TP (ATR-based) — shared config with crypto cycle
+    dyn_risk_cfg = settings.get('dynamic_risk', {})
+    dyn_risk_enabled = dyn_risk_cfg.get('enabled', False)
+    atr_period = dyn_risk_cfg.get('atr_period', 14)
+
     risk_cfg = dict(
         stop_loss_pct=stop_loss_percentage,
         take_profit_pct=take_profit_percentage,
@@ -1081,6 +1086,29 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
         sma_value = calculate_sma(prices, period=sma_period)
         rsi_value = calculate_rsi(prices, period=rsi_period)
 
+        # --- Dynamic SL/TP for stocks (closes-only ATR proxy) ---
+        # Stock daily_prices has closes but no H/L, so use the simpler
+        # close-range ATR. Falls back to config static if insufficient data.
+        stock_dynamic_sl = None
+        stock_dynamic_tp = None
+        if dyn_risk_enabled and len(prices) >= atr_period + 1 and current_price:
+            try:
+                from src.analysis.technical_indicators import calculate_atr_from_closes
+                atr_val = calculate_atr_from_closes(prices, period=atr_period)
+                atr_pct = atr_val / current_price if atr_val and current_price else None
+                if atr_pct is not None:
+                    stock_dynamic_sl, stock_dynamic_tp = compute_dynamic_sl_tp(
+                        atr_pct, stop_loss_percentage, take_profit_percentage,
+                        sl_atr_mult=dyn_risk_cfg.get('sl_atr_multiplier', 1.5),
+                        tp_atr_mult=dyn_risk_cfg.get('tp_atr_multiplier', 3.0),
+                        sl_floor=dyn_risk_cfg.get('sl_floor', 0.02),
+                        sl_ceiling=dyn_risk_cfg.get('sl_ceiling', 0.07),
+                        tp_floor=dyn_risk_cfg.get('tp_floor', 0.04),
+                        tp_ceiling=dyn_risk_cfg.get('tp_ceiling', 0.15),
+                    )
+            except Exception as e:
+                log.debug(f"Stock dynamic SL/TP failed for {symbol}: {e}")
+
         market_data = {'current_price': current_price, 'sma': sma_value, 'rsi': rsi_value,
                        'daily_closes': prices,
                        'weekly_closes': stock_batch_weekly.get(symbol),
@@ -1177,14 +1205,18 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                 stock_risk_pct, signal_cooldown_hours, max_concurrent_positions,
                 suppress_buys, macro_multiplier,
                 asset_type='stock', broker='alpaca', pdt_status=pdt_status,
-                current_prices=stock_prices_dict)
+                current_prices=stock_prices_dict,
+                dynamic_sl_pct=stock_dynamic_sl,
+                dynamic_tp_pct=stock_dynamic_tp)
         else:
             current_balance = (await asyncio.to_thread(get_account_balance, asset_type='stock')).get('total_usd', paper_trading_initial_capital)
             await process_trade_signal(
                 symbol, signal, current_price, _cached_stock_positions, current_balance,
                 stock_risk_pct, signal_cooldown_hours, max_concurrent_positions,
                 suppress_buys, macro_multiplier, asset_type='stock',
-                current_prices=stock_prices_dict)
+                current_prices=stock_prices_dict,
+                dynamic_sl_pct=stock_dynamic_sl,
+                dynamic_tp_pct=stock_dynamic_tp)
 
         # --- Strategy Bots: Stock Position Monitoring + Signal Execution ---
         for strat_name, strat_cfg in strategy_configs.items():
@@ -1262,6 +1294,8 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                     strat_suppress, macro_multiplier,
                     asset_type='stock', trading_strategy=strat_name, label=strat_label, is_auto=True,
                     current_prices=stock_prices_dict,
+                    dynamic_sl_pct=stock_dynamic_sl,
+                    dynamic_tp_pct=stock_dynamic_tp,
                     strategy_config=strat_cfg)
 
     log.info("--- Stock trading cycle complete ---")
