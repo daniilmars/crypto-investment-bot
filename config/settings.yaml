@@ -189,9 +189,12 @@ settings:
       enabled: true
     # Use Gemini 2.0 Flash for per-article sentiment scoring (replaces VADER, DB-cached)
     use_gemini_scoring: true
-    # Cache Gemini grounded search per batch (90 min = every 6th cycle)
-    # 10 batches × ~8 uncached cycles/day = ~80 calls/day (within 500 free RPD)
-    cache_ttl_minutes: 90
+    # Cache Gemini per batch. Bumped 90→180 min (Apr 20): halves the
+    # analyze_news_impact call rate — was the #2 cost driver in the
+    # Apr 14–17 Vertex AI spike. Per-symbol summary is refreshed every
+    # ~12 cycles instead of 6; fresh article-level scoring still runs
+    # each cycle via score_articles_batch so signal quality is preserved.
+    cache_ttl_minutes: 180
     # Sparse-data gates for the four feedback contexts injected into the
     # Gemini prompt. Each context is suppressed unless the underlying data
     # meets the threshold — avoids feeding the model misleading near-empty

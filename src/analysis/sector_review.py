@@ -7,9 +7,7 @@ These scores modulate signal engine thresholds: bullish sectors get easier
 BUY triggers, bearish sectors get harder ones.
 """
 
-import os
 import statistics
-import warnings
 
 from src.config import app_config
 from src.logger import log
@@ -24,13 +22,6 @@ def run_sector_review() -> dict | None:
     Sync function — call via asyncio.to_thread from async code.
     Returns parsed result dict or None on failure.
     """
-    project_id = os.environ.get('GCP_PROJECT_ID')
-    location = os.environ.get('VERTEX_AI_LOCATION') or os.environ.get('GCP_LOCATION', 'europe-west4')
-
-    if not project_id:
-        log.warning("GCP_PROJECT_ID not set — skipping sector review.")
-        return None
-
     try:
         sector_groups = _load_all_sector_groups()
         if not sector_groups:
@@ -41,14 +32,20 @@ def run_sector_review() -> dict | None:
         macro = _get_macro_context()
         prompt = _build_sector_review_prompt(sector_data, macro)
 
-        import vertexai
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", message=".*deprecated.*June 24, 2026.*")
-            from vertexai.generative_models import GenerativeModel
+        from src.analysis.gemini_news_analyzer import _make_genai_client
+        from google.genai.types import GenerateContentConfig, ThinkingConfig
 
-        vertexai.init(project=project_id, location=location)
-        model = GenerativeModel('gemini-2.5-pro')
-        response = model.generate_content(prompt)
+        client = _make_genai_client()
+        if client is None:
+            log.warning("No Gemini credentials — skipping sector review.")
+            return None
+
+        # Cap Pro thinking at 4096 tokens (Apr 20 cost-fix).
+        cfg = GenerateContentConfig(
+            thinking_config=ThinkingConfig(thinking_budget=4096),
+        )
+        response = client.models.generate_content(
+            model='gemini-2.5-pro', contents=prompt, config=cfg)
 
         from src.analysis.gemini_news_analyzer import _parse_gemini_json
         result = _parse_gemini_json(response.text)

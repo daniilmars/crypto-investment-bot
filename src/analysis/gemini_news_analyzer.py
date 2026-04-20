@@ -15,6 +15,28 @@ from src.config import app_config
 from src.logger import log
 
 
+def _make_genai_client():
+    """Create a `google.genai` client. Prefers the consumer API key (free
+    tier, skips paid Vertex AI where possible); falls back to Vertex AI.
+    Returns None if neither credential is available.
+
+    Shared by the migrated call sites (article scoring, position analyst,
+    sector review, thesis generator) so we can pass a ThinkingConfig that
+    the legacy `vertexai.generative_models.GenerationConfig` doesn't
+    support.
+    """
+    from google import genai
+    api_key = os.environ.get('GEMINI_API_KEY')
+    if api_key:
+        return genai.Client(api_key=api_key, vertexai=False)
+    project_id = os.environ.get('GCP_PROJECT_ID')
+    if not project_id:
+        return None
+    location = (os.environ.get('VERTEX_AI_LOCATION')
+                or os.environ.get('GCP_LOCATION', 'europe-west4'))
+    return genai.Client(vertexai=True, project=project_id, location=location)
+
+
 def _today_context() -> str:
     """Returns a 'TODAY' header to anchor Gemini's freshness judgment.
 
@@ -194,7 +216,7 @@ def _call_with_retry(fn, *args, **kwargs):
     raise last_exc
 
 
-def _score_single_batch(model, articles: list) -> list | None:
+def _score_single_batch(client, articles: list) -> list | None:
     """Sends a single batch of articles to Gemini and returns a list of scores.
 
     Returns None on any failure (parse error, count mismatch, API error).
@@ -280,7 +302,20 @@ def _score_single_batch(model, articles: list) -> list | None:
     )
 
     try:
-        response = _call_with_retry(model.generate_content, prompt)
+        from google.genai.types import GenerateContentConfig, ThinkingConfig
+        # Article scoring returns structured JSON — no chain-of-thought
+        # reasoning benefit. Explicitly disable Thinking to cut output
+        # tokens (~3× reduction) and avoid the Flash GA Thinking SKU
+        # that drove the Apr 14–17 cost spike.
+        cfg = GenerateContentConfig(
+            thinking_config=ThinkingConfig(thinking_budget=0),
+        )
+        response = _call_with_retry(
+            client.models.generate_content,
+            model='gemini-2.5-flash',
+            contents=prompt,
+            config=cfg,
+        )
         text = response.text.strip()
         scores = _parse_gemini_json(text)
 
@@ -330,25 +365,17 @@ def score_articles_batch(articles: list, batch_size: int = 50) -> dict:
     if not articles:
         return {}
 
-    project_id = os.environ.get('GCP_PROJECT_ID')
-    if not project_id:
-        log.warning("GCP_PROJECT_ID not set — skipping Gemini article scoring.")
-        return {}
-
-    location = os.environ.get('VERTEX_AI_LOCATION') or os.environ.get('GCP_LOCATION', 'europe-west4')
-
-    try:
-        vertexai.init(project=project_id, location=location)
-        model = GenerativeModel('gemini-2.5-flash')
-    except Exception as e:
-        log.error(f"Failed to initialize Gemini for article scoring: {e}")
+    client = _make_genai_client()
+    if client is None:
+        log.warning("No Gemini credentials (GEMINI_API_KEY or GCP_PROJECT_ID) — "
+                    "skipping article scoring.")
         return {}
 
     all_scores = {}
 
     for i in range(0, len(articles), batch_size):
         batch = articles[i:i + batch_size]
-        scores = _score_single_batch(model, batch)
+        scores = _score_single_batch(client, batch)
 
         if scores is None:
             log.warning(f"Gemini article scoring batch {i // batch_size + 1} failed, skipping.")
@@ -835,11 +862,9 @@ def analyze_position_investment(
     Returns:
         dict with recommendation, confidence, reasoning, risk_level, etc. or None on failure.
     """
-    project_id = os.environ.get('GCP_PROJECT_ID')
-    location = os.environ.get('VERTEX_AI_LOCATION') or os.environ.get('GCP_LOCATION', 'europe-west4')
-
-    if not project_id:
-        log.warning("GCP_PROJECT_ID not set — skipping position investment analysis.")
+    client = _make_genai_client()
+    if client is None:
+        log.warning("No Gemini credentials — skipping position investment analysis.")
         return None
 
     symbol = position.get('symbol', 'UNKNOWN')
@@ -860,8 +885,6 @@ def analyze_position_investment(
     can_increase = current_multiplier < max_position_multiplier
 
     try:
-        vertexai.init(project=project_id, location=location)
-        model = GenerativeModel('gemini-2.5-pro')
 
         # Format articles for prompt
         if recent_articles:
@@ -1027,7 +1050,20 @@ def analyze_position_investment(
             "- Do not include any text outside the JSON object"
         )
 
-        response = _call_with_retry(model.generate_content, prompt)
+        from google.genai.types import GenerateContentConfig, ThinkingConfig
+        # Cap Pro thinking budget at 4096 tokens. Pro with unbounded CoT
+        # produces ~15k-token reasoning traces (CHF 1.70/period → #1 cost
+        # line in the Apr 14–17 spike). 4096 preserves analyst depth
+        # while bounding the per-call cost.
+        cfg = GenerateContentConfig(
+            thinking_config=ThinkingConfig(thinking_budget=4096),
+        )
+        response = _call_with_retry(
+            client.models.generate_content,
+            model='gemini-2.5-pro',
+            contents=prompt,
+            config=cfg,
+        )
         text = response.text.strip()
         result = _parse_gemini_json(text)
         _validate_gemini_response(

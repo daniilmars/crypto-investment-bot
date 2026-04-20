@@ -6,7 +6,6 @@ longterm strategy's BUY decisions.
 """
 
 import json
-import os
 
 from src.logger import log
 
@@ -22,17 +21,18 @@ def generate_investment_thesis() -> dict | None:
     Saves to DB and updates module cache.
     """
     try:
-        import vertexai
-        from vertexai.generative_models import GenerativeModel
+        from src.analysis.gemini_news_analyzer import _make_genai_client
+        from google.genai.types import GenerateContentConfig, ThinkingConfig
 
-        project_id = os.environ.get('GCP_PROJECT_ID')
-        location = os.environ.get('VERTEX_AI_LOCATION') or os.environ.get('GCP_LOCATION', 'europe-west4')
-        if not project_id:
-            log.warning("GCP_PROJECT_ID not set — skipping thesis generation.")
+        client = _make_genai_client()
+        if client is None:
+            log.warning("No Gemini credentials — skipping thesis generation.")
             return None
 
-        vertexai.init(project=project_id, location=location)
-        model = GenerativeModel('gemini-2.5-pro')
+        # Cap Pro thinking budget at 4096 (Apr 20 cost-fix).
+        _PRO_CFG = GenerateContentConfig(
+            thinking_config=ThinkingConfig(thinking_budget=4096),
+        )
 
         # Get current regime for context
         try:
@@ -113,7 +113,8 @@ def generate_investment_thesis() -> dict | None:
             "Include 20-35 total stocks across all sectors."
         )
 
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model='gemini-2.5-pro', contents=prompt, config=_PRO_CFG)
         text = response.text.strip()
 
         # Parse JSON (handle markdown fences)
@@ -314,16 +315,16 @@ def generate_sector_addendum(sector_group: str, conviction_data: dict) -> dict |
     Returns a sector dict matching the thesis schema, or None on failure.
     """
     try:
-        import vertexai
-        from vertexai.generative_models import GenerativeModel
+        from src.analysis.gemini_news_analyzer import _make_genai_client
+        from google.genai.types import GenerateContentConfig, ThinkingConfig
 
-        project_id = os.environ.get('GCP_PROJECT_ID')
-        location = os.environ.get('VERTEX_AI_LOCATION') or os.environ.get('GCP_LOCATION', 'europe-west4')
-        if not project_id:
+        client = _make_genai_client()
+        if client is None:
             return None
 
-        vertexai.init(project=project_id, location=location)
-        model = GenerativeModel('gemini-2.5-pro')
+        _PRO_CFG = GenerateContentConfig(
+            thinking_config=ThinkingConfig(thinking_budget=4096),
+        )
 
         from src.analysis.sector_limits import get_group_symbols
         group_symbols = get_group_symbols(sector_group)
@@ -355,7 +356,8 @@ def generate_sector_addendum(sector_group: str, conviction_data: dict) -> dict |
             "CONVICTION SCALE: 0.5=speculative, 0.7=reasonable, 0.85=high, 0.95=very high"
         )
 
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model='gemini-2.5-pro', contents=prompt, config=_PRO_CFG)
         text = response.text.strip()
         if text.startswith('```'):
             text = text.split('\n', 1)[1].rsplit('```', 1)[0].strip()

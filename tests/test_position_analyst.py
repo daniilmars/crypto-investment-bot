@@ -123,17 +123,15 @@ class TestAnalyzePositionInvestment:
         )
         assert result is None
 
-    @patch('src.analysis.gemini_news_analyzer.vertexai')
-    @patch('src.analysis.gemini_news_analyzer.GenerativeModel')
-    @patch.dict('os.environ', {'GCP_PROJECT_ID': 'test-project'})
-    def test_returns_hold_on_valid_response(self, mock_model_cls, mock_vertexai):
+    @patch('src.analysis.gemini_news_analyzer._make_genai_client')
+    def test_returns_hold_on_valid_response(self, mock_factory):
         from src.analysis.gemini_news_analyzer import analyze_position_investment
 
-        mock_model = MagicMock()
-        mock_model_cls.return_value = mock_model
+        client = MagicMock()
         mock_response = MagicMock()
         mock_response.text = '{"recommendation": "hold", "confidence": 0.6, "reasoning": "No catalyst", "risk_level": "green", "primary_driver": "none", "news_momentum": "stable", "increase_sizing_hint": null, "key_article": null}'
-        mock_model.generate_content.return_value = mock_response
+        client.models.generate_content.return_value = mock_response
+        mock_factory.return_value = client
 
         result = analyze_position_investment(
             {'symbol': 'BTC', 'entry_price': 50000, 'quantity': 0.1},
@@ -147,17 +145,15 @@ class TestAnalyzePositionInvestment:
         assert result is not None
         assert result['recommendation'] == 'hold'
 
-    @patch('src.analysis.gemini_news_analyzer.vertexai')
-    @patch('src.analysis.gemini_news_analyzer.GenerativeModel')
-    @patch.dict('os.environ', {'GCP_PROJECT_ID': 'test-project'})
-    def test_returns_increase_with_catalyst(self, mock_model_cls, mock_vertexai):
+    @patch('src.analysis.gemini_news_analyzer._make_genai_client')
+    def test_returns_increase_with_catalyst(self, mock_factory):
         from src.analysis.gemini_news_analyzer import analyze_position_investment
 
-        mock_model = MagicMock()
-        mock_model_cls.return_value = mock_model
+        client = MagicMock()
         mock_response = MagicMock()
         mock_response.text = '{"recommendation": "increase", "confidence": 0.85, "reasoning": "ETF approval catalyst", "risk_level": "green", "primary_driver": "bullish_catalyst", "news_momentum": "accelerating", "increase_sizing_hint": "medium", "key_article": "SEC approves BTC ETF"}'
-        mock_model.generate_content.return_value = mock_response
+        client.models.generate_content.return_value = mock_response
+        mock_factory.return_value = client
 
         result = analyze_position_investment(
             {'symbol': 'BTC', 'entry_price': 50000, 'quantity': 0.1},
@@ -171,17 +167,15 @@ class TestAnalyzePositionInvestment:
         assert result['recommendation'] == 'increase'
         assert result['increase_sizing_hint'] == 'medium'
 
-    @patch('src.analysis.gemini_news_analyzer.vertexai')
-    @patch('src.analysis.gemini_news_analyzer.GenerativeModel')
-    @patch.dict('os.environ', {'GCP_PROJECT_ID': 'test-project'})
-    def test_handles_json_parse_error(self, mock_model_cls, mock_vertexai):
+    @patch('src.analysis.gemini_news_analyzer._make_genai_client')
+    def test_handles_json_parse_error(self, mock_factory):
         from src.analysis.gemini_news_analyzer import analyze_position_investment
 
-        mock_model = MagicMock()
-        mock_model_cls.return_value = mock_model
+        client = MagicMock()
         mock_response = MagicMock()
         mock_response.text = 'not valid json at all'
-        mock_model.generate_content.return_value = mock_response
+        client.models.generate_content.return_value = mock_response
+        mock_factory.return_value = client
 
         result = analyze_position_investment(
             {'symbol': 'BTC', 'entry_price': 50000, 'quantity': 0.1},
@@ -192,17 +186,15 @@ class TestAnalyzePositionInvestment:
         )
         assert result is None
 
-    @patch('src.analysis.gemini_news_analyzer.vertexai')
-    @patch('src.analysis.gemini_news_analyzer.GenerativeModel')
-    @patch.dict('os.environ', {'GCP_PROJECT_ID': 'test-project'})
-    def test_includes_additions_history_in_prompt(self, mock_model_cls, mock_vertexai):
+    @patch('src.analysis.gemini_news_analyzer._make_genai_client')
+    def test_includes_additions_history_in_prompt(self, mock_factory):
         from src.analysis.gemini_news_analyzer import analyze_position_investment
 
-        mock_model = MagicMock()
-        mock_model_cls.return_value = mock_model
+        client = MagicMock()
         mock_response = MagicMock()
         mock_response.text = '{"recommendation": "hold", "confidence": 0.5, "reasoning": "At max", "risk_level": "yellow", "primary_driver": "none", "news_momentum": "stable", "increase_sizing_hint": null, "key_article": null}'
-        mock_model.generate_content.return_value = mock_response
+        client.models.generate_content.return_value = mock_response
+        mock_factory.return_value = client
 
         additions = [
             {'addition_price': 51000, 'addition_quantity': 0.05, 'reason': 'First increase'},
@@ -218,10 +210,12 @@ class TestAnalyzePositionInvestment:
         )
         assert result is not None
         # Verify prompt included additions info
-        call_args = mock_model.generate_content.call_args
-        prompt_text = call_args[0][0]
+        call_kwargs = client.models.generate_content.call_args.kwargs
+        prompt_text = call_kwargs['contents']
         assert 'Addition History' in prompt_text
         assert 'First increase' in prompt_text
+        # Verify thinking budget is capped
+        assert call_kwargs['config'].thinking_config.thinking_budget == 4096
 
 
 # ---------- Database: Position Additions ----------
