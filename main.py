@@ -334,6 +334,34 @@ async def calibration_loop():
         await asyncio.sleep(24 * 3600)
 
 
+async def attribution_health_loop():
+    """Daily attribution coverage snapshot → attribution_coverage_history.
+
+    Mirrors the /check-news L8 metrics but persists them so we can see
+    the coverage trajectory over time (the pre-WS1 backlog is expected
+    to age out of the 7d window over ~7 days, recovering coverage to
+    ~100%). Fires on startup (10-min warmup) then every 24h.
+    """
+    await asyncio.sleep(600)  # 10-min startup warmup
+    while True:
+        try:
+            from src.analysis.attribution_health import compute_and_save_coverage
+            result = await asyncio.to_thread(compute_and_save_coverage)
+            if result.get('error'):
+                log.warning(f"Attribution health loop: {result['error']}")
+            else:
+                snaps = result.get('snapshots', [])
+                summary = ", ".join(
+                    f"{s['window_days']}d: {s['coverage_pct_sources']:.1f}% "
+                    f"({s['with_sources']}/{s['total_attributions']})"
+                    for s in snaps)
+                log.info(f"Attribution health: persisted {result['persisted']} "
+                         f"snapshots — {summary}")
+        except Exception as e:
+            log.error(f"Attribution health loop error: {e}", exc_info=True)
+        await asyncio.sleep(24 * 3600)
+
+
 @app.on_event("startup")
 async def startup_event():
     """
@@ -512,6 +540,7 @@ async def startup_event():
     _background_tasks.append(asyncio.create_task(fx_refresh_loop()))
     _background_tasks.append(asyncio.create_task(source_review_loop()))
     _background_tasks.append(asyncio.create_task(calibration_loop()))
+    _background_tasks.append(asyncio.create_task(attribution_health_loop()))
 
     # Register SIGTERM handler for logging (Uvicorn triggers shutdown hooks)
     def _sigterm_handler(signum, frame):

@@ -40,7 +40,7 @@ def _cursor(conn):
 # --- Connection Pool (for PostgreSQL) ---
 _pg_pool = None
 
-ALLOWED_TABLES = frozenset({"market_prices", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles", "stoploss_cooldowns", "position_additions", "ipo_events", "macro_regime_history", "source_registry", "signal_attribution", "experiment_log", "tuning_history", "session_peaks", "watchlist_items", "bot_state_kv", "signal_decisions", "sector_convictions", "gemini_assessments", "strategy_scores", "longterm_thesis", "fx_rates", "gemini_calibration"})
+ALLOWED_TABLES = frozenset({"market_prices", "signals", "trades", "optimization_results", "news_sentiment", "circuit_breaker_events", "scraped_articles", "stoploss_cooldowns", "position_additions", "ipo_events", "macro_regime_history", "source_registry", "signal_attribution", "experiment_log", "tuning_history", "session_peaks", "watchlist_items", "bot_state_kv", "signal_decisions", "sector_convictions", "gemini_assessments", "strategy_scores", "longterm_thesis", "fx_rates", "gemini_calibration", "attribution_coverage_history"})
 
 # --- Database Connection Management ---
 
@@ -1062,6 +1062,35 @@ def initialize_database(db_url=None):
             )'''
         cursor.execute(gemini_calibration_sql)
 
+        # Attribution coverage history — daily snapshots of L8 metrics so we
+        # can see the coverage curve recover after the WS1 + rotation fixes.
+        # Enables a trajectory drilldown in /check-news instead of a
+        # point-in-time Apr 21 snapshot.
+        attr_coverage_sql = '''
+            CREATE TABLE IF NOT EXISTS attribution_coverage_history (
+                id SERIAL PRIMARY KEY,
+                computed_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                window_days INTEGER NOT NULL,
+                total_attributions INTEGER NOT NULL,
+                with_sources INTEGER NOT NULL,
+                with_hashes INTEGER NOT NULL,
+                with_trade INTEGER NOT NULL,
+                with_resolution INTEGER NOT NULL,
+                coverage_pct_sources REAL NOT NULL
+            )''' if is_postgres_conn else '''
+            CREATE TABLE IF NOT EXISTS attribution_coverage_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                window_days INTEGER NOT NULL,
+                total_attributions INTEGER NOT NULL,
+                with_sources INTEGER NOT NULL,
+                with_hashes INTEGER NOT NULL,
+                with_trade INTEGER NOT NULL,
+                with_resolution INTEGER NOT NULL,
+                coverage_pct_sources REAL NOT NULL
+            )'''
+        cursor.execute(attr_coverage_sql)
+
         # --- Performance indexes ---
         perf_indexes = [
             "CREATE INDEX IF NOT EXISTS idx_market_prices_symbol_ts "
@@ -1076,6 +1105,8 @@ def initialize_database(db_url=None):
             "ON scraped_articles (collected_at)",
             "CREATE INDEX IF NOT EXISTS idx_news_sentiment_symbol_ts "
             "ON news_sentiment (symbol, timestamp)",
+            "CREATE INDEX IF NOT EXISTS idx_atth_computed_at "
+            "ON attribution_coverage_history (computed_at)",
         ]
         for idx_sql in perf_indexes:
             try:
