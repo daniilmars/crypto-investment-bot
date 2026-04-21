@@ -371,10 +371,12 @@ settings:
         trailing_stop_distance: 0.02
         # Close slow-drift positions that never trigger SL/TP/trailing.
         # Fires when age >= max_hold_days AND -max_loss_pct < pnl_pct < min_gain_pct.
-        # dry_run=true: log candidates only (no close). Flip after observing ≥1 cycle.
+        # Flipped live Apr 21 after audit: 1/13 auto closures (30d) were slow-drift,
+        # BRK-B eventually exited at 38.9d/-$6.73 via signal_sell. Time_stop would
+        # have freed that capital earlier. Sets 4h BUY cooldown to prevent re-entry.
         time_stop:
           enabled: true
-          dry_run: true
+          dry_run: false
           max_hold_days: 14
           min_gain_pct: 0.02
           max_loss_pct: 0.05
@@ -445,7 +447,9 @@ settings:
         trailing_stop_distance: 0.015
         time_stop:
           enabled: true
-          dry_run: true
+          dry_run: false       # Flipped Apr 21 together with auto. Longer
+                               # max_hold_days (21 vs auto's 14) since
+                               # conservative positions reach SL/TP slower.
           max_hold_days: 21
           min_gain_pct: 0.02
           max_loss_pct: 0.04
