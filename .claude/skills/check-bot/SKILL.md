@@ -5,6 +5,22 @@ description: Check the performance and health of the deployed crypto-investment-
 
 Check the performance of the deployed crypto-investment-bot on GCE. Run all checks in parallel where possible and present a formatted summary.
 
+## SSH Resilience Pattern
+
+IAP SSH tunnels hang indefinitely when stuck. Never issue a long-running SSH
+command without first running a lightweight probe. All SSH calls below must
+include the keepalive flags shown in Step 4.
+
+On probe failure (see Step 4 below):
+1. Clear stale known_hosts for the VM's IP:
+   ```bash
+   ssh-keygen -R compute.<IP> 2>/dev/null && ssh-keygen -R <IP> 2>/dev/null
+   ```
+2. Re-probe ONCE.
+3. If still failing, surface the diagnostic and stop — GitHub Actions'
+   scheduled `Health Check` workflow is authoritative for bot liveness
+   even when IAP is broken (`gh run list --workflow="Health Check" --limit 3`).
+
 ## Steps
 
 1. **VM status + IP** — look up the current external IP dynamically (the ephemeral IP rotates across preemptions/restarts):
@@ -25,10 +41,25 @@ Check the performance of the deployed crypto-investment-bot on GCE. Run all chec
    gh run list --limit 5
    ```
 
-4. **Latest cycle logs** — SSH into the VM and get the last 30 minutes of bot logs:
+4. **SSH probe (MANDATORY before the log dump in Step 5)** — 10s hard cap:
+   ```bash
+   gcloud compute ssh crypto-bot-eu --zone=europe-west3-a --tunnel-through-iap \
+     --ssh-flag="-o ConnectTimeout=10" \
+     --ssh-flag="-o ServerAliveInterval=5" \
+     --ssh-flag="-o ServerAliveCountMax=2" \
+     --command="echo READY"
    ```
-   gcloud compute ssh crypto-bot-eu --zone=europe-west3-a --tunnel-through-iap -- "sudo docker logs crypto-bot --since 30m 2>&1 | tail -200"
+   If hangs or returns exit 255: apply ssh-keygen recovery above, re-probe ONCE, then stop with diagnostic if still failing.
+
+5. **Latest cycle logs** — only runs if probe succeeded:
+   ```bash
+   gcloud compute ssh crypto-bot-eu --zone=europe-west3-a --tunnel-through-iap \
+     --ssh-flag="-o ConnectTimeout=15" \
+     --ssh-flag="-o ServerAliveInterval=10" \
+     --ssh-flag="-o ServerAliveCountMax=3" \
+     --command="sudo docker logs crypto-bot --since 30m 2>&1 | tail -200"
    ```
+   Worst-case hang: ~45s (connect + keepalive stall), not infinite.
 
 ## Summary Format
 

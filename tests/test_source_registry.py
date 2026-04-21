@@ -276,3 +276,70 @@ def test_load_rss_feeds_empty_returns_none(mock_get_conn, mock_release, sqlite_d
 
     feeds = load_rss_feeds_from_registry()
     assert feeds is None  # Signals caller to use fallback
+
+
+# --- update_source_stats_by_name (for web scrapers) ---
+
+@patch('src.collectors.source_registry.release_db_connection')
+@patch('src.collectors.source_registry.get_db_connection')
+def test_update_source_stats_by_name_bumps_last_article_at(
+        mock_get_conn, mock_release, sqlite_db):
+    """Web scraper helper updates last_article_at + articles_total by name."""
+    mock_get_conn.return_value = sqlite_db
+    from src.collectors.source_registry import (
+        add_source, update_source_stats_by_name,
+    )
+    add_source('web_scraper', 'CoinDesk', 'https://coindesk.com',
+               category='mixed')
+
+    # Before: last_article_at is NULL, articles_total is 0
+    cur = sqlite_db.execute(
+        "SELECT last_article_at, articles_total FROM source_registry "
+        "WHERE source_name='CoinDesk'")
+    before = cur.fetchone()
+    assert before[0] is None
+    assert before[1] == 0
+
+    update_source_stats_by_name('CoinDesk', articles_fetched=12)
+
+    cur = sqlite_db.execute(
+        "SELECT last_article_at, articles_total FROM source_registry "
+        "WHERE source_name='CoinDesk'")
+    after = cur.fetchone()
+    assert after[0] is not None          # timestamp set
+    assert after[1] == 12                # articles_total incremented
+
+
+@patch('src.collectors.source_registry.release_db_connection')
+@patch('src.collectors.source_registry.get_db_connection')
+def test_update_source_stats_by_name_zero_count_no_op(
+        mock_get_conn, mock_release, sqlite_db):
+    """articles_fetched=0 is a no-op (doesn't reset last_article_at)."""
+    mock_get_conn.return_value = sqlite_db
+    from src.collectors.source_registry import (
+        add_source, update_source_stats_by_name,
+    )
+    add_source('web_scraper', 'AP News', 'https://apnews.com', category='mixed')
+    update_source_stats_by_name('AP News', articles_fetched=5)
+    update_source_stats_by_name('AP News', articles_fetched=0)  # no-op
+
+    cur = sqlite_db.execute(
+        "SELECT articles_total FROM source_registry "
+        "WHERE source_name='AP News'")
+    assert cur.fetchone()[0] == 5  # stayed at 5, wasn't wiped by the 0 call
+
+
+@patch('src.collectors.source_registry.release_db_connection')
+@patch('src.collectors.source_registry.get_db_connection')
+def test_update_source_stats_by_name_unknown_source_silent(
+        mock_get_conn, mock_release, sqlite_db):
+    """Unknown source_name: UPDATE matches 0 rows; function returns cleanly."""
+    mock_get_conn.return_value = sqlite_db
+    from src.collectors.source_registry import update_source_stats_by_name
+
+    # Should not raise even though 'DoesNotExist' is not in the registry
+    update_source_stats_by_name('DoesNotExist', articles_fetched=3)
+
+    cur = sqlite_db.execute(
+        "SELECT COUNT(*) FROM source_registry WHERE source_name='DoesNotExist'")
+    assert cur.fetchone()[0] == 0  # still absent, no insert side-effect

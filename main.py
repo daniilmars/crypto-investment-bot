@@ -306,6 +306,34 @@ async def db_backup_loop():
             log.error(f"DB backup error: {e}", exc_info=True)
 
 
+async def calibration_loop():
+    """Recompute gemini_calibration every 24h.
+
+    Fires once on startup (after a 5-min warmup so the initial cycle isn't
+    competing for resources), then every 24h. Previously the calibration
+    ran only on manual script invocation, which left snapshots 2-7 days
+    stale — breaking the /check-news L6 layer.
+    """
+    await asyncio.sleep(300)  # 5-min startup warmup
+    while True:
+        try:
+            from scripts.calibrate_gemini_confidence import run_calibration
+            result = await asyncio.to_thread(
+                run_calibration, persist=True, print_tables=False)
+            if result.get('error'):
+                log.warning(f"Calibration loop: {result['error']}")
+            elif result.get('skipped'):
+                log.debug("Calibration loop: no closed trades yet")
+            else:
+                log.info(
+                    f"Calibration loop: {result['rows']} trades "
+                    f"({result['with_conf']} with conf), "
+                    f"persisted {result['persisted']} bucket rows")
+        except Exception as e:
+            log.error(f"Calibration loop error: {e}", exc_info=True)
+        await asyncio.sleep(24 * 3600)
+
+
 @app.on_event("startup")
 async def startup_event():
     """
@@ -483,6 +511,7 @@ async def startup_event():
     _background_tasks.append(asyncio.create_task(_chat_session_cleanup_loop()))
     _background_tasks.append(asyncio.create_task(fx_refresh_loop()))
     _background_tasks.append(asyncio.create_task(source_review_loop()))
+    _background_tasks.append(asyncio.create_task(calibration_loop()))
 
     # Register SIGTERM handler for logging (Uvicorn triggers shutdown hooks)
     def _sigterm_handler(signum, frame):

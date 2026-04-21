@@ -6,6 +6,28 @@ argument-hint: "[sync|sweep|quality|mfe|intelligence|full] [auto|manual] [crypto
 
 Run backtesting analysis on the crypto-investment-bot's historical trades. This uses only saved DB data — no Gemini API calls.
 
+## SSH Resilience (MANDATORY before sync)
+
+Before the first `gcloud compute ssh` or `gcloud compute scp`, run a 10s-cap probe:
+
+```bash
+gcloud compute ssh crypto-bot-eu --zone=europe-west3-a --tunnel-through-iap \
+  --ssh-flag="-o ConnectTimeout=10" \
+  --ssh-flag="-o ServerAliveInterval=5" \
+  --ssh-flag="-o ServerAliveCountMax=2" \
+  --command="echo READY"
+```
+
+If probe hangs or returns exit 255: clear stale known_hosts and retry ONCE.
+```bash
+# Fetch IP via gcloud compute instances describe ... --format="value(networkInterfaces[0].accessConfigs[0].natIP)"
+ssh-keygen -R compute.<IP> 2>/dev/null; ssh-keygen -R <IP> 2>/dev/null
+```
+If still failing, stop — do NOT hang on the long scp.
+
+All SSH/SCP calls must use keepalive flags:
+`--ssh-flag="-o ConnectTimeout=15" --ssh-flag="-o ServerAliveInterval=10" --ssh-flag="-o ServerAliveCountMax=3"`
+
 ## Arguments
 
 Parse `$ARGUMENTS` for these optional flags (in any order):

@@ -167,6 +167,44 @@ def add_source(source_type, source_name, source_url, category=None,
             release_db_connection(conn)
 
 
+def update_source_stats_by_name(source_name: str, articles_fetched: int = 0):
+    """Update articles_total + last_article_at by source_name.
+
+    Used by web scrapers which don't hold a registry source_id but do know
+    their source name. Fire-and-forget — logs on error but never raises, so
+    an upstream scraper failure can never block article ingestion.
+    """
+    if not source_name or articles_fetched <= 0:
+        return
+    conn = None
+    try:
+        conn = get_db_connection()
+        is_pg = isinstance(conn, psycopg2.extensions.connection)
+        ph = _ph(is_pg)
+        now = datetime.now(timezone.utc).isoformat()
+        query = f"""
+            UPDATE source_registry
+            SET articles_total = articles_total + {ph},
+                consecutive_errors = 0,
+                last_fetched_at = {ph},
+                last_article_at = {ph}
+            WHERE source_name = {ph}
+        """
+        with _cursor(conn) as cur:
+            cur.execute(query, (articles_fetched, now, now, source_name))
+        conn.commit()
+    except Exception as e:
+        log.debug(f"update_source_stats_by_name({source_name}) failed: {e}")
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+    finally:
+        if conn:
+            release_db_connection(conn)
+
+
 def update_source_stats(source_id, articles_fetched=0, errors=0):
     """Update fetch stats after a collection cycle."""
     conn = None

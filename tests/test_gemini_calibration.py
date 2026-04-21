@@ -177,3 +177,92 @@ def test_stats_to_db_rows_shape():
     assert r[6] == pytest.approx((5 - 3) / 2)
     # ci_low / ci_high
     assert 0.0 <= r[7] <= r[8] <= 1.0
+
+
+# --- run_calibration (extracted for background loop) ---
+
+def test_run_calibration_empty_trades_returns_skipped(monkeypatch):
+    """Empty DB → skipped=True, no crash."""
+    from unittest.mock import MagicMock
+    from scripts.calibrate_gemini_confidence import run_calibration
+
+    monkeypatch.setattr(
+        "scripts.calibrate_gemini_confidence.fetch_calibration_rows",
+        lambda _conn: [])
+    monkeypatch.setattr(
+        "scripts.calibrate_gemini_confidence.get_db_connection",
+        lambda: MagicMock())
+    monkeypatch.setattr(
+        "scripts.calibrate_gemini_confidence.release_db_connection",
+        lambda _c: None)
+
+    result = run_calibration(persist=True, print_tables=False)
+    assert result['skipped'] is True
+    assert result['rows'] == 0
+    assert result['persisted'] == 0
+
+
+def test_run_calibration_no_db_returns_error(monkeypatch):
+    """DB connection failure surfaces as error dict instead of crashing."""
+    from scripts.calibrate_gemini_confidence import run_calibration
+    monkeypatch.setattr(
+        "scripts.calibrate_gemini_confidence.get_db_connection",
+        lambda: None)
+    result = run_calibration(persist=True, print_tables=False)
+    assert result.get('error') == 'no_db_connection'
+    assert result['persisted'] == 0
+
+
+def test_run_calibration_with_data_persists(monkeypatch):
+    """Non-empty rows → persist called, returns n_written."""
+    from unittest.mock import MagicMock
+    from scripts.calibrate_gemini_confidence import run_calibration
+
+    fake_rows = [
+        {"conf": 0.85, "pnl": 10.0, "direction": "bullish",
+         "trading_strategy": "auto", "exit_reason": "take_profit"},
+        {"conf": 0.85, "pnl": -5.0, "direction": "bullish",
+         "trading_strategy": "auto", "exit_reason": "stop_loss"},
+        {"conf": 0.75, "pnl": 3.0, "direction": "bullish",
+         "trading_strategy": "auto", "exit_reason": "trailing_stop"},
+    ]
+    monkeypatch.setattr(
+        "scripts.calibrate_gemini_confidence.fetch_calibration_rows",
+        lambda _conn: fake_rows)
+    monkeypatch.setattr(
+        "scripts.calibrate_gemini_confidence.get_db_connection",
+        lambda: MagicMock())
+    monkeypatch.setattr(
+        "scripts.calibrate_gemini_confidence.release_db_connection",
+        lambda _c: None)
+    monkeypatch.setattr(
+        "scripts.calibrate_gemini_confidence.persist_results",
+        lambda _conn, _results: 4)
+
+    result = run_calibration(persist=True, print_tables=False)
+    assert result['skipped'] is False
+    assert result['rows'] == 3
+    assert result['with_conf'] == 3
+    assert result['persisted'] == 4
+
+
+def test_run_calibration_no_persist(monkeypatch):
+    """persist=False skips DB write but still computes stats."""
+    from unittest.mock import MagicMock
+    from scripts.calibrate_gemini_confidence import run_calibration
+
+    fake_rows = [{"conf": 0.85, "pnl": 10.0, "direction": "bullish",
+                  "trading_strategy": "auto", "exit_reason": "take_profit"}]
+    monkeypatch.setattr(
+        "scripts.calibrate_gemini_confidence.fetch_calibration_rows",
+        lambda _conn: fake_rows)
+    monkeypatch.setattr(
+        "scripts.calibrate_gemini_confidence.get_db_connection",
+        lambda: MagicMock())
+    monkeypatch.setattr(
+        "scripts.calibrate_gemini_confidence.release_db_connection",
+        lambda _c: None)
+
+    result = run_calibration(persist=False, print_tables=False)
+    assert result['persisted'] == 0
+    assert result['rows'] == 1

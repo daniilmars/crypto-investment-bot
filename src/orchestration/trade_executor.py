@@ -218,6 +218,12 @@ async def process_trade_signal(
             log.info(f"[{label}] Skipping auto {signal_type} for {symbol}: "
                      f"signal_strength {signal_strength:.2f} < {min_strength:.2f} "
                      f"(macro_mult={macro_multiplier})")
+            log.info(
+                f"[GATE_REJECT] symbol={symbol} gate=min_signal_strength "
+                f"strategy={trading_strategy} asset={asset_type} "
+                f"signal={signal_type} "
+                f"value={signal_strength:.2f} threshold={min_strength:.2f} "
+                f"macro_mult={macro_multiplier:.2f}")
             return None
 
     # 3. BUY path

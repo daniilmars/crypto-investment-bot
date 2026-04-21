@@ -219,11 +219,24 @@ _scraper_health: dict[str, list[int]] = {}
 
 
 def _update_scraper_health(source_name: str, article_count: int):
-    """Record article count for a source, trimming to window size."""
+    """Record article count for a source, trimming to window size.
+
+    Also bumps source_registry.last_article_at so the diagnostic doesn't
+    flag web scrapers as 'stale' even when they're actively producing
+    articles (they insert into scraped_articles directly, bypassing the
+    RSS path's update_source_stats).
+    """
     history = _scraper_health.setdefault(source_name, [])
     history.append(article_count)
     if len(history) > _HEALTH_WINDOW:
         _scraper_health[source_name] = history[-_HEALTH_WINDOW:]
+
+    if article_count > 0:
+        try:
+            from src.collectors.source_registry import update_source_stats_by_name
+            update_source_stats_by_name(source_name, article_count)
+        except Exception as e:
+            log.debug(f"source_registry update failed for {source_name}: {e}")
 
 
 def _check_scraper_health() -> list[tuple[str, float]]:

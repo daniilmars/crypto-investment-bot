@@ -7,6 +7,9 @@ Gate chain:
 4. Sector limit
 5. Event calendar (block/reduce)
 6. Stop-loss cooldown
+
+Every rejection path ALSO emits a structured `[GATE_REJECT]` log line so the
+`check-news` diagnostic can aggregate the 52→N signal funnel by gate.
 """
 
 from datetime import datetime, timezone
@@ -16,6 +19,25 @@ from src.analysis.sector_limits import check_sector_limit, get_asset_class_conce
 from src.database import clear_stoploss_cooldown
 from src.logger import log
 from src.orchestration import bot_state
+
+
+def _log_gate_reject(symbol: str, gate: str, strategy: str = '',
+                     asset_type: str = '', **fields) -> None:
+    """Emit a structured single-line gate-rejection event.
+
+    Format: [GATE_REJECT] symbol=X gate=Y strategy=Z asset=A ...
+    Greppable: `grep -oE '\\[GATE_REJECT\\].*gate=[a-z_]+'`
+    """
+    parts = [f"symbol={symbol}", f"gate={gate}"]
+    if strategy:
+        parts.append(f"strategy={strategy}")
+    if asset_type:
+        parts.append(f"asset={asset_type}")
+    for k, v in fields.items():
+        if v is None or v == "":
+            continue
+        parts.append(f"{k}={v}")
+    log.info("[GATE_REJECT] " + " ".join(parts))
 
 
 def check_buy_gates(
@@ -33,11 +55,14 @@ def check_buy_gates(
     If allowed is False, reason explains why.
     """
     prefix = f"[{label}] " if label else ""
+    strat_tag = (label or '').lower()
 
     # 1. Macro regime
     if suppress_buys:
         reason = f"{prefix}Skipping BUY for {symbol}: Macro regime RISK_OFF."
         log.info(reason)
+        _log_gate_reject(symbol, 'macro_regime_risk_off',
+                         strategy=strat_tag, asset_type=asset_type)
         return False, 0.0, reason
 
     # 2. Duplicate position (use .get for status — Alpaca positions may lack it)
@@ -46,6 +71,8 @@ def check_buy_gates(
            for p in open_positions):
         reason = f"{prefix}Skipping BUY for {symbol}: Position already open."
         log.info(reason)
+        _log_gate_reject(symbol, 'position_already_open',
+                         strategy=strat_tag, asset_type=asset_type)
         return False, 0.0, reason
 
     try:
@@ -59,6 +86,8 @@ def check_buy_gates(
         if any(p['symbol'] == symbol for p in pending):
             reason = f"{prefix}Skipping BUY for {symbol}: Pending limit order exists."
             log.info(reason)
+            _log_gate_reject(symbol, 'pending_limit_order',
+                             strategy=strat_tag, asset_type=asset_type)
             return False, 0.0, reason
     except Exception:
         pending = []  # Non-critical — continue with other gates
@@ -69,6 +98,10 @@ def check_buy_gates(
         reason = (f"{prefix}Skipping BUY for {symbol}: Max concurrent positions "
                   f"({max_positions}) reached.")
         log.info(reason)
+        _log_gate_reject(symbol, 'max_concurrent_positions',
+                         strategy=strat_tag, asset_type=asset_type,
+                         max=max_positions,
+                         current=len(open_positions) + pending_count)
         return False, 0.0, reason
 
     # 4. Sector limit — strategy is only used for logging context.
@@ -79,6 +112,9 @@ def check_buy_gates(
     if not sector_ok:
         reason = f"{prefix}Skipping BUY for {symbol}: {sector_msg}"
         log.info(reason)
+        _log_gate_reject(symbol, 'sector_limit',
+                         strategy=strat_tag, asset_type=asset_type,
+                         detail=sector_msg.replace(' ', '_')[:60])
         return False, 0.0, reason
 
     # 5. Event calendar
@@ -87,6 +123,9 @@ def check_buy_gates(
     if ev_action == 'block':
         reason = f"{prefix}Skipping BUY for {symbol}: {ev_reason}"
         log.info(reason)
+        _log_gate_reject(symbol, 'event_calendar_block',
+                         strategy=strat_tag, asset_type=asset_type,
+                         detail=str(ev_reason).replace(' ', '_')[:60])
         return False, 0.0, reason
 
     # 6. Concentration scaling (reduce size as asset class fills up)
@@ -121,6 +160,12 @@ async def check_stoploss_cooldown(symbol: str, signal_type: str,
             cooldown = bot_state.get_auto_stoploss_cooldown(symbol)
             if cooldown:
                 if now < cooldown:
+                    expires_in_h = (cooldown - now).total_seconds() / 3600
+                    _log_gate_reject(
+                        symbol, 'stoploss_cooldown',
+                        strategy='auto' if is_auto else '',
+                        signal=signal_type,
+                        expires_in_h=f"{expires_in_h:.1f}")
                     return True
                 else:
                     bot_state.remove_auto_stoploss_cooldown(symbol)
@@ -128,6 +173,12 @@ async def check_stoploss_cooldown(symbol: str, signal_type: str,
             cooldown = bot_state.get_stoploss_cooldown(symbol)
             if cooldown:
                 if now < cooldown:
+                    expires_in_h = (cooldown - now).total_seconds() / 3600
+                    _log_gate_reject(
+                        symbol, 'stoploss_cooldown',
+                        strategy='auto' if is_auto else '',
+                        signal=signal_type,
+                        expires_in_h=f"{expires_in_h:.1f}")
                     return True
                 else:
                     bot_state.remove_stoploss_cooldown(symbol)
@@ -149,12 +200,20 @@ async def check_signal_cooldown(symbol: str, signal_type: str,
     if is_auto:
         expires = bot_state.get_auto_signal_cooldown(symbol, signal_type)
         if expires and now < expires:
+            expires_in_h = (expires - now).total_seconds() / 3600
+            _log_gate_reject(
+                symbol, 'signal_cooldown', strategy='auto',
+                signal=signal_type, expires_in_h=f"{expires_in_h:.1f}")
             return True
         elif expires:
             bot_state.remove_auto_signal_cooldown(symbol, signal_type)
     else:
         expires = bot_state.get_signal_cooldown(symbol, signal_type)
         if expires and now < expires:
+            expires_in_h = (expires - now).total_seconds() / 3600
+            _log_gate_reject(
+                symbol, 'signal_cooldown',
+                signal=signal_type, expires_in_h=f"{expires_in_h:.1f}")
             return True
         elif expires:
             bot_state.remove_signal_cooldown(symbol, signal_type)

@@ -93,6 +93,56 @@ def persist_results(conn, all_results: list[tuple[str, dict]]) -> int:
     return n_written
 
 
+def run_calibration(persist: bool = True, small_n: int = 10,
+                    print_tables: bool = False) -> dict:
+    """Compute calibration buckets and optionally persist to gemini_calibration.
+
+    Extracted from main() so the background loop in main.py can call it
+    directly (see calibration_loop). Returns a summary dict for logging:
+    {'rows': N, 'with_conf': N, 'persisted': N, 'skipped': bool}.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return {'error': 'no_db_connection', 'rows': 0, 'persisted': 0}
+
+    try:
+        rows = fetch_calibration_rows(conn)
+    finally:
+        release_db_connection(conn)
+
+    with_conf = sum(1 for r in rows if r['conf'] is not None)
+    if not rows:
+        return {'rows': 0, 'with_conf': 0, 'persisted': 0, 'skipped': True}
+
+    if print_tables:
+        print(f"Loaded {len(rows)} closed trades  ({with_conf} "
+              f"with Gemini confidence,  {len(rows) - with_conf} without)")
+        print(f"Computed at {datetime.now(timezone.utc).isoformat(timespec='seconds')}")
+        print()
+
+    all_results: list[tuple[str, dict]] = []
+    for stratify in (None, "direction", "trading_strategy", "exit_reason"):
+        stats = bucketize(rows, stratify_key=stratify)
+        label = stratify or "overall"
+        if not stats:
+            continue
+        if print_tables:
+            print(render_table(stats, stratify_label=label,
+                               small_n_threshold=small_n))
+        all_results.append((label, stats))
+
+    n_written = 0
+    if persist:
+        conn = get_db_connection()
+        try:
+            n_written = persist_results(conn, all_results)
+        finally:
+            release_db_connection(conn)
+
+    return {'rows': len(rows), 'with_conf': with_conf,
+            'persisted': n_written, 'skipped': False}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-persist", action="store_true",
@@ -101,45 +151,18 @@ def main() -> int:
                         help="Flag buckets with fewer than this many trades.")
     args = parser.parse_args()
 
-    conn = get_db_connection()
-    if not conn:
-        print("ERROR: no DB connection", file=sys.stderr)
+    result = run_calibration(persist=not args.no_persist,
+                              small_n=args.small_n, print_tables=True)
+    if result.get('error'):
+        print(f"ERROR: {result['error']}", file=sys.stderr)
         return 1
-
-    try:
-        rows = fetch_calibration_rows(conn)
-    finally:
-        release_db_connection(conn)
-
-    if not rows:
+    if result['skipped']:
         print("No closed trades found. Nothing to calibrate.")
         return 0
-
-    print(f"Loaded {len(rows)} closed trades  ({sum(1 for r in rows if r['conf'] is not None)} "
-          f"with Gemini confidence,  {sum(1 for r in rows if r['conf'] is None)} without)")
-    print(f"Computed at {datetime.now(timezone.utc).isoformat(timespec='seconds')}")
-    print()
-
-    all_results: list[tuple[str, dict]] = []
-    for stratify in (None, "direction", "trading_strategy", "exit_reason"):
-        stats = bucketize(rows, stratify_key=stratify)
-        label = stratify or "overall"
-        if not stats:
-            continue
-        print(render_table(stats, stratify_label=label,
-                           small_n_threshold=args.small_n))
-        all_results.append((label, stats))
-
-    if not args.no_persist:
-        conn = get_db_connection()
-        try:
-            n = persist_results(conn, all_results)
-            print(f"\nPersisted {n} bucket rows to gemini_calibration.")
-        finally:
-            release_db_connection(conn)
-    else:
+    if args.no_persist:
         print("\n(--no-persist set; skipped DB write)")
-
+    else:
+        print(f"\nPersisted {result['persisted']} bucket rows to gemini_calibration.")
     return 0
 
 

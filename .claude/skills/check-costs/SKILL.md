@@ -5,6 +5,20 @@ description: Assess the running costs of the deployed crypto-investment-bot. Que
 
 Assess the running costs of the deployed crypto-investment-bot. Gather real data from GCP billing and bot logs, then compute estimated monthly spend.
 
+## SSH Resilience (MANDATORY)
+
+Before step 2's log-grep SSH, probe the tunnel (10s cap):
+```bash
+gcloud compute ssh crypto-bot-eu --zone=europe-west3-a --tunnel-through-iap \
+  --ssh-flag="-o ConnectTimeout=10" \
+  --ssh-flag="-o ServerAliveInterval=5" \
+  --ssh-flag="-o ServerAliveCountMax=2" \
+  --command="echo READY"
+```
+On hang / exit 255: `ssh-keygen -R compute.<IP> 2>/dev/null; ssh-keygen -R <IP> 2>/dev/null`, re-probe ONCE, then stop with diagnostic if still failing.
+
+All SSH calls must include: `--ssh-flag="-o ConnectTimeout=15" --ssh-flag="-o ServerAliveInterval=10" --ssh-flag="-o ServerAliveCountMax=3"`
+
 ## Steps
 
 Run steps 1-3 in parallel:
