@@ -102,8 +102,21 @@ async def monitor_position(
             log.info(f"[{mode_label}] Trailing stop triggered for {symbol} "
                      f"(tag={exit_reason_tag}). Peak: ${peak_price:,.2f}, "
                      f"Current: ${current_price:,.2f}")
+            try:
+                reasoning = (
+                    f"Trailed {trailing_stop_distance:.1%} from peak "
+                    f"${peak_price:,.4f} (current ${current_price:,.4f})"
+                )
+                if recent_bearish and recent_bearish.get('reasoning'):
+                    reasoning += (
+                        f"; concurring bearish assessment: "
+                        f"{recent_bearish.get('reasoning')}"
+                    )
+            except Exception:
+                reasoning = None
             place_order(symbol, "SELL", qty, current_price,
-                        existing_order_id=order_id, exit_reason=exit_reason_tag, **order_kw)
+                        existing_order_id=order_id, exit_reason=exit_reason_tag,
+                        exit_reasoning=reasoning, **order_kw)
             _cleanup_position_state(order_id, is_auto)
             if asset_type == 'stock':
                 from src.execution.stock_trader import _is_same_day_trade, _record_day_trade
@@ -134,8 +147,16 @@ async def monitor_position(
     if pnl_pct <= -stop_loss_pct:
         sl_label = f"Catastrophic SL ({strategic['label']})" if strategic else "Stop-loss"
         log.info(f"[{mode_label}] {sl_label} hit for {symbol}. Closing position.")
+        try:
+            sl_reasoning = (
+                f"SL: price ${current_price:,.4f} crossed "
+                f"-{stop_loss_pct:.1%} from entry ${entry_price:,.4f}"
+            )
+        except Exception:
+            sl_reasoning = None
         place_order(symbol, "SELL", qty, current_price,
-                    existing_order_id=order_id, exit_reason='stop_loss', **order_kw)
+                    existing_order_id=order_id, exit_reason='stop_loss',
+                    exit_reasoning=sl_reasoning, **order_kw)
         _cleanup_position_state(order_id, is_auto)
         if asset_type == 'stock':
             from src.execution.stock_trader import _is_same_day_trade, _record_day_trade
@@ -161,8 +182,16 @@ async def monitor_position(
     # --- Take profit (disabled for strategic trades via 999% threshold) ---
     if pnl_pct >= take_profit_pct:
         log.info(f"[{mode_label}] Take-profit hit for {symbol}. Closing position.")
+        try:
+            tp_reasoning = (
+                f"TP: price ${current_price:,.4f} hit "
+                f"+{take_profit_pct:.1%} from entry ${entry_price:,.4f}"
+            )
+        except Exception:
+            tp_reasoning = None
         place_order(symbol, "SELL", qty, current_price,
-                    existing_order_id=order_id, exit_reason='take_profit', **order_kw)
+                    existing_order_id=order_id, exit_reason='take_profit',
+                    exit_reasoning=tp_reasoning, **order_kw)
         _cleanup_position_state(order_id, is_auto)
         if asset_type == 'stock':
             from src.execution.stock_trader import _is_same_day_trade, _record_day_trade
@@ -190,7 +219,8 @@ async def monitor_position(
 
         log.info(f"[{mode_label}] Time-stop triggered for {symbol}. {ts_reason}")
         place_order(symbol, "SELL", qty, current_price,
-                    existing_order_id=order_id, exit_reason='time_stop', **order_kw)
+                    existing_order_id=order_id, exit_reason='time_stop',
+                    exit_reasoning=(ts_reason or None), **order_kw)
         _cleanup_position_state(order_id, is_auto)
         if asset_type == 'stock':
             from src.execution.stock_trader import _is_same_day_trade, _record_day_trade

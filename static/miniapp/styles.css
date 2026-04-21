@@ -440,6 +440,14 @@ header {
   font-size: 12px;
   font-style: italic;
 }
+/* Exit block for closed trades — accent-colored left border visually
+   separates the "why did this close" story from the entry rationale
+   that follows it in the same expand panel. */
+.rat-exit {
+  border-left: 2px solid var(--accent);
+  padding-left: 10px;
+  margin-left: 0;
+}
 
 /* ---------- Closed trades ---------- */
 

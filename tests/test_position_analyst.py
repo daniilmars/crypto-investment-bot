@@ -503,3 +503,71 @@ class TestIncreaseSizingHints:
 
         # After 3 additions: $10000 + $6000 = $16000 (3.2x) — blocked
         assert 16000 > max_total_value
+
+
+class TestHandleAnalystSellExitReasoning:
+    """Verify Pro/flash reasoning is persisted via place_order's
+    exit_reasoning kwarg — core of the closed-trade rationale PR."""
+
+    def test_reasoning_flows_to_place_order_with_conf_prefix(self):
+        import asyncio
+
+        from src.orchestration.position_analyst import _handle_analyst_sell
+
+        captured = {}
+
+        def fake_place_order(*args, **kwargs):
+            captured.update(kwargs)
+            return {'status': 'CLOSED', 'order_id': 'P_X'}
+
+        position = {'quantity': 1.0, 'entry_price': 100.0, 'asset_type': 'stock'}
+
+        with patch('src.orchestration.position_analyst.place_order',
+                   side_effect=fake_place_order), \
+             patch('src.orchestration.position_analyst.bot_state'), \
+             patch('src.orchestration.position_analyst.send_telegram_alert',
+                   new_callable=AsyncMock):
+            asyncio.new_event_loop().run_until_complete(
+                _handle_analyst_sell(
+                    position, 'NVDA', 110.0, 'P_X',
+                    confidence=0.85,
+                    reasoning='Earnings guidance deteriorated',
+                    asset_type='stock',
+                    trading_strategy='auto',
+                    exit_reason='flash_analyst_exit'))
+
+        r = captured.get('exit_reasoning')
+        assert r is not None
+        assert 'Earnings guidance deteriorated' in r
+        assert '85%' in r  # confidence prefix
+
+    def test_whitespace_only_reasoning_stored_as_none(self):
+        """Empty/whitespace reasoning must become None so the DB column
+        stays NULL (distinguishable from 'reasoning not available')."""
+        import asyncio
+
+        from src.orchestration.position_analyst import _handle_analyst_sell
+
+        captured = {}
+
+        def fake_place_order(*args, **kwargs):
+            captured.update(kwargs)
+            return {'status': 'CLOSED', 'order_id': 'P_Y'}
+
+        position = {'quantity': 1.0, 'entry_price': 100.0, 'asset_type': 'stock'}
+
+        with patch('src.orchestration.position_analyst.place_order',
+                   side_effect=fake_place_order), \
+             patch('src.orchestration.position_analyst.bot_state'), \
+             patch('src.orchestration.position_analyst.send_telegram_alert',
+                   new_callable=AsyncMock):
+            asyncio.new_event_loop().run_until_complete(
+                _handle_analyst_sell(
+                    position, 'NVDA', 110.0, 'P_Y',
+                    confidence=0.7,
+                    reasoning='   ',  # whitespace only
+                    asset_type='stock',
+                    trading_strategy='auto',
+                    exit_reason='analyst_exit'))
+
+        assert captured.get('exit_reasoning') is None

@@ -42,8 +42,9 @@ def test_initialize_database_creates_tables(mock_get_db_connection, mock_release
     # + 1 CREATE INDEX (idx_gemini_assess_created_conf for fast_path)
     # + 1 ALTER TABLE (signal_attribution assessment_id)
     # + 1 CREATE TABLE (gemini_calibration)
-    # + 6 performance indexes = 66
-    assert mock_cursor.execute.call_count == 66
+    # + 1 ALTER TABLE (trades exit_reasoning)
+    # + 6 performance indexes = 67
+    assert mock_cursor.execute.call_count == 67
 
     # Check the SQL statements (case-insensitive and ignoring whitespace)
     executed_queries = [' '.join(call[0][0].split()) for call in mock_cursor.execute.call_args_list]

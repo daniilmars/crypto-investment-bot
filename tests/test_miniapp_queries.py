@@ -132,3 +132,107 @@ def test_sl_tp_distances_past_stop_loss_negative_distance():
     d = _sl_tp_distances(100.0, 85.0, 0.10, 0.50)  # SL=$90, current $85
     # sl_distance = (85 - 90) / 85 * 100 = negative
     assert d["sl_distance_pct"] < 0
+
+
+# --- recent_trades_data payload shape (exit_reasoning + trailing_stop_peak) ---
+
+import sqlite3
+from unittest.mock import patch
+
+
+def _closed_trades_conn():
+    """Build an in-memory SQLite DB with one CLOSED trade and no related rows."""
+    conn = sqlite3.connect(':memory:')
+    conn.execute("""
+        CREATE TABLE trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT, order_id TEXT,
+            trading_strategy TEXT, asset_type TEXT,
+            entry_price REAL, exit_price REAL, quantity REAL, pnl REAL,
+            status TEXT,
+            entry_timestamp TEXT, exit_timestamp TEXT,
+            exit_reason TEXT, exit_reasoning TEXT, trailing_stop_peak REAL,
+            dynamic_sl_pct REAL, dynamic_tp_pct REAL, trade_reason TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE signal_attribution (
+            id INTEGER, trade_order_id TEXT,
+            gemini_direction TEXT, gemini_confidence REAL,
+            catalyst_type TEXT, source_names TEXT, signal_timestamp TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE gemini_assessments (
+            id INTEGER, symbol TEXT, created_at TEXT,
+            reasoning TEXT, key_headline TEXT, risk_factors TEXT,
+            catalyst_freshness TEXT, hype_vs_fundamental TEXT, market_mood TEXT
+        )
+    """)
+    return conn
+
+
+def test_recent_trades_payload_surfaces_exit_reasoning_and_trailing_peak():
+    conn = _closed_trades_conn()
+    conn.execute(
+        "INSERT INTO trades (symbol, order_id, trading_strategy, asset_type, "
+        "entry_price, exit_price, quantity, pnl, status, "
+        "entry_timestamp, exit_timestamp, exit_reason, exit_reasoning, "
+        "trailing_stop_peak) VALUES "
+        "('NVDA','P_1','auto','stock',180,200,5,100,'CLOSED',"
+        "'2026-04-08 18:33:28','2026-04-17 18:25:40','trailing_stop',"
+        "'Trailed 2.0% from peak $204.00',204.0)")
+    conn.commit()
+
+    with patch('src.database.get_db_connection', return_value=conn), \
+         patch('src.database.release_db_connection'):
+        from src.api.miniapp_queries import recent_trades_data
+        result = recent_trades_data(limit=5)
+
+    assert len(result['trades']) == 1
+    t = result['trades'][0]
+    assert t['exit_reasoning'] == 'Trailed 2.0% from peak $204.00'
+    assert t['trailing_stop_peak'] == 204.0
+    assert t['exit_reason'] == 'trailing_stop'
+
+
+def test_recent_trades_payload_null_exit_reasoning_for_pre_pr_trade():
+    """Pre-PR trade has NULL exit_reasoning — must survive as None, not crash."""
+    conn = _closed_trades_conn()
+    conn.execute(
+        "INSERT INTO trades (symbol, order_id, trading_strategy, asset_type, "
+        "entry_price, exit_price, quantity, pnl, status, "
+        "entry_timestamp, exit_timestamp, exit_reason) VALUES "
+        "('BTC','P_OLD','auto','crypto',70000,72000,0.01,20,'CLOSED',"
+        "'2026-04-01 10:00:00','2026-04-05 12:00:00','trailing_stop')")
+    conn.commit()
+
+    with patch('src.database.get_db_connection', return_value=conn), \
+         patch('src.database.release_db_connection'):
+        from src.api.miniapp_queries import recent_trades_data
+        result = recent_trades_data(limit=5)
+
+    t = result['trades'][0]
+    assert t['exit_reasoning'] is None
+    assert t['trailing_stop_peak'] is None
+
+
+def test_recent_trades_payload_trailing_stop_peak_coerced_to_float():
+    """Trailing peak stored as REAL should come out as Python float."""
+    conn = _closed_trades_conn()
+    conn.execute(
+        "INSERT INTO trades (symbol, order_id, trading_strategy, asset_type, "
+        "entry_price, exit_price, quantity, pnl, status, "
+        "entry_timestamp, exit_timestamp, exit_reason, trailing_stop_peak) "
+        "VALUES ('RIVN','P_2','auto','stock',15.61,17.39,20,24.81,'CLOSED',"
+        "'2026-03-23 14:03:02','2026-04-20 14:19:49','trailing_stop',17.80)")
+    conn.commit()
+
+    with patch('src.database.get_db_connection', return_value=conn), \
+         patch('src.database.release_db_connection'):
+        from src.api.miniapp_queries import recent_trades_data
+        result = recent_trades_data(limit=5)
+
+    t = result['trades'][0]
+    assert isinstance(t['trailing_stop_peak'], float)
+    assert t['trailing_stop_peak'] == pytest.approx(17.80)

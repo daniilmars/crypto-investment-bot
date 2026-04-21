@@ -79,6 +79,40 @@
     return `${(h / 24).toFixed(1)}d`;
   }
 
+  // Relative for last 24h ("3h ago"), 1-6d ("3d ago"), else short date ("Apr 17").
+  // Older than 365d includes year ("Apr 20, 2025").
+  function fmtRelativeOrAbs(ts) {
+    if (!ts) return '';
+    const d = new Date(ts);
+    if (isNaN(d)) return '';
+    const diffMs = Date.now() - d.getTime();
+    const diffMin = diffMs / 60000;
+    const diffH = diffMs / 3600000;
+    const diffD = diffH / 24;
+    if (diffMin < 1) return 'just now';
+    if (diffH < 1) return `${Math.round(diffMin)}m ago`;
+    if (diffH < 24) return `${Math.round(diffH)}h ago`;
+    if (diffD < 7) return `${Math.round(diffD)}d ago`;
+    const opts = { month: 'short', day: 'numeric' };
+    if (diffD > 365) opts.year = 'numeric';
+    return d.toLocaleDateString('en-US', opts);
+  }
+
+  // Currency symbols for local-currency PnL display
+  const CCY_SYM = {
+    USD: '$', USDT: '$', GBP: '£', EUR: '€', JPY: '¥',
+    DKK: 'kr ', HKD: 'HK$', CHF: 'Fr ', AUD: 'A$', CAD: 'C$',
+    KRW: '₩', CNY: '¥',
+  };
+  function fmtLocal(n, ccy) {
+    if (n == null || isNaN(n)) return '—';
+    const sym = CCY_SYM[ccy] || `${ccy || ''} `;
+    const sign = n >= 0 ? '+' : '−';
+    return `${sign}${sym}${Math.abs(n).toLocaleString('en-US', {
+      minimumFractionDigits: 2, maximumFractionDigits: 2,
+    })}`;
+  }
+
   async function api(path) {
     const headers = { 'X-Telegram-Init-Data': state.initData };
     if (devKey) headers['X-Miniapp-Dev-Key'] = devKey;
@@ -458,6 +492,10 @@
       const nameLine = t.display_name
         ? `<div class="pos-name">${escapeHtml(t.display_name)}</div>`
         : '';
+      const exitRel = fmtRelativeOrAbs(t.exit_timestamp);
+      const exitRelStr = exitRel ? ` · ${escapeHtml(exitRel)}` : '';
+      const exitTitle = t.exit_timestamp
+        ? ` title="exit: ${escapeHtml(t.exit_timestamp)}"` : '';
       return `
         <div class="closed-row ${isExpanded}" data-order-id="${escapeHtml(t.order_id || '')}">
           <div class="pos-left">
@@ -467,8 +505,8 @@
               ${exitTag}
             </div>
             ${nameLine}
-            <div class="pos-meta">
-              ${fmtPrice(t.entry_price)} → ${fmtPrice(t.exit_price)} · ${fmtHours(t.duration_hours)}
+            <div class="pos-meta"${exitTitle}>
+              ${fmtPrice(t.entry_price)} → ${fmtPrice(t.exit_price)} · ${fmtHours(t.duration_hours)}${exitRelStr}
             </div>
           </div>
           <div class="pos-pnl-col">
@@ -477,9 +515,65 @@
           </div>
           <div class="expand-arrow">▼</div>
         </div>
-        <div class="expand-panel">${isExpanded ? renderRationale(t.rationale) : ''}</div>
+        <div class="expand-panel">${isExpanded ? renderClosedDetail(t) : ''}</div>
       `;
     }).join('');
+  }
+
+  // Expand-panel renderer for closed trades: exit block first (what's new),
+  // then entry rationale (reuses existing renderRationale).
+  function renderClosedDetail(t) {
+    const parts = ['<div class="rat-grid rat-exit">'];
+
+    // Window: entry → exit dates
+    if (t.entry_timestamp || t.exit_timestamp) {
+      const entry = fmtRelativeOrAbs(t.entry_timestamp) || '?';
+      const exit = fmtRelativeOrAbs(t.exit_timestamp) || '?';
+      parts.push(
+        `<div class="rat-label">Window</div>` +
+        `<div class="rat-value">${escapeHtml(entry)} → ${escapeHtml(exit)}</div>`
+      );
+    }
+
+    // Dual-currency PnL when foreign
+    if (t.currency && t.currency !== 'USD' && t.currency !== 'USDT'
+        && t.pnl_local != null) {
+      parts.push(
+        `<div class="rat-label">PnL</div>` +
+        `<div class="rat-value">${escapeHtml(fmtLocal(t.pnl_local, t.currency))}` +
+        ` · ${escapeHtml(fmtUsd(t.pnl_usd))}</div>`
+      );
+    }
+
+    // Exit tag + prose reasoning
+    parts.push(
+      `<div class="rat-label">Exit</div>` +
+      `<div class="rat-value"><strong>${escapeHtml(t.exit_reason || 'unknown')}</strong></div>`
+    );
+    if (t.exit_reasoning) {
+      parts.push(`<div class="rat-reasoning">${escapeHtml(t.exit_reasoning)}</div>`);
+    } else {
+      parts.push(
+        `<div class="rat-empty">No exit reasoning recorded (pre-PR trade).</div>`
+      );
+    }
+
+    // Trailing peak — only for trailing exits
+    if (t.trailing_stop_peak
+        && typeof t.exit_reason === 'string'
+        && t.exit_reason.indexOf('trailing') !== -1) {
+      parts.push(
+        `<div class="rat-label">Peak</div>` +
+        `<div class="rat-value">${escapeHtml(fmtPrice(t.trailing_stop_peak))}</div>`
+      );
+    }
+
+    parts.push('</div>');
+
+    // Then the entry rationale (same renderer the open-positions panel uses)
+    return parts.join('')
+      + '<div style="height:10px"></div>'
+      + renderRationale(t.rationale);
   }
 
   // ------------------------------------------------------------ render: chart

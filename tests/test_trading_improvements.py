@@ -694,3 +694,111 @@ class TestAssetClassLimits:
         # Stocks have concentration_scaling: false → always 1.0
         mult = get_asset_class_concentration('AMZN', positions)
         assert mult == 1.0
+
+
+# --- Exit-reasoning plumbing ----------------------------------------------
+# Each exit path must pass a non-empty exit_reasoning string (or None) to
+# place_order, so the trades.exit_reasoning column gets populated. This is
+# the core invariant of the closed-trade rationale PR.
+
+class TestPositionMonitorExitReasoningPlumbing:
+    """Invariant: every position_monitor SELL path passes exit_reasoning."""
+
+    @patch('src.orchestration.position_monitor.place_order')
+    @patch('src.orchestration.position_monitor._send_trade_exit_alert', new_callable=AsyncMock)
+    @patch('src.orchestration.position_monitor.send_telegram_alert', new_callable=AsyncMock)
+    @patch('src.orchestration.position_monitor.bot_state')
+    def test_stop_loss_passes_reasoning(self, mock_state, mock_alert, mock_trade_alert, mock_order):
+        from src.orchestration.position_monitor import monitor_position
+        mock_state.update_trailing_stop.return_value = 100.0
+
+        position = {'symbol': 'BTC', 'entry_price': 100.0, 'order_id': 't_sl', 'quantity': 1.0}
+        asyncio.run(monitor_position(
+            position, 90.0,  # 10% drop > 5% SL
+            stop_loss_pct=0.05, take_profit_pct=0.50,
+            trailing_stop_enabled=True,
+            trailing_stop_activation=0.05, trailing_stop_distance=0.02))
+
+        mock_order.assert_called_once()
+        kw = mock_order.call_args.kwargs
+        assert kw.get('exit_reason') == 'stop_loss'
+        assert kw.get('exit_reasoning') is not None
+        assert 'SL' in kw['exit_reasoning']
+        assert '5.0%' in kw['exit_reasoning']
+
+    @patch('src.orchestration.position_monitor.place_order')
+    @patch('src.orchestration.position_monitor._send_trade_exit_alert', new_callable=AsyncMock)
+    @patch('src.orchestration.position_monitor.send_telegram_alert', new_callable=AsyncMock)
+    @patch('src.orchestration.position_monitor.bot_state')
+    def test_take_profit_passes_reasoning(self, mock_state, mock_alert, mock_trade_alert, mock_order):
+        from src.orchestration.position_monitor import monitor_position
+        mock_state.update_trailing_stop.return_value = 120.0
+
+        position = {'symbol': 'BTC', 'entry_price': 100.0, 'order_id': 't_tp', 'quantity': 1.0}
+        # 20% gain > 10% TP
+        asyncio.run(monitor_position(
+            position, 120.0,
+            stop_loss_pct=0.05, take_profit_pct=0.10,
+            trailing_stop_enabled=False,
+            trailing_stop_activation=0.05, trailing_stop_distance=0.02))
+
+        mock_order.assert_called_once()
+        kw = mock_order.call_args.kwargs
+        assert kw.get('exit_reason') == 'take_profit'
+        assert kw.get('exit_reasoning') is not None
+        assert 'TP' in kw['exit_reasoning']
+
+    @patch('src.orchestration.position_monitor.get_recent_bearish_assessment',
+           return_value=None)
+    @patch('src.orchestration.position_monitor.place_order')
+    @patch('src.orchestration.position_monitor._send_trade_exit_alert', new_callable=AsyncMock)
+    @patch('src.orchestration.position_monitor.send_telegram_alert', new_callable=AsyncMock)
+    @patch('src.orchestration.position_monitor.bot_state')
+    def test_trailing_stop_passes_reasoning_without_concur(
+            self, mock_state, mock_alert, mock_trade_alert, mock_order, mock_bearish):
+        from src.orchestration.position_monitor import monitor_position
+        # Peak at 110 (10% above entry), drawdown to 105 = ~4.5% from peak
+        mock_state.update_trailing_stop.return_value = 110.0
+
+        position = {'symbol': 'BTC', 'entry_price': 100.0, 'order_id': 't_tr', 'quantity': 1.0}
+        asyncio.run(monitor_position(
+            position, 105.0,  # +5% PnL, 4.5% drawdown from peak 110
+            stop_loss_pct=0.20, take_profit_pct=0.50,
+            trailing_stop_enabled=True,
+            trailing_stop_activation=0.03, trailing_stop_distance=0.02))
+
+        mock_order.assert_called_once()
+        kw = mock_order.call_args.kwargs
+        assert kw.get('exit_reason') == 'trailing_stop'
+        assert kw.get('exit_reasoning') is not None
+        assert 'peak' in kw['exit_reasoning'].lower()
+        # No concurring bearish: prose should NOT include analyst detail
+        assert 'concurring' not in kw['exit_reasoning']
+
+    @patch('src.orchestration.position_monitor.get_recent_bearish_assessment')
+    @patch('src.orchestration.position_monitor.place_order')
+    @patch('src.orchestration.position_monitor._send_trade_exit_alert', new_callable=AsyncMock)
+    @patch('src.orchestration.position_monitor.send_telegram_alert', new_callable=AsyncMock)
+    @patch('src.orchestration.position_monitor.bot_state')
+    def test_trailing_stop_includes_analyst_prose_on_concur(
+            self, mock_state, mock_alert, mock_trade_alert, mock_order, mock_bearish):
+        from src.orchestration.position_monitor import monitor_position
+        mock_state.update_trailing_stop.return_value = 110.0
+        mock_bearish.return_value = {
+            'id': 1, 'symbol': 'BTC', 'direction': 'bearish',
+            'confidence': 0.72,
+            'reasoning': 'Oversupply narrative strengthening',
+            'created_at': '2026-04-20',
+        }
+
+        position = {'symbol': 'BTC', 'entry_price': 100.0, 'order_id': 't_tc', 'quantity': 1.0}
+        asyncio.run(monitor_position(
+            position, 105.0,
+            stop_loss_pct=0.20, take_profit_pct=0.50,
+            trailing_stop_enabled=True,
+            trailing_stop_activation=0.03, trailing_stop_distance=0.02))
+
+        mock_order.assert_called_once()
+        kw = mock_order.call_args.kwargs
+        assert kw.get('exit_reason') == 'trailing_stop_analyst_concur'
+        assert 'Oversupply narrative strengthening' in kw['exit_reasoning']

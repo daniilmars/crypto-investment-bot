@@ -618,6 +618,7 @@ _RECENT_TRADES_SQL = """
     SELECT t.id, t.order_id, t.symbol, t.trading_strategy, t.asset_type,
            t.entry_price, t.exit_price, t.quantity, t.pnl,
            t.entry_timestamp, t.exit_timestamp, t.exit_reason,
+           t.exit_reasoning, t.trailing_stop_peak,
            t.dynamic_sl_pct, t.dynamic_tp_pct, t.trade_reason,
            sa.gemini_direction, sa.gemini_confidence, sa.catalyst_type,
            sa.source_names, sa.signal_timestamp,
@@ -703,6 +704,9 @@ def recent_trades_data(limit: int = 10) -> dict:
             "exit_timestamp": r.get("exit_timestamp"),
             "duration_hours": dur_h,
             "exit_reason": r.get("exit_reason") or "unknown",
+            "exit_reasoning": r.get("exit_reasoning"),
+            "trailing_stop_peak": (float(r["trailing_stop_peak"])
+                                   if r.get("trailing_stop_peak") is not None else None),
             "rationale": _build_rationale(r),
         })
 

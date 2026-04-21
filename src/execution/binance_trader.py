@@ -132,13 +132,13 @@ def _validate_order_quantity(symbol_info, quantity, price):
 
 # --- Order Placement ---
 
-def place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual", strategy_type=None, trade_reason=None, exit_reason=None, dynamic_sl_pct=None, dynamic_tp_pct=None):
+def place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual", strategy_type=None, trade_reason=None, exit_reason=None, exit_reasoning=None, dynamic_sl_pct=None, dynamic_tp_pct=None):
     """
     Places an order — dispatches to paper or live based on config.
     """
     if price <= 0:
         return {"status": "FAILED", "message": "Invalid price"}
-    kw = dict(asset_type=asset_type, trading_strategy=trading_strategy, strategy_type=strategy_type, trade_reason=trade_reason, exit_reason=exit_reason, dynamic_sl_pct=dynamic_sl_pct, dynamic_tp_pct=dynamic_tp_pct)
+    kw = dict(asset_type=asset_type, trading_strategy=trading_strategy, strategy_type=strategy_type, trade_reason=trade_reason, exit_reason=exit_reason, exit_reasoning=exit_reasoning, dynamic_sl_pct=dynamic_sl_pct, dynamic_tp_pct=dynamic_tp_pct)
     # Stocks always use paper path — Binance live API is crypto-only
     if asset_type == 'stock':
         return _paper_place_order(symbol, side, quantity, price, order_type, existing_order_id, **kw)
@@ -148,7 +148,7 @@ def place_order(symbol, side, quantity, price, order_type="MARKET", existing_ord
         return _paper_place_order(symbol, side, quantity, price, order_type, existing_order_id, **kw)
 
 
-def _paper_place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual", strategy_type=None, trade_reason=None, exit_reason=None, dynamic_sl_pct=None, dynamic_tp_pct=None):
+def _paper_place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual", strategy_type=None, trade_reason=None, exit_reason=None, exit_reasoning=None, dynamic_sl_pct=None, dynamic_tp_pct=None):
     """Simulates placing an order for paper trading. Records the trade in the database."""
     conn = None
     cursor = None
@@ -238,11 +238,11 @@ def _paper_place_order(symbol, side, quantity, price, order_type="MARKET", exist
 
             pnl_float = float(pnl.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
-            query_update = ('UPDATE trades SET status = %s, exit_price = %s, exit_timestamp = CURRENT_TIMESTAMP, pnl = %s, exit_reason = %s '
+            query_update = ('UPDATE trades SET status = %s, exit_price = %s, exit_timestamp = CURRENT_TIMESTAMP, pnl = %s, exit_reason = %s, exit_reasoning = %s '
                             'WHERE order_id = %s') if is_postgres_conn else \
-                           ('UPDATE trades SET status = ?, exit_price = ?, exit_timestamp = CURRENT_TIMESTAMP, pnl = ?, exit_reason = ? '
+                           ('UPDATE trades SET status = ?, exit_price = ?, exit_timestamp = CURRENT_TIMESTAMP, pnl = ?, exit_reason = ?, exit_reasoning = ? '
                             'WHERE order_id = ?')
-            cursor.execute(query_update, ("CLOSED", fill_price, pnl_float, exit_reason, existing_order_id))
+            cursor.execute(query_update, ("CLOSED", fill_price, pnl_float, exit_reason, exit_reasoning, existing_order_id))
             conn.commit()
 
             log.info(f"Paper trade {existing_order_id} updated to CLOSED at {price}. PnL: ${pnl_float:.2f}")
@@ -261,7 +261,7 @@ def _paper_place_order(symbol, side, quantity, price, order_type="MARKET", exist
         release_db_connection(conn)
 
 
-def _live_place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual", strategy_type=None, trade_reason=None, exit_reason=None, dynamic_sl_pct=None, dynamic_tp_pct=None):
+def _live_place_order(symbol, side, quantity, price, order_type="MARKET", existing_order_id=None, asset_type="crypto", trading_strategy="manual", strategy_type=None, trade_reason=None, exit_reason=None, exit_reasoning=None, dynamic_sl_pct=None, dynamic_tp_pct=None):
     """Places a real order on Binance (testnet or live)."""
     from binance.exceptions import BinanceAPIException
 
@@ -317,7 +317,8 @@ def _live_place_order(symbol, side, quantity, price, order_type="MARKET", existi
                     # Emergency close succeeded — update DB to CLOSED
                     _close_live_trade(order_id, emergency['fill_price'] or (fill_price or price),
                                      fees, emergency['fill_price'], emergency['fill_qty'],
-                                     exit_reason="emergency_oco_failure")
+                                     exit_reason="emergency_oco_failure",
+                                     exit_reasoning="OCO bracket + fallback SL both failed; emergency market close")
                     try:
                         from src.notify.telegram_bot import send_telegram_alert
                         import asyncio
@@ -398,7 +399,7 @@ def _live_place_order(symbol, side, quantity, price, order_type="MARKET", existi
 
             # Update existing trade in DB
             if existing_order_id:
-                _close_live_trade(existing_order_id, fill_price or price, fees, fill_price, fill_qty, exit_reason=exit_reason)
+                _close_live_trade(existing_order_id, fill_price or price, fees, fill_price, fill_qty, exit_reason=exit_reason, exit_reasoning=exit_reasoning)
 
             return {
                 "order_id": existing_order_id or exchange_order_id,
@@ -476,7 +477,7 @@ def _record_live_trade(symbol, order_id, side, entry_price, quantity,
         release_db_connection(conn)
 
 
-def _close_live_trade(order_id, exit_price, fees, fill_price, fill_qty, exit_reason=None):
+def _close_live_trade(order_id, exit_price, fees, fill_price, fill_qty, exit_reason=None, exit_reasoning=None):
     """Closes an existing trade with fill details and PnL."""
     conn = None
     try:
@@ -513,13 +514,13 @@ def _close_live_trade(order_id, exit_price, fees, fill_price, fill_qty, exit_rea
 
             q_update = (
                 'UPDATE trades SET status = %s, exit_price = %s, exit_timestamp = CURRENT_TIMESTAMP, '
-                'pnl = %s, fees = %s, fill_price = %s, fill_quantity = %s, exit_reason = %s WHERE order_id = %s'
+                'pnl = %s, fees = %s, fill_price = %s, fill_quantity = %s, exit_reason = %s, exit_reasoning = %s WHERE order_id = %s'
             ) if is_pg else (
                 'UPDATE trades SET status = ?, exit_price = ?, exit_timestamp = CURRENT_TIMESTAMP, '
-                'pnl = ?, fees = ?, fill_price = ?, fill_quantity = ?, exit_reason = ? WHERE order_id = ?'
+                'pnl = ?, fees = ?, fill_price = ?, fill_quantity = ?, exit_reason = ?, exit_reasoning = ? WHERE order_id = ?'
             )
             cursor.execute(q_update, ("CLOSED", exit_price, pnl_float, fees,
-                                      fill_price, fill_qty, exit_reason, order_id))
+                                      fill_price, fill_qty, exit_reason, exit_reasoning, order_id))
         conn.commit()
         log.info(f"Closed trade {order_id}: exit=${exit_price}, PnL=${pnl_float:.2f}, fees=${fees:.4f}")
     except (sqlite3.Error, psycopg2.Error) as e:
@@ -862,7 +863,8 @@ def _live_add_to_position(parent_order_id, symbol, add_quantity, add_price,
                 _close_live_trade(parent_order_id,
                                   emergency['fill_price'] or fill_price,
                                   0, emergency['fill_price'], emergency['fill_qty'],
-                                  exit_reason="emergency_oco_failure")
+                                  exit_reason="emergency_oco_failure",
+                                  exit_reasoning="OCO bracket + fallback SL both failed after add-to-position; emergency market close")
                 return {
                     "status": "EMERGENCY_CLOSED",
                     "order_id": parent_order_id,

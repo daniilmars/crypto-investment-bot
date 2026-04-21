@@ -411,8 +411,17 @@ async def _handle_analyst_sell(
     order_kw = {}
     if asset_type == 'stock':
         order_kw['asset_type'] = 'stock'
+    # Prose reasoning is the jackpot for Mini App rationale — the Pro/flash
+    # model already produced it, we just persist it here.
+    try:
+        analyst_reasoning = (reasoning or '').strip() or None
+        if analyst_reasoning and confidence is not None:
+            analyst_reasoning = f"{confidence:.0%} conf: {analyst_reasoning}"
+    except Exception:
+        analyst_reasoning = None
     place_order(symbol, "SELL", position['quantity'], current_price,
                 existing_order_id=order_id, exit_reason=exit_reason,
+                exit_reasoning=analyst_reasoning,
                 trading_strategy=trading_strategy, **order_kw)
     qty = position['quantity']
     entry_price = position['entry_price']

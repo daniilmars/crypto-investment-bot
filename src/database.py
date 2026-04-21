@@ -775,6 +775,21 @@ def initialize_database(db_url=None):
             if is_postgres_conn:
                 conn.rollback()
 
+        # --- Migrate trades table: add exit_reasoning column (Mini App) ---
+        # Captures the prose-level WHY for each close. `exit_reason` is the
+        # short tag ('stop_loss', 'analyst_exit', etc.); exit_reasoning is the
+        # full sentence the analyst / deterministic helper produced.
+        try:
+            cursor.execute("ALTER TABLE trades ADD COLUMN exit_reasoning TEXT")
+            log.info("Added column 'exit_reasoning' to trades table.")
+        except (sqlite3.OperationalError, psycopg2.errors.DuplicateColumn):
+            if is_postgres_conn:
+                conn.rollback()
+        except Exception as e:
+            log.warning(f"Could not add column 'exit_reasoning' to trades: {e}")
+            if is_postgres_conn:
+                conn.rollback()
+
         # --- Migrate trades table: add strategy_type column (strategic trades) ---
         try:
             cursor.execute("ALTER TABLE trades ADD COLUMN strategy_type TEXT")

@@ -32,7 +32,7 @@ def get_recent_bearish_assessment(symbol: str, hours: int = 8) -> dict | None:
         conn = get_db_connection()
         with _cursor(conn) as cur:
             cur.execute(
-                "SELECT id, symbol, direction, confidence, created_at "
+                "SELECT id, symbol, direction, confidence, reasoning, created_at "
                 "FROM gemini_assessments "
                 "WHERE symbol = ? AND direction = 'bearish' AND created_at >= ? "
                 "ORDER BY created_at DESC LIMIT 1",
@@ -47,7 +47,7 @@ def get_recent_bearish_assessment(symbol: str, hours: int = 8) -> dict | None:
             except (TypeError, ValueError):
                 return {
                     "id": row[0], "symbol": row[1], "direction": row[2],
-                    "confidence": row[3], "created_at": row[4],
+                    "confidence": row[3], "reasoning": row[4], "created_at": row[5],
                 }
     except Exception as e:
         log.debug(f"get_recent_bearish_assessment({symbol}) failed: {e}")

@@ -550,8 +550,10 @@ async def execute_sell(
         order_kw = {'trading_strategy': trading_strategy}
         if asset_type == 'stock':
             order_kw['asset_type'] = 'stock'
+        sig_reason = (signal.get('reason') or '').strip() or None
         result = place_order(symbol, "SELL", qty, current_price,
-                             existing_order_id=order_id, exit_reason='signal_sell', **order_kw)
+                             existing_order_id=order_id, exit_reason='signal_sell',
+                             exit_reasoning=sig_reason, **order_kw)
         bot_state.strategy_clear_trailing_stop(order_id, trading_strategy)
         entry_price = position['entry_price']
         pnl_pct = (current_price - entry_price) / entry_price
@@ -603,8 +605,10 @@ async def execute_sell(
     order_kw = {}
     if asset_type == 'stock':
         order_kw['asset_type'] = 'stock'
+    sig_reason = (signal.get('reason') or '').strip() or None
     order_result = place_order(symbol, "SELL", qty, current_price,
-                               existing_order_id=order_id, exit_reason='signal_sell', **order_kw)
+                               existing_order_id=order_id, exit_reason='signal_sell',
+                               exit_reasoning=sig_reason, **order_kw)
     if order_result.get('status') == 'CLOSED':
         bot_state.clear_trailing_stop(order_id)
         signal['order_result'] = order_result
@@ -688,9 +692,18 @@ async def _try_rotation(
         sell_kw = {'trading_strategy': 'auto'}
         if asset_type == 'stock':
             sell_kw['asset_type'] = 'stock'
+        try:
+            cand_reason = (candidate.get('reason') or '').strip()
+            rot_reasoning = (
+                f"Swapped {rotate_sym} → {symbol}: {cand_reason}"
+                if cand_reason else f"Swapped {rotate_sym} → {symbol}"
+            )
+        except Exception:
+            rot_reasoning = None
         sell_result = place_order(
             rotate_sym, "SELL", rotate_qty, rotate_price,
-            existing_order_id=rotate_order_id, exit_reason='rotation', **sell_kw)
+            existing_order_id=rotate_order_id, exit_reason='rotation',
+            exit_reasoning=rot_reasoning, **sell_kw)
         bot_state.auto_clear_trailing_stop(rotate_order_id)
 
         if sell_result.get('status') not in ('CLOSED', 'FILLED'):
