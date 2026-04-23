@@ -72,9 +72,19 @@ async def bot_loop():
 
 
 async def periodic_summary_loop():
-    """Sends a consolidated 4-hour summary."""
+    """Sends a consolidated 4-hour summary.
+
+    Gated by both `periodic_summary.enabled` (legacy analytics flag) AND
+    `notifications.periodic_summary` (new per-channel notification gate).
+    Either set to false short-circuits the loop entirely so we don't burn
+    cycles computing a summary that will never be sent.
+    """
     summary_cfg = app_config.get('settings', {}).get('periodic_summary', {})
     if not summary_cfg.get('enabled', True):
+        return
+    from src.notify.telegram_bot import should_send
+    if not should_send('periodic_summary', default=False):
+        log.info("Periodic summary loop disabled via notifications.periodic_summary=false")
         return
     interval = summary_cfg.get('interval_hours', 4) * 3600
     startup_delay = summary_cfg.get('startup_delay_minutes', 10) * 60
@@ -123,11 +133,12 @@ async def daily_sector_review_loop():
                         summary = (
                             f"Midweek thesis refresh: added {len(added)} sector(s) "
                             f"({', '.join(added)}), {n_stocks} new stocks")
-                        from src.notify.telegram_bot import send_telegram_alert
-                        await send_telegram_alert({
-                            'signal': 'INFO', 'symbol': 'THESIS',
-                            'reason': summary, 'asset_type': 'system'})
                         log.info(summary)
+                        from src.notify.telegram_bot import send_telegram_alert, should_send
+                        if should_send('midweek_thesis_refresh', default=False):
+                            await send_telegram_alert({
+                                'signal': 'INFO', 'symbol': 'THESIS',
+                                'reason': summary, 'asset_type': 'system'})
             except Exception as e:
                 log.error(f"Midweek thesis refresh check error: {e}", exc_info=True)
         except Exception as e:
@@ -159,11 +170,12 @@ async def weekly_self_review_loop():
             result = await asyncio.to_thread(run_weekly_self_review)
             if result:
                 msg = format_weekly_review_telegram(result)
-                from src.notify.telegram_bot import send_telegram_alert
-                await send_telegram_alert({
-                    'signal': 'INFO', 'symbol': 'WEEKLY_REVIEW',
-                    'reason': msg, 'asset_type': 'system'})
-                log.info("Weekly self-review sent.")
+                log.info("Weekly self-review computed.")
+                from src.notify.telegram_bot import send_telegram_alert, should_send
+                if should_send('weekly_self_review', default=False):
+                    await send_telegram_alert({
+                        'signal': 'INFO', 'symbol': 'WEEKLY_REVIEW',
+                        'reason': msg, 'asset_type': 'system'})
         except Exception as e:
             log.error(f"Weekly self-review error: {e}", exc_info=True)
 
@@ -193,11 +205,12 @@ async def weekly_thesis_review_loop():
                 sectors = result.get('sectors', [])
                 total_stocks = sum(len(s.get('stocks', [])) for s in sectors)
                 summary = f"Thesis updated: {len(sectors)} sectors, {total_stocks} stocks"
-                from src.notify.telegram_bot import send_telegram_alert
-                await send_telegram_alert({
-                    'signal': 'INFO', 'symbol': 'THESIS_REVIEW',
-                    'reason': summary, 'asset_type': 'system'})
                 log.info(summary)
+                from src.notify.telegram_bot import send_telegram_alert, should_send
+                if should_send('weekly_thesis_review', default=False):
+                    await send_telegram_alert({
+                        'signal': 'INFO', 'symbol': 'THESIS_REVIEW',
+                        'reason': summary, 'asset_type': 'system'})
         except Exception as e:
             log.error(f"Thesis review error: {e}", exc_info=True)
 
@@ -259,8 +272,8 @@ async def source_review_loop():
                 )
                 # Alert on significant deactivations
                 deactivated = result.get('deactivated', [])
-                if deactivated:
-                    from src.notify.telegram_bot import send_telegram_alert
+                from src.notify.telegram_bot import send_telegram_alert, should_send
+                if deactivated and should_send('source_deactivation', default=False):
                     await send_telegram_alert({
                         'signal': 'INFO', 'symbol': 'SOURCES',
                         'reason': f"Deactivated {len(deactivated)} feed(s): "

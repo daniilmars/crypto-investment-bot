@@ -334,7 +334,14 @@ def build_daily_recap() -> str:
 
 
 async def send_daily_recap(application: Application):
-    """Send end-of-day recap as a new (non-pinned) message."""
+    """Send end-of-day recap as a new (non-pinned) message.
+
+    Gated by `notifications.daily_recap` (default off — Mini App covers this).
+    """
+    from src.notify.telegram_bot import should_send
+    if not should_send('daily_recap', default=False):
+        log.debug("Daily recap suppressed via notifications.daily_recap=false")
+        return
     chat_id = _get_chat_id()
     if not chat_id:
         return

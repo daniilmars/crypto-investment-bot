@@ -31,6 +31,23 @@ TOKEN = telegram_config.get('token')
 CHAT_ID = telegram_config.get('chat_id')
 AUTHORIZED_USER_IDS = telegram_config.get('authorized_user_ids', [])
 
+
+def should_send(channel: str, default: bool = True) -> bool:
+    """Return True if the named notification channel is enabled in config.
+
+    Reads ``settings.notifications.<channel>``. Missing channels default to
+    True so adding a new alert site never silently breaks. Existing
+    background channels (periodic_summary, daily_recap, etc.) explicitly
+    opt out via the config block. See settings.yaml `notifications:` for
+    the canonical list.
+
+    Use as a guard around the alert call site, NOT around the analytics
+    that produces the alert content. This keeps DB / log records intact
+    even when the user is suppressing the corresponding ping.
+    """
+    notif_cfg = app_config.get('settings', {}).get('notifications', {})
+    return bool(notif_cfg.get(channel, default))
+
 # --- Decorators ---
 def authorized(func):
     """Decorator to check if a user is authorized."""

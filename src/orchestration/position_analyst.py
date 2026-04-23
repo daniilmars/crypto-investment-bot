@@ -364,7 +364,8 @@ async def _handle_increase(
     if current_mult > max_mult:
         log.info(f"[{symbol}] INCREASE blocked: would exceed {max_mult}x cap "
                  f"({current_mult:.1f}x → max {max_mult:.1f}x)")
-        if not is_auto:
+        from src.notify.telegram_bot import should_send
+        if not is_auto and should_send('position_analyst_info', default=False):
             await send_telegram_alert({
                 'signal': 'INFO', 'symbol': symbol,
                 'current_price': current_price,
@@ -379,7 +380,8 @@ async def _handle_increase(
     if add_value > available:
         log.info(f"[{symbol}] INCREASE blocked: need ${add_value:.2f} "
                  f"but only ${available:.2f} available")
-        if not is_auto:
+        from src.notify.telegram_bot import should_send
+        if not is_auto and should_send('position_analyst_info', default=False):
             await send_telegram_alert({
                 'signal': 'INFO', 'symbol': symbol,
                 'current_price': current_price,

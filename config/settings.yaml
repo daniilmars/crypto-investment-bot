@@ -679,6 +679,31 @@ settings:
       review_hour_utc: 4
       min_trades_for_review: 5
 
+  # -- Telegram Notification Channels --
+  # Per-channel toggles. Defaults intentionally suppress background summaries
+  # — the Mini App + /dashboard command cover those visually. Critical and
+  # per-trade events default ON.
+  notifications:
+    # Per-trade events (high signal, low volume — keep ON)
+    trade_alerts: true              # BUY/SELL/exit alerts (PnL, hold, prose)
+    limit_order_filled: true        # When pending LIMIT order fills
+
+    # Critical safety events (rare, must reach the user — keep ON)
+    circuit_breaker: true           # Trading halt
+    realtime_macro_alerts: true     # VIX spike + regime change
+
+    # Background analytics (Mini App / /dashboard cover this — defaults OFF)
+    periodic_summary: false         # Every-4h DASHBOARD message (was -6/day)
+    daily_recap: false              # 22:00 UTC end-of-day summary
+    sector_review_alert: false      # Daily 07:00 sector-review completion notice
+    weekly_self_review: false       # Sunday 04:00 weekly review message
+    midweek_thesis_refresh: false   # Sector-driven thesis-refresh notice
+    weekly_thesis_review: false     # Monday weekly thesis-review message
+    fast_path_alert: false          # Idle-gap priority reorder notice
+    ipo_watchlist_updates: false    # New ticker added to watchlist
+    source_deactivation: false      # RSS feed deactivated by source_review_loop
+    position_analyst_info: false    # INCREASE-blocked notices (manual path only)
+
   # -- Telegram Enhancements --
   telegram_enhancements:
     morning_briefing:

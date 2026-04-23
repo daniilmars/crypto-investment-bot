@@ -830,14 +830,16 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
             new_tickers = promote_new_listings(settings)
             if new_tickers:
                 log.info(f"[IPO] Promoted {len(new_tickers)} new tickers to watchlist: {new_tickers}")
-                for ticker in new_tickers:
-                    try:
-                        await send_telegram_alert({
-                            'signal': 'INFO', 'symbol': ticker, 'current_price': 0,
-                            'reason': f'IPO Watchlist Update: Added {ticker} to stock watchlist. Now being tracked for signals.',
-                        })
-                    except Exception as e:
-                        log.debug(f"IPO alert send failed for {ticker}: {e}")
+                from src.notify.telegram_bot import should_send
+                if should_send('ipo_watchlist_updates', default=False):
+                    for ticker in new_tickers:
+                        try:
+                            await send_telegram_alert({
+                                'signal': 'INFO', 'symbol': ticker, 'current_price': 0,
+                                'reason': f'IPO Watchlist Update: Added {ticker} to stock watchlist. Now being tracked for signals.',
+                            })
+                        except Exception as e:
+                            log.debug(f"IPO alert send failed for {ticker}: {e}")
         except Exception as e:
             log.warning(f"[IPO] Watchlist promotion failed: {e}")
 
@@ -899,7 +901,9 @@ async def run_stock_cycle(settings, news_per_symbol=None, news_config=None,
                         f"raw={p['raw']:.2f} age={p['age_h']:.1f}h "
                         f"catalyst={p['catalyst_type']}"
                     )
-                if fast_path_cfg.get('alert_telegram', True):
+                from src.notify.telegram_bot import should_send
+                if (fast_path_cfg.get('alert_telegram', True)
+                        and should_send('fast_path_alert', default=False)):
                     try:
                         from src.notify.telegram_bot import send_telegram_alert
                         await send_telegram_alert({
