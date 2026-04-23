@@ -336,13 +336,15 @@ settings:
     paper_trading_initial_capital: 10000.0
     max_concurrent_positions: 20
     summary_interval_hours: 1
-    # Lowered 0.65→0.55 on Apr 23 — gate funnel showed 0 auto trades in
-    # 48h with 30 of 97 strength-rejections clustered in the 0.48-0.56
-    # band (Gemini moderate-confidence signals just under the bar). The
-    # caution_strength_boost still kicks in at +0.05 for CAUTION regime
-    # so effective threshold is 0.60 in that case. Conservative stays
-    # 0.80 — high-conviction plays unaffected.
-    min_signal_strength: 0.55
+    # Reverted Apr 23 19:50 (was lowered to 0.55 in 802316f, reverted here):
+    # 7d counterfactual sim of 55 hypothetical trades in the 0.55-0.64
+    # would-pass zone showed 11% win rate and -$512 simulated PnL —
+    # mostly noise on choppy crypto names (BNB/APT/SOL/AAVE chop). Real
+    # auto WR is 59%, so capturing this band would have dragged it down
+    # significantly. Keep 0.65 until per-asset-type threshold splits
+    # crypto (stay 0.65) from stocks (where 0.56 signals on themed
+    # catalysts like SMR/LIN/HAL showed actual momentum).
+    min_signal_strength: 0.65
     min_sell_signal_strength: 0.50
     caution_strength_boost: 0.05
 
@@ -356,9 +358,9 @@ settings:
       paper_trading_initial_capital: 10000.0
       max_concurrent_positions: 20
       summary_interval_hours: 1
-      # See comment under auto_trading above — flipped 0.65→0.55 Apr 23
-      # because the gate funnel was eating 100% of moderate-confidence signals.
-      min_signal_strength: 0.55
+      # See revert comment under auto_trading above — kept at 0.65 until
+      # we ship per-asset-type thresholds (crypto stays 0.65, stock 0.55).
+      min_signal_strength: 0.65
       min_sell_signal_strength: 0.50
       streak_sizing:
         enabled: true
