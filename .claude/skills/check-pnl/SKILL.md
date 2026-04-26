@@ -97,18 +97,28 @@ For each strategy (`manual`, `auto`, `momentum`, `conservative`):
 - Open positions: count, total locked capital
 - Last 5 closed trades: symbol, PnL, exit_reason, timestamp
 
+All closed-trade queries MUST include `AND COALESCE(excluded_from_stats, 0) = 0`
+to match the wallet's filtered semantics. Excluded trades are still in the DB
+(e.g. HII #134 + LHX #133 marked `pre_PR_C_sector_vibes_bug`) but don't count
+toward stats / Kelly / Mini App PnL. Without this filter, /check-pnl numbers
+will silently disagree with the wallet, Mini App, and `_get_paper_balance`.
+
 ```sql
 -- Closed trades
 SELECT COUNT(*), SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END), SUM(pnl)
-FROM trades WHERE status = 'CLOSED' AND trading_strategy = ?
+FROM trades WHERE status = 'CLOSED'
+  AND COALESCE(excluded_from_stats, 0) = 0
+  AND trading_strategy = ?
 
--- Open positions
+-- Open positions (no exclusion filter needed — only relevant when CLOSED)
 SELECT COUNT(*), COALESCE(SUM(entry_price * quantity), 0)
 FROM trades WHERE status = 'OPEN' AND trading_strategy = ?
 
 -- Last 5 closed
 SELECT symbol, pnl, exit_reason, exit_timestamp
-FROM trades WHERE status = 'CLOSED' AND trading_strategy = ?
+FROM trades WHERE status = 'CLOSED'
+  AND COALESCE(excluded_from_stats, 0) = 0
+  AND trading_strategy = ?
 ORDER BY exit_timestamp DESC LIMIT 5
 ```
 
@@ -129,7 +139,9 @@ FROM trades WHERE status = 'OPEN' ORDER BY trading_strategy, entry_timestamp
 ```sql
 -- Trades closed today
 SELECT symbol, pnl, exit_reason, trading_strategy, exit_timestamp
-FROM trades WHERE status = 'CLOSED' AND exit_timestamp >= date('now')
+FROM trades WHERE status = 'CLOSED'
+  AND COALESCE(excluded_from_stats, 0) = 0
+  AND exit_timestamp >= date('now')
 ORDER BY exit_timestamp
 
 -- Trades opened today
