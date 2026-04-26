@@ -436,7 +436,7 @@ settings:
 
     conservative:
       enabled: true
-      paper_trading_initial_capital: 15000.0
+      paper_trading_initial_capital: 10000.0
       max_concurrent_positions: 5
       min_signal_strength: 0.80
       min_sell_signal_strength: 0.65
@@ -476,7 +476,7 @@ settings:
 
     longterm:
       enabled: true
-      paper_trading_initial_capital: 20000.0
+      paper_trading_initial_capital: 10000.0
       max_concurrent_positions: 10
       min_signal_strength: 0.70
       min_sell_signal_strength: 0.50

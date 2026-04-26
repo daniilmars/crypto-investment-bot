@@ -940,44 +940,87 @@ def get_account_balance(asset_type=None, trading_strategy=None):
     return _get_paper_balance(asset_type=asset_type, trading_strategy=trading_strategy)
 
 
-def _get_paper_balance(asset_type=None, trading_strategy=None):
-    """Calculates the current paper trading balance based on initial capital and closed trade PnL."""
+def _strategy_initial_capital(trading_strategy):
+    """Resolve initial paper-trading capital for a strategy.
+
+    Each strategy gets ONE pool — config under
+    ``settings.strategies.<name>.paper_trading_initial_capital``. Disabled
+    strategies return None (caller treats as $0 wallet — no phantom
+    capital sitting in retired bots).
+
+    Fallbacks (in order):
+      1. settings.strategies.<name>.paper_trading_initial_capital (if enabled)
+      2. settings.auto_trading.paper_trading_initial_capital (legacy 'auto')
+      3. settings.paper_trading_initial_capital (global default for 'manual'
+         and any unknown strategy)
+    """
+    settings = app_config.get('settings', {})
+    strategies = settings.get('strategies') or {}
+
+    if trading_strategy and trading_strategy in strategies:
+        cfg = strategies[trading_strategy] or {}
+        if not cfg.get('enabled', False):
+            return None
+        return float(cfg.get('paper_trading_initial_capital',
+                             settings.get('paper_trading_initial_capital', 10000.0)))
+
     if trading_strategy == 'auto':
-        auto_cfg = app_config.get('settings', {}).get('auto_trading', {})
-        initial_capital = Decimal(str(auto_cfg.get('paper_trading_initial_capital', 10000.0)))
-    elif asset_type == 'stock':
-        stock_cfg = app_config.get('settings', {}).get('stock_trading', {})
-        initial_capital = Decimal(str(stock_cfg.get('paper_trading_initial_capital',
-                                  app_config.get('settings', {}).get('paper_trading_initial_capital', 10000.0))))
-    else:
-        initial_capital = Decimal(str(app_config.get('settings', {}).get('paper_trading_initial_capital', 10000.0)))
+        auto_cfg = settings.get('auto_trading', {}) or {}
+        return float(auto_cfg.get('paper_trading_initial_capital', 10000.0))
+
+    # No strategy filter, or 'manual', or unknown
+    return float(settings.get('paper_trading_initial_capital', 10000.0))
+
+
+def _get_paper_balance(asset_type=None, trading_strategy=None):
+    """Calculates the current paper trading balance.
+
+    When ``trading_strategy`` is provided, returns ONE pool for that
+    strategy spanning all asset types. Free = initial + ALL realized PnL
+    of the strategy − ALL currently locked of the strategy. The
+    ``asset_type`` argument is ignored in this mode (single shared pool).
+
+    Disabled strategies return $0 — no phantom wallet.
+
+    When ``trading_strategy`` is None, legacy behavior: filters by
+    ``asset_type`` against the global ``paper_trading_initial_capital``
+    pool. Used by dashboards that want a crypto-vs-stock split.
+    """
+    initial_capital_val = _strategy_initial_capital(trading_strategy)
+    if initial_capital_val is None:
+        log.debug(f"Paper trading: strategy '{trading_strategy}' disabled "
+                  f"or no wallet — returning $0.")
+        return {"USDT": 0.0, "total_usd": 0.0}
+    initial_capital = Decimal(str(initial_capital_val))
     conn = None
     try:
         conn = get_db_connection()
         is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
         ph = '%s' if is_postgres_conn else '?'
         with _cursor(conn) as cursor:
-            # Build PnL query with optional filters
+            # PnL: when strategy is set, sum across ALL asset types of that
+            # strategy (single shared pool). When no strategy, asset_type
+            # still filters (legacy crypto-vs-stock dashboard view).
             query_pnl = f'SELECT COALESCE(SUM(pnl), 0) FROM trades WHERE status = {ph}'
             params_pnl = ["CLOSED"]
-            if asset_type:
-                query_pnl += f' AND asset_type = {ph}'
-                params_pnl.append(asset_type)
             if trading_strategy:
                 query_pnl += f' AND trading_strategy = {ph}'
                 params_pnl.append(trading_strategy)
+            elif asset_type:
+                query_pnl += f' AND asset_type = {ph}'
+                params_pnl.append(asset_type)
             cursor.execute(query_pnl, tuple(params_pnl))
             total_pnl = Decimal(str(cursor.fetchone()[0]))
 
-            # Build locked capital query with optional filters
+            # Locked: same scope rule as PnL.
             query_open = f'SELECT COALESCE(SUM(entry_price * quantity), 0) FROM trades WHERE status = {ph}'
             params_open = ["OPEN"]
-            if asset_type:
-                query_open += f' AND asset_type = {ph}'
-                params_open.append(asset_type)
             if trading_strategy:
                 query_open += f' AND trading_strategy = {ph}'
                 params_open.append(trading_strategy)
+            elif asset_type:
+                query_open += f' AND asset_type = {ph}'
+                params_open.append(asset_type)
             cursor.execute(query_open, tuple(params_open))
             locked_capital = Decimal(str(cursor.fetchone()[0]))
 
