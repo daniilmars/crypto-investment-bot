@@ -453,7 +453,8 @@ def summary_data() -> dict:
             cur.execute(
                 "SELECT symbol, pnl, exit_timestamp, trading_strategy, "
                 "entry_price, quantity "
-                "FROM trades WHERE status = 'CLOSED'"
+                "FROM trades WHERE status = 'CLOSED' "
+                "AND COALESCE(excluded_from_stats, 0) = 0"
             )
             closed = _rows_to_dicts(cur, cur.fetchall())
 
@@ -589,6 +590,7 @@ def equity_data(days: int = 30) -> dict:
             cur.execute(
                 "SELECT symbol, pnl, exit_timestamp, trading_strategy "
                 "FROM trades WHERE status='CLOSED' AND exit_timestamp IS NOT NULL "
+                "AND COALESCE(excluded_from_stats, 0) = 0 "
                 "ORDER BY exit_timestamp ASC"
             )
             rows = _rows_to_dicts(cur, cur.fetchall())
@@ -668,6 +670,7 @@ _RECENT_TRADES_SQL = """
            t.entry_timestamp, t.exit_timestamp, t.exit_reason,
            t.exit_reasoning, t.trailing_stop_peak,
            t.dynamic_sl_pct, t.dynamic_tp_pct, t.trade_reason,
+           t.excluded_from_stats, t.exclusion_reason,
            sa.gemini_direction, sa.gemini_confidence, sa.catalyst_type,
            sa.source_names, sa.signal_timestamp,
            ga.reasoning, ga.key_headline, ga.risk_factors,
@@ -756,6 +759,8 @@ def recent_trades_data(limit: int = 10) -> dict:
             "exit_reasoning": r.get("exit_reasoning"),
             "trailing_stop_peak": (float(r["trailing_stop_peak"])
                                    if r.get("trailing_stop_peak") is not None else None),
+            "excluded_from_stats": bool(r.get("excluded_from_stats")),
+            "exclusion_reason": r.get("exclusion_reason"),
             "rationale": _build_rationale(r),
         })
 

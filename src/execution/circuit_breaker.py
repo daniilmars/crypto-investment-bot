@@ -132,7 +132,7 @@ def _get_peak_balance(initial_capital, asset_type='crypto'):
                 query = """
                     SELECT COALESCE(MAX(running_pnl), 0) FROM (
                         SELECT SUM(pnl) OVER (ORDER BY exit_timestamp) AS running_pnl
-                        FROM trades WHERE status = 'CLOSED' AND pnl IS NOT NULL
+                        FROM trades WHERE status = 'CLOSED' AND pnl IS NOT NULL AND COALESCE(excluded_from_stats, 0) = 0
                         AND asset_type = %s
                     ) sub
                 """
@@ -140,7 +140,7 @@ def _get_peak_balance(initial_capital, asset_type='crypto'):
                 query = """
                     SELECT COALESCE(MAX(running_pnl), 0) FROM (
                         SELECT SUM(pnl) OVER (ORDER BY exit_timestamp) AS running_pnl
-                        FROM trades WHERE status = 'CLOSED' AND pnl IS NOT NULL
+                        FROM trades WHERE status = 'CLOSED' AND pnl IS NOT NULL AND COALESCE(excluded_from_stats, 0) = 0
                         AND asset_type = ?
                     )
                 """
@@ -397,13 +397,13 @@ def get_daily_pnl(asset_type=None):
                 if is_pg:
                     query = """
                         SELECT COALESCE(SUM(pnl), 0) FROM trades
-                        WHERE status = 'CLOSED' AND pnl IS NOT NULL
+                        WHERE status = 'CLOSED' AND pnl IS NOT NULL AND COALESCE(excluded_from_stats, 0) = 0
                         AND exit_timestamp >= CURRENT_DATE AND asset_type = %s
                     """
                 else:
                     query = """
                         SELECT COALESCE(SUM(pnl), 0) FROM trades
-                        WHERE status = 'CLOSED' AND pnl IS NOT NULL
+                        WHERE status = 'CLOSED' AND pnl IS NOT NULL AND COALESCE(excluded_from_stats, 0) = 0
                         AND exit_timestamp >= date('now') AND asset_type = ?
                     """
                 cursor.execute(query, (asset_type,))
@@ -411,13 +411,13 @@ def get_daily_pnl(asset_type=None):
                 if is_pg:
                     query = """
                         SELECT COALESCE(SUM(pnl), 0) FROM trades
-                        WHERE status = 'CLOSED' AND pnl IS NOT NULL
+                        WHERE status = 'CLOSED' AND pnl IS NOT NULL AND COALESCE(excluded_from_stats, 0) = 0
                         AND exit_timestamp >= CURRENT_DATE
                     """
                 else:
                     query = """
                         SELECT COALESCE(SUM(pnl), 0) FROM trades
-                        WHERE status = 'CLOSED' AND pnl IS NOT NULL
+                        WHERE status = 'CLOSED' AND pnl IS NOT NULL AND COALESCE(excluded_from_stats, 0) = 0
                         AND exit_timestamp >= date('now')
                     """
                 cursor.execute(query)
@@ -439,24 +439,24 @@ def get_recent_closed_trades(limit=5, asset_type=None):
             if asset_type:
                 if is_pg:
                     query = """
-                        SELECT * FROM trades WHERE status = 'CLOSED' AND pnl IS NOT NULL
+                        SELECT * FROM trades WHERE status = 'CLOSED' AND pnl IS NOT NULL AND COALESCE(excluded_from_stats, 0) = 0
                         AND asset_type = %s ORDER BY exit_timestamp DESC LIMIT %s
                     """
                 else:
                     query = """
-                        SELECT * FROM trades WHERE status = 'CLOSED' AND pnl IS NOT NULL
+                        SELECT * FROM trades WHERE status = 'CLOSED' AND pnl IS NOT NULL AND COALESCE(excluded_from_stats, 0) = 0
                         AND asset_type = ? ORDER BY exit_timestamp DESC LIMIT ?
                     """
                 cursor.execute(query, (asset_type, limit))
             else:
                 if is_pg:
                     query = """
-                        SELECT * FROM trades WHERE status = 'CLOSED' AND pnl IS NOT NULL
+                        SELECT * FROM trades WHERE status = 'CLOSED' AND pnl IS NOT NULL AND COALESCE(excluded_from_stats, 0) = 0
                         ORDER BY exit_timestamp DESC LIMIT %s
                     """
                 else:
                     query = """
-                        SELECT * FROM trades WHERE status = 'CLOSED' AND pnl IS NOT NULL
+                        SELECT * FROM trades WHERE status = 'CLOSED' AND pnl IS NOT NULL AND COALESCE(excluded_from_stats, 0) = 0
                         ORDER BY exit_timestamp DESC LIMIT ?
                     """
                 cursor.execute(query, (limit,))

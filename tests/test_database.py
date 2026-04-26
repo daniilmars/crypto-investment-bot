@@ -46,8 +46,9 @@ def test_initialize_database_creates_tables(mock_get_db_connection, mock_release
     # + 1 CREATE TABLE (attribution_coverage_history)
     # + 7 performance indexes (added idx_atth_computed_at)
     # + 4 ALTER TABLE (gemini_assessments grounding_urls, grounding_queries,
-    #                  impact_rank, impact_basis) = 73
-    assert mock_cursor.execute.call_count == 73
+    #                  impact_rank, impact_basis)
+    # + 2 ALTER TABLE (trades excluded_from_stats, exclusion_reason) = 75
+    assert mock_cursor.execute.call_count == 75
 
     # Check the SQL statements (case-insensitive and ignoring whitespace)
     executed_queries = [' '.join(call[0][0].split()) for call in mock_cursor.execute.call_args_list]

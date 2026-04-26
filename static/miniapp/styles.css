@@ -450,6 +450,21 @@ header {
 .rank.rank-1 { background: rgba(96, 192, 96, 0.18); color: var(--positive); }
 .rank.rank-2 { background: rgba(192, 168, 64, 0.18); color: #b08c1c; }
 .rank.rank-3 { background: rgba(160, 160, 160, 0.18); color: var(--text-dim); }
+.closed-exit.excluded {
+  background: rgba(160, 160, 160, 0.22);
+  color: var(--text-dim);
+  font-style: italic;
+  font-size: 10px;
+  margin-left: 4px;
+}
+.closed-row.is-excluded {
+  opacity: 0.55;
+}
+.closed-row.is-excluded .pos-pnl-usd,
+.closed-row.is-excluded .pos-pnl-pct {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
 .rat-empty {
   grid-column: 1 / -1;
   color: var(--text-dim);

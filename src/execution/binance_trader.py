@@ -998,10 +998,15 @@ def _get_paper_balance(asset_type=None, trading_strategy=None):
         is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
         ph = '%s' if is_postgres_conn else '?'
         with _cursor(conn) as cursor:
+            # excluded_from_stats: soft-delete flag for trades caused by
+            # fixed bugs (e.g. HII/LHX pre-PR-C). Skip them so the wallet
+            # reflects the strategy's "real" track record, not the bug.
+            excl_clause = ' AND COALESCE(excluded_from_stats, 0) = 0'
+
             # PnL: when strategy is set, sum across ALL asset types of that
             # strategy (single shared pool). When no strategy, asset_type
             # still filters (legacy crypto-vs-stock dashboard view).
-            query_pnl = f'SELECT COALESCE(SUM(pnl), 0) FROM trades WHERE status = {ph}'
+            query_pnl = f'SELECT COALESCE(SUM(pnl), 0) FROM trades WHERE status = {ph}{excl_clause}'
             params_pnl = ["CLOSED"]
             if trading_strategy:
                 query_pnl += f' AND trading_strategy = {ph}'
@@ -1013,7 +1018,7 @@ def _get_paper_balance(asset_type=None, trading_strategy=None):
             total_pnl = Decimal(str(cursor.fetchone()[0]))
 
             # Locked: same scope rule as PnL.
-            query_open = f'SELECT COALESCE(SUM(entry_price * quantity), 0) FROM trades WHERE status = {ph}'
+            query_open = f'SELECT COALESCE(SUM(entry_price * quantity), 0) FROM trades WHERE status = {ph}{excl_clause}'
             params_open = ["OPEN"]
             if trading_strategy:
                 query_open += f' AND trading_strategy = {ph}'

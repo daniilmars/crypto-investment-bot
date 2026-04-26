@@ -31,7 +31,9 @@ def _populate_db(conn):
             asset_type TEXT DEFAULT 'crypto',
             trading_strategy TEXT DEFAULT 'manual',
             strategy_type TEXT,
-            exit_reason TEXT
+            exit_reason TEXT,
+            excluded_from_stats INTEGER DEFAULT 0,
+            exclusion_reason TEXT
         )
     """)
     cur.execute("""

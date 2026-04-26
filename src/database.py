@@ -790,6 +790,25 @@ def initialize_database(db_url=None):
             if is_postgres_conn:
                 conn.rollback()
 
+        # --- Migrate trades table: add excluded_from_stats + reason ---
+        # Soft-delete flag for trades caused by known fixed bugs (e.g. HII/LHX
+        # sector-vibes losses pre-PR-C). Excluded trades are preserved for
+        # audit/Mini-App display but skipped by stats/wallet/Kelly/CB queries.
+        for _col, _type in (
+            ('excluded_from_stats', 'INTEGER DEFAULT 0'),
+            ('exclusion_reason', 'TEXT'),
+        ):
+            try:
+                cursor.execute(f"ALTER TABLE trades ADD COLUMN {_col} {_type}")
+                log.info(f"Added column '{_col}' to trades table.")
+            except (sqlite3.OperationalError, psycopg2.errors.DuplicateColumn):
+                if is_postgres_conn:
+                    conn.rollback()
+            except Exception as e:
+                log.warning(f"Could not add column '{_col}' to trades: {e}")
+                if is_postgres_conn:
+                    conn.rollback()
+
         # --- Migrate trades table: add strategy_type column (strategic trades) ---
         try:
             cursor.execute("ALTER TABLE trades ADD COLUMN strategy_type TEXT")
@@ -1292,14 +1311,18 @@ def get_trade_summary(hours_ago: int = 24, trading_strategy: str = None) -> dict
         is_postgres_conn = isinstance(conn, psycopg2.extensions.connection)
         with _cursor(conn) as cursor:
             if is_postgres_conn:
-                query = "SELECT * FROM trades WHERE status = 'CLOSED' AND exit_timestamp >= NOW() - INTERVAL '%s hours'"
+                query = ("SELECT * FROM trades WHERE status = 'CLOSED' "
+                         "AND COALESCE(excluded_from_stats, 0) = 0 "
+                         "AND exit_timestamp >= NOW() - INTERVAL '%s hours'")
                 params = [hours_ago]
                 if trading_strategy:
                     query += " AND trading_strategy = %s"
                     params.append(trading_strategy)
                 cursor.execute(query, tuple(params))
             else:
-                query = "SELECT * FROM trades WHERE status = 'CLOSED' AND exit_timestamp >= datetime('now', ? || ' hours')"
+                query = ("SELECT * FROM trades WHERE status = 'CLOSED' "
+                         "AND COALESCE(excluded_from_stats, 0) = 0 "
+                         "AND exit_timestamp >= datetime('now', ? || ' hours')")
                 params = [f'-{hours_ago}']
                 if trading_strategy:
                     query += " AND trading_strategy = ?"
@@ -1517,7 +1540,10 @@ def get_trade_history_stats(trading_strategy: str = None) -> dict:
         conn = get_db_connection()
         is_pg = isinstance(conn, psycopg2.extensions.connection)
         with _cursor(conn) as cursor:
-            query = "SELECT pnl FROM trades WHERE status = 'CLOSED' AND pnl IS NOT NULL"
+            # Skip excluded trades — they shouldn't influence Kelly sizing.
+            query = ("SELECT pnl FROM trades WHERE status = 'CLOSED' "
+                     "AND pnl IS NOT NULL "
+                     "AND COALESCE(excluded_from_stats, 0) = 0")
             params = []
             if trading_strategy:
                 query += " AND trading_strategy = %s" if is_pg else " AND trading_strategy = ?"

@@ -205,7 +205,9 @@ async def send_periodic_summary():
                 with _cursor(conn) as cur:
                     cur.execute(
                         f"SELECT COALESCE(SUM(pnl), 0) FROM trades "
-                        f"WHERE status='CLOSED' AND trading_strategy={ph}",
+                        f"WHERE status='CLOSED' "
+                        f"AND COALESCE(excluded_from_stats, 0) = 0 "
+                        f"AND trading_strategy={ph}",
                         (strat,))
                     row = cur.fetchone()
                     # row is sqlite3.Row OR tuple (postgres) — both support [0].

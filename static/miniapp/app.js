@@ -507,6 +507,12 @@
       const exitTag = t.exit_reason
         ? `<span class="closed-exit ${t.pnl_usd >= 0 ? 'exit-win' : 'exit-loss'}">${escapeHtml(t.exit_reason)}</span>`
         : '';
+      // Trades flagged excluded_from_stats (e.g. fixed-bug losses) are kept
+      // in the list for transparency but visually de-emphasised + tagged.
+      const excludedTag = t.excluded_from_stats
+        ? `<span class="closed-exit excluded" title="${escapeHtml(t.exclusion_reason || 'excluded from stats')}">excluded</span>`
+        : '';
+      const rowExcludedClass = t.excluded_from_stats ? ' is-excluded' : '';
       const nameLine = t.display_name
         ? `<div class="pos-name">${escapeHtml(t.display_name)}</div>`
         : '';
@@ -515,12 +521,13 @@
       const exitTitle = t.exit_timestamp
         ? ` title="exit: ${escapeHtml(t.exit_timestamp)}"` : '';
       return `
-        <div class="closed-row ${isExpanded}" data-order-id="${escapeHtml(t.order_id || '')}">
+        <div class="closed-row ${isExpanded}${rowExcludedClass}" data-order-id="${escapeHtml(t.order_id || '')}">
           <div class="pos-left">
             <div class="pos-symbol-row">
               ${escapeHtml(t.symbol)}
               <span style="font-size:11px;color:var(--text-dim);font-weight:400">${escapeHtml(t.strategy)}</span>
               ${exitTag}
+              ${excludedTag}
             </div>
             ${nameLine}
             <div class="pos-meta"${exitTitle}>

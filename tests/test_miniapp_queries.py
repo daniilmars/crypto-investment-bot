@@ -254,7 +254,9 @@ def _closed_trades_conn():
             status TEXT,
             entry_timestamp TEXT, exit_timestamp TEXT,
             exit_reason TEXT, exit_reasoning TEXT, trailing_stop_peak REAL,
-            dynamic_sl_pct REAL, dynamic_tp_pct REAL, trade_reason TEXT
+            dynamic_sl_pct REAL, dynamic_tp_pct REAL, trade_reason TEXT,
+            excluded_from_stats INTEGER DEFAULT 0,
+            exclusion_reason TEXT
         )
     """)
     conn.execute("""
