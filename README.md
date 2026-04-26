@@ -1,430 +1,200 @@
-# 🚀 Crypto Investment Alert Bot
+# Crypto + Stock Investment Bot
 
-A sophisticated, multi-source bot that analyzes on-chain activity and technical indicators to generate automated investment signals for cryptocurrencies.
+Automated multi-strategy trading bot that combines real-time news scraping, Gemini-powered catalyst analysis, and technical signals to generate trade decisions for cryptocurrencies and equities.
 
----
-
-## 📘 Overview
-
-This bot is designed to identify potential crypto investment opportunities by systematically collecting and analyzing data from multiple key sources. It runs in a continuous cycle, fetching the latest data, evaluating it against a configurable strategy, and, in **paper trading mode**, simulates trades and sends real-time alerts via Telegram for significant signals.
-
-All collected data, along with simulated trades and generated signals, is stored in a local **SQLite database**, enabling historical analysis and strategy evaluation with a built-in **backtesting framework**.
+Currently runs in **paper trading** mode by default. Live trading wired for Binance (crypto); stock trading is signal-generation only — execution is a separate decision (see `memory/project_live_deployment_strategy.md`).
 
 ---
 
-## 🧪 Backtesting and Strategy Optimization
+## What it does
 
-The project includes a powerful backtesting framework that allows you to test and optimize your trading strategy against historical data. This is a critical step in developing a profitable model.
+1. **Scrapes news every cycle** from 113 RSS feeds + 6 web scrapers (CoinDesk, CoinTelegraph, Decrypt, CNBC, AP News, TechCrunch AI)
+2. **Scores each article via Gemini** (`gemini-2.5-flash`) for trading impact, freshness, hype-vs-fundamental, catalyst type
+3. **Per-symbol assessment via Gemini grounded search** (`gemini-2.5-flash` with Google Search tool, free tier) — produces direction, confidence, key_headline, impact_rank, risk_factors
+4. **Sector-aware confidence ranking** caps secondary-beneficiary stocks when one news event hits multiple symbols (defends against e.g. Iran-news → 14 oil stocks all bullish at 0.7)
+5. **Signal engine** combines Gemini sentiment with SMA, RSI, P/E, multi-timeframe trend alignment per symbol
+6. **Per-strategy execution** — auto / conservative / longterm strategies share the news pipeline but apply their own weights, thresholds, and risk parameters
+7. **Position management** — dynamic ATR-based SL/TP, trailing stops, time-stop for slow-drift positions, flash-analyst exits on adverse news
+8. **Telegram + Mini App** — alerts on trade events, full rationale per position (entry catalyst, headline, sources, risks), live PnL dashboard
 
-For detailed instructions on how to set up and use the backtesting tools, please see the **[Backtesting and Strategy Optimization Guide](docs/BACKTESTING.md)**.
+## Architecture overview
 
----
-
-## 🧠 Core Features
-
--   📊 **Multi-Source Data Collection:**
-    -   **On-Chain Activity:** Whale Alert API for large transaction tracking, including expanded stablecoin inflow analysis.
-    -   **Market Data:** Real-time prices from Binance for an expanded `watch_list` of cryptocurrencies.
--   💾 **Data Persistence:** All collected data, generated signals, and simulated trades are automatically saved to a local SQLite database for historical analysis.
--   🧮 **Technical Analysis Signal Engine:** A configurable, rule-based engine that combines on-chain flow with two key technical indicators (SMA and RSI) for robust, symbol-specific signals.
--   🧪 **Paper Trading Framework:** A powerful simulation mode that executes trades against live market data without risking real capital, recording all trades to the database.
--   📲 **Telegram Notifications:** Instant alerts for BUY or SELL signals, plus regular, automated performance reports sent directly to your Telegram.
--   📝 **Structured Logging:** Professional logging for clear, timestamped monitoring of the bot's activity.
--   🤖 **AI-Powered Status Reports:** An interactive `/status` command in Telegram that uses the Gemini API to provide AI-generated summaries of market activity and bot health, including the last generated signal.
-
----
-
-## 🏗 Architecture
-
-The project is divided into two key architectural components: the application logic and the deployment pipeline.
-
-### Application Architecture
-
-The bot's core logic follows a linear data flow, from collection to notification. The database is designed to be PostgreSQL in production for reliability and SQLite for ease of local development, now also storing generated signals and simulated trades.
-
-```text
-+--------------------------------+
-|   Data Collectors (APIs)       |
-| - binance_data.py              |
-| - whale_alert.py               |
-+----------------+---------------+
-                 |
-                 v
-+--------------------------------+
-|   Database (database.py)       |
-|  - PostgreSQL (Production)     |
-|  - SQLite (Local Development)  |
-|  - Trades Table                |
-|  - Signals Table               |
-+----------------+---------------+
-                 |
-                 v
-+--------------------------------+
-|   Analysis & Signal Engine     |
-| - signal_engine.py             |
-| - technical_indicators.py      |
-+----------------+---------------+
-                 |
-+----------------+--------------------------------+
-|                |                                |
-v                v                                v
-+----------------+--+      +----------------+--+      +----------------+--+
-| Notification      |      | Backtesting       |      | Live Execution    |
-| - telegram_bot.py |      | - backtest.py     |      | - main.py (worker)|
-+-------------------+      +-------------------+      | - binance_trader.py |
-                                                       +-------------------+
+```
+                 ┌──────────────────────────┐
+                 │  RSS feeds + web scrapers│
+                 │  (15-min cycle)          │
+                 └────────┬─────────────────┘
+                          │
+                          ▼
+         ┌────────────────────────────────────┐
+         │ Per-article Gemini scoring         │
+         │ (gemini-2.5-flash, 45-min cache)   │
+         └────────┬───────────────────────────┘
+                  │
+                  ▼
+   ┌─────────────────────────────────────────────────┐
+   │ Per-symbol Gemini grounded search               │
+   │  → direction, confidence, impact_rank, headline │
+   │  → headline scrub (drop mismatched)             │
+   │  → sector_ranking caps (shadow / live)          │
+   │  → grounding URLs captured for attribution      │
+   └────────┬────────────────────────────────────────┘
+            │
+            ▼
+   ┌─────────────────────────────────────────────┐
+   │ Signal engine (sentiment + technicals)      │
+   │  per strategy:                              │
+   │    auto         (broad, Kelly-sized)        │
+   │    conservative (high-conviction only)      │
+   │    longterm     (thesis stocks only)        │
+   └────────┬────────────────────────────────────┘
+            │
+            ▼
+   ┌─────────────────────────────────────────────┐
+   │ Pre-trade gates                             │
+   │  cooldown · max positions · sector limits   │
+   │  event calendar · macro regime · CB         │
+   └────────┬────────────────────────────────────┘
+            │
+            ▼
+   ┌─────────────────────────────────────────────┐
+   │ Execution                                   │
+   │  Binance (crypto, paper or live)            │
+   │  Stocks: paper-only (signal generation)     │
+   └────────┬────────────────────────────────────┘
+            │
+            ▼
+   ┌─────────────────────────────────────────────┐
+   │ Position monitor                            │
+   │  dynamic SL/TP · trailing · time-stop       │
+   │  flash analyst exits · rotation             │
+   └────────┬────────────────────────────────────┘
+            │
+            ▼
+   ┌─────────────────────────────────────────────┐
+   │ Telegram alerts + Mini App rationale        │
+   └─────────────────────────────────────────────┘
 ```
 
----
+## Strategies
 
-## ⚙️ Setup
+Each strategy gets a **shared $10k capital pool** (configurable in `settings.strategies.<name>.paper_trading_initial_capital`). All strategies read the same Gemini pipeline but apply their own weights and gates.
+
+| Strategy | Pool | Max positions | Min signal | Notes |
+|---|---|---|---|---|
+| `auto` | $10k | 20 | 0.65 | Kelly-sized, broad watchlist |
+| `conservative` | $10k | 5 | 0.80 | High-conviction filter, fundamental weighting |
+| `longterm` | $10k | 10 | 0.70 | Thesis-stocks-only, longer holds |
+| `momentum` | — | — | — | Retired (kept in code for back-compat) |
+| `manual` | $10k | — | — | Telegram-driven, exit-only for new entries |
+
+## Repository layout
+
+```
+src/
+├── analysis/                    # Signal engines, technical indicators, Gemini wrappers
+│   ├── signal_engine.py         # Crypto signal generation
+│   ├── stock_signal_engine.py   # Stock signal generation
+│   ├── gemini_news_analyzer.py  # Per-article + per-symbol Gemini calls
+│   ├── headline_validator.py    # Drops mismatched key_headlines
+│   ├── sector_ranking.py        # Caps secondary-beneficiary confidence
+│   ├── signal_attribution.py    # Trade → article linkage
+│   ├── dynamic_risk.py          # ATR-based SL/TP
+│   └── ...
+├── orchestration/
+│   ├── cycle_runner.py          # Main 15-min cycle
+│   ├── trade_executor.py        # BUY/SELL paths, rotation
+│   ├── position_monitor.py      # SL/TP/trailing/time-stop
+│   ├── position_analyst.py      # Per-position Gemini analyst
+│   └── pre_trade_gates.py       # Cooldown, sector, event-calendar gates
+├── execution/
+│   ├── binance_trader.py        # Paper + live order routing
+│   ├── stock_trader.py          # Stock paper trading
+│   └── circuit_breaker.py
+├── collectors/
+│   ├── web_news_scraper.py      # 6 scrapers
+│   ├── news_data.py             # 113 RSS feeds
+│   ├── binance_data.py          # Klines, prices
+│   └── alpha_vantage_data.py    # Stock prices
+├── notify/
+│   ├── telegram_bot.py          # Commands + alerts
+│   ├── telegram_chat.py         # AI chat (Gemini-driven)
+│   └── telegram_live_dashboard.py
+├── api/
+│   └── miniapp_queries.py       # Mini App data layer
+├── database.py                  # Dual SQLite/Postgres
+└── config.py                    # YAML loader + business descriptions
+
+config/
+├── settings.yaml                # All tunables
+├── watch_list.yaml              # 97 crypto + ~325 stocks
+├── business_descriptions.yaml   # Per-ticker context for Gemini
+└── sector_groups.yaml           # Sector-limit definitions
+
+static/miniapp/                  # Telegram WebApp UI
+
+tests/                           # 1,350 tests
+.claude/skills/                  # Operational skills (check-bot, check-pnl, etc.)
+```
+
+## Setup
 
 ### Prerequisites
+- Python 3.12 (in `.venv/`)
+- Docker (for production deployment)
+- API keys: Gemini (Vertex AI or consumer), Binance, Telegram, Alpha Vantage (optional, stocks)
 
--   Python ≥ 3.9
--   Git
--   API Keys for:
-    -   Whale Alert
-    -   Telegram (create a bot via @BotFather)
-    -   Gemini (for AI summaries)
-
-### Installation
-
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/<your-user>/crypto-alert-bot.git
-    cd crypto-alert-bot
-    ```
-
-2.  **Install dependencies:**
-    ```bash
-    python3 -m pip install -r requirements.txt
-    ```
-
-3.  **Configure the bot:**
-    -   **To manage the list of monitored currencies**, edit the `config/watch_list.yaml` file. This is the central source of truth for both the trading symbols and the stablecoins to be monitored.
-    -   **For local development**, rename `config/settings.yaml.example` to `config/settings.yaml` and add your API keys and other specific settings. For production deployments, these settings are managed via environment variables.
-
----
-
-## 🚀 Usage
-
-### Running the Live Bot
-
-To start the bot in live mode, run `main.py`. It will execute a cycle every 15 minutes (configurable in `settings.yaml`).
-
+### Local install
 ```bash
-python3 main.py
+python3.12 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+cp config/settings.yaml.example config/settings.yaml  # then edit
+.venv/bin/python main.py
 ```
 
-### Running the Backtester
-
-To evaluate your strategy's performance on the data you've collected, run the backtesting script.
-
+### Tests
 ```bash
-python3 src/analysis/backtest.py
+.venv/bin/python -m pytest tests/ -q
 ```
 
-The backtester will output the simulated Profit/Loss based on the logic in `signal_engine.py`.
+## Deployment
 
-### Interacting with the Bot
+Production runs on **GCE e2-micro in Frankfurt** (`europe-west3-a`), not Cloud Run. Why: avoiding Binance's HTTP 451 geo-block on US regions, plus persistent SQLite storage on the VM disk.
 
-Once the bot is running, you can interact with it directly in your configured Telegram chat:
-
--   `/start`: Initializes the bot and confirms it's running. Also provides a brief overview of available commands.
--   `/status`: The bot will perform a health check and use the Gemini API to generate a detailed summary of market activity and bot health, including the last generated signal.
--   `/db_stats`: Provides a quick overview of the number of entries in the `whale_transactions`, `market_prices`, `signals`, and `trades` tables.
--   `/db_schema`: Displays the names of all tables in the database, which is useful for diagnostics.
-
-Additionally, if configured, the bot will send **regular, automated performance reports** to your Telegram chat at a set interval (e.g., hourly), summarizing paper trading activity and PnL.
-
-### Paper Trading Configuration
-
-To enable or disable paper trading, and to configure its parameters, edit the `settings.yaml` file:
-
-```yaml
-settings:
-  # ... other settings ...
-
-  paper_trading: true # Set to false to disable paper trading (NOT RECOMMENDED FOR LIVE TRADING YET)
-  paper_trading_initial_capital: 10000.0 # Starting capital for simulation
-
-  # Risk Management Settings
-  trade_risk_percentage: 0.01 # e.g., 1% of total capital per trade
-  stop_loss_percentage: 0.02  # e.g., 2% below entry price
-  take_profit_percentage: 0.05 # e.g., 5% above entry price
-  max_concurrent_positions: 3 # Limit open trades
-
-  # Regular Status Update Settings
-  regular_status_update:
-    enabled: true
-    interval_hours: 1 # Send report every 1 hour
-```
-
-**Important:** Always start with `paper_trading: true` and thoroughly test your strategy before considering live trading.
-
----
-
-## 🚀 Deployment with Google Cloud Run & GitHub Actions
-
-This project is also configured for automated deployment to Google Cloud Run, a serverless platform that is highly scalable and cost-effective.
-
-### 1. Prerequisites
-
--   A Google Cloud Platform (GCP) account with billing enabled.
--   The project pushed to a GitHub repository.
--   The Google Cloud CLI (`gcloud`) installed on your local machine.
-
-### 2. One-Time Google Cloud Setup (via gcloud CLI)
-
-This guide provides all the necessary terminal commands to provision your Google Cloud environment correctly.
-
-**Step 1: Authenticate and Select Your Project**
-
-First, log in to the `gcloud` CLI and identify your Project ID.
-
+Deploy via push to `main`:
 ```bash
-# Authenticate with your Google account
-gcloud auth login
-
-# List all your available projects to find the correct PROJECT_ID
-gcloud projects list
-
-# Set the gcloud CLI to use your chosen project
-gcloud config set project [YOUR_PROJECT_ID]
+git push origin main   # GitHub Actions → tar+SCP → docker build on VM → docker run
 ```
 
-**Step 2: Enable Required APIs**
+Operational skills live in `.claude/skills/`:
+- `/check-bot` — health + log dump
+- `/check-pnl` — per-strategy realized + open positions
+- `/check-news` — 9-layer news-pipeline diagnosis
+- `/verify-changes` — post-PR validation
+- `/assess-quality` — comprehensive bot quality scorecard
+- `/check-costs` — GCP + Gemini spend
+- `/backtest` — sync prod data, run sweeps
 
-Enable all the necessary services for the deployment.
+## Configuration highlights
 
-```bash
-gcloud services enable \
-  run.googleapis.com \
-  artifactregistry.googleapis.com \
-  cloudbuild.googleapis.com \
-  sqladmin.googleapis.com \
-  sql-component.googleapis.com \
-  cloudresourcemanager.googleapis.com
-```
+Key settings under `config/settings.yaml`:
 
-**Step 3: Create Artifact Registry Repository**
+| Block | Purpose |
+|---|---|
+| `paper_trading: true` | Master switch — keep `true` until you're ready for live |
+| `strategies.<name>.*` | Per-strategy capital, max positions, weights, risk params |
+| `dynamic_risk.*` | ATR-based SL/TP (currently SL=7-15%, TP=10-50%) |
+| `sector_ranking.enabled` | PR-C feature flag (default `false` — shadow mode) |
+| `notifications.*` | Per-channel Telegram toggles (background msgs default off) |
+| `event_calendar.*` | Block BUYs around earnings / FOMC / CPI |
+| `sector_limits.enabled` | Per-sector position cap per strategy |
 
-Create the repository in Artifact Registry where the bot's Docker images will be stored.
+## What this bot is NOT
 
-```bash
-gcloud artifacts repositories create crypto-bot \
-    --repository-format=docker \
-    --location=us-central1 \
-    --description="Docker repository for crypto bot"
-```
+- **Not a trading-as-a-service product.** Single-user setup; multi-tenant would need significant work.
+- **Not a HFT bot.** 15-minute cycle. Designed around news catalysts, not microstructure.
+- **Not financial advice.** Paper-mode is the safe default. Live trading is opt-in via three independent config switches.
 
-**Step 4: Create the Service Account**
+## Disclaimer
 
-Create a dedicated service account that the GitHub Actions workflow will use to deploy the application.
-
-```bash
-# Choose a name for your service account
-export SERVICE_ACCOUNT_NAME=crypto-bot-deployer
-
-# Create the service account
-gcloud iam service-accounts create ${SERVICE_ACCOUNT_NAME} \
-    --display-name "Crypto Bot Deployer"
-```
-
-**Step 5: Grant Permissions to the Service Account**
-
-Assign the necessary roles to the service account so it has permission to manage Cloud Run, Artifact Registry, Cloud Build, and Cloud SQL.
-
-```bash
-# Get your full Project ID
-export PROJECT_ID=$(gcloud config get-value project)
-
-# Grant the Cloud Run Admin role
-gcloud projects add-iam-policy-binding ${PROJECT_ID} \
-    --member="serviceAccount:${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" \
-    --role="roles/run.admin"
-
-# Grant the Artifact Registry Admin role
-gcloud projects add-iam-policy-binding ${PROJECT_ID} \
-    --member="serviceAccount:${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" \
-    --role="roles/artifactregistry.admin"
-
-# Grant the Cloud Build Editor role
-gcloud projects add-iam-policy-binding ${PROJECT_ID} \
-    --member="serviceAccount:${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" \
-    --role="roles/cloudbuild.builds.editor"
-
-# Grant the Cloud SQL Client role
-gcloud projects add-iam-policy-binding ${PROJECT_ID} \
-    --member="serviceAccount:${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" \
-    --role="roles/cloudsql.client"
-
-# Grant the Storage Admin role (used by Cloud Build)
-gcloud projects add-iam-policy-binding ${PROJECT_ID} \
-    --member="serviceAccount:${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" \
-    --role="roles/storage.admin"
-
-# Grant the Service Account User role to allow impersonating the Cloud Build SA
-gcloud projects add-iam-policy-binding ${PROJECT_ID} \
-    --member="serviceAccount:${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" \
-    --role="roles/iam.serviceAccountUser"
-
-# Grant the Project Viewer role to allow streaming build logs
-gcloud projects add-iam-policy-binding ${PROJECT_ID} \
-    --member="serviceAccount:${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" \
-    --role="roles/viewer"
-```
-
-**Step 6: Create and Download the Service Account Key**
-
-Generate a JSON key file that will be used to authenticate from GitHub Actions.
-
-```bash
-gcloud iam service-accounts keys create key.json \
-    --iam-account="${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
-```
-**Important:** The `key.json` file will be created in your current directory. You will copy the entire contents of this file for a GitHub secret in the next section.
-
-**Step 7: Create the PostgreSQL Database**
-
-Create a Cloud SQL for PostgreSQL instance and a database for the bot.
-
-```bash
-# Choose a name for your database instance
-export INSTANCE_NAME=crypto-bot-db
-
-# Choose a strong password and save it securely for the next steps
-export ROOT_PASSWORD="[CHOOSE_A_STRONG_PASSWORD]"
-
-# Create the Cloud SQL instance (this can take several minutes)
-gcloud sql instances create ${INSTANCE_NAME} \
-    --database-version=POSTGRES_14 \
-    --tier=db-g1-small \
-    --region=us-central1 \
-    --root-password="${ROOT_PASSWORD}"
-
-# Create the database within the instance
-gcloud sql databases create crypto_data --instance=${INSTANCE_NAME}
-```
-
-**Step 8: Get Database Connection Info**
-
-Retrieve the connection details for your new database. You will need the **Public IP Address** for local testing and the **Instance Connection Name** for the production deployment on Cloud Run.
-
-```bash
-# Get the public IP address for local/external connections
-export DB_IP=$(gcloud sql instances describe ${INSTANCE_NAME} --format="value(ipAddresses.ipAddress)")
-
-# Get the instance connection name for the Cloud Run service
-export INSTANCE_CONNECTION_NAME=$(gcloud sql instances describe ${INSTANCE_NAME} --format="value(connectionName)")
-
-# Display the values to use in your GitHub secrets
-echo "Your DATABASE_URL is: postgresql://postgres:${ROOT_PASSWORD}@${DB_IP}/crypto_data"
-echo "Your INSTANCE_CONNECTION_NAME is: ${INSTANCE_CONNECTION_NAME}"
-```
-
-**Step 9: Configure Networking for Outbound Internet Access**
-
-To allow the bot to connect to external APIs (like Whale Alert and Telegram), you must configure a Serverless VPC Access connector and a Cloud NAT gateway. This provides the Cloud Run service with a static outbound IP address and reliable internet access.
-
-For a detailed explanation of this setup, please refer to the [Networking Documentation](docs/NETWORKING.md).
-
-```bash
-# Create the VPC Access Connector (this can take a few minutes)
-gcloud compute networks vpc-access connectors create crypto-bot-connector \
-    --region=us-central1 \
-    --range=10.8.0.0/28
-
-# Create a Cloud Router
-gcloud compute routers create crypto-bot-router \
-    --network default \
-    --region=us-central1
-
-# Create the NAT gateway to route traffic from the connector
-gcloud compute routers nats create crypto-bot-nat \
-    --router=crypto-bot-router \
-    --region=us-central1 \
-    --auto-allocate-nat-external-ips \
-    --nat-all-subnet-ip-ranges
-```
-
-### 3. GitHub Repository Setup
-
-1.  **Add Secrets to GitHub:**
-    Go to your GitHub repository's "Settings" > "Secrets and variables" > "Actions" and add the following secrets:
-    -   `GCP_PROJECT_ID`: Your Google Cloud project ID.
-    -   `GCP_SA_KEY`: The content of the JSON key file you downloaded.
-    -   `DB_INSTANCE_CONNECTION_NAME`: The full instance connection name from the previous step.
-    -   `DATABASE_URL`: The connection string with the public IP. **Note:** This is primarily for local testing or external connections, not for the production Cloud Run service.
-    -   `WHALE_ALERT_API_KEY`: Your Whale Alert API key.
-    -   `TELEGRAM_BOT_TOKEN`: Your Telegram bot token.
-    -   `TELEGRAM_CHAT_ID`: Your Telegram chat ID.
-    -   `GEMINI_API_KEY`: Your Gemini API key.
-
-    Below is a comprehensive table of all secrets used in the deployment workflow:
-
-    | Secret Name                       | Description                                                                                             | Example Value                               |
-    | --------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
-    | `GCP_PROJECT_ID`                  | Your Google Cloud project ID.                                                                           | `my-crypto-project-12345`                   |
-    | `GCP_SA_KEY`                      | The full JSON content of the service account key file (`key.json`).                                     | `{"type": "service_account", ...}`          |
-    | `DB_INSTANCE_CONNECTION_NAME`     | The full connection name for the Cloud SQL instance.                                                    | `my-crypto-project:us-central1:crypto-db`   |
-    | `DATABASE_URL`                    | The full PostgreSQL connection string for the database.                                                 | `postgresql://postgres:pass@ip/db`          |
-    | `WHALE_ALERT_API_KEY`             | Your API key for the Whale Alert service.                                                               | `a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6`          |
-    | `TELEGRAM_BOT_TOKEN`              | The token for your Telegram bot from @BotFather.                                                        | `1234567890:ABC-DEF1234ghIkl-zyx57W2v1u`     |
-    | `TELEGRAM_CHAT_ID`                | The chat ID where the bot will send messages.                                                           | `-1001234567890`                            |
-    | `TELEGRAM_AUTHORIZED_USER_IDS`    | A comma-separated list of numeric Telegram user IDs allowed to use admin commands.                      | `123456789,987654321`                       |
-    | `GEMINI_API_KEY`                  | Your API key for the Google Gemini service for AI summaries.                                            | `AIzaSy...`                                 |
-    | `BINANCE_API_KEY`                 | Your API key for the Binance exchange.                                                                  | `m...`                                      |
-    | `BINANCE_API_SECRET`              | Your API secret for the Binance exchange.                                                               | `z...`                                      |
-    | `GCP_BILLING_ENABLED`             | Set to `true` to enable the `/gcosts` command.                                                          | `true`                                      |
-    | `GCP_BILLING_ACCOUNT_ID`          | Your Google Cloud Billing Account ID.                                                                   | `012345-ABCDEF-GHIJKL`                      |
-    | `MIN_WHALE_TRANSACTION_USD`       | The minimum transaction value in USD to be considered a whale transaction.                              | `5000000`                                   |
-
-
-### 4. Automated Deployment
-
-Once the setup is complete, the process is fully automated:
-
-1.  **Push to GitHub:**
-    Commit and push your changes to the `main` branch.
-    ```bash
-    git push origin main
-    ```
-2.  **CI/CD Pipeline:**
-    The push automatically triggers the GitHub Actions workflow defined in `.github/workflows/google-cloud-run.yml`.
-    -   The workflow authenticates with Google Cloud.
-    -   It builds the Docker image using Cloud Build and pushes it to Google Artifact Registry.
-    -   It then deploys the new image to Cloud Run, securely setting the environment variables from GitHub Secrets.
-
-### 5. Managing the Bot on Cloud Run
-
--   **To view logs:**
-    Go to the Cloud Run section of the Google Cloud Console, select your service, and go to the "Logs" tab.
--   **To check if the service is running:**
-    In the Cloud Run section, you can see the status of your service, including the number of running instances.
-
----
-
-## 🧮 Implemented Data Sources
-
-| Category      | Source         | API                                                                |
-| ------------- | -------------- | ------------------------------------------------------------------ |
-| On-Chain      | Whale Alert    | [https://whale-alert.io](https://whale-alert.io) (Monitors BTC, ETH, SOL, XRP, ADA, AVAX, DOGE, MATIC, BNB, TRX, USDT, USDC, BUSD, DAI, TUSD, FDUSD, PYUSD and more) |
-| Marktpreise   | Binance        | [https://binance-docs.github.io](https://binance-docs.github.io)   |
-
----
-
-## 🧱 Next Steps & Extensions
-
-Refer to `docs/LIVE_TRADING_ROADMAP.md` for the detailed strategic plan to evolve this bot into a fully automated trader. Our immediate focus is on:
-
--   **Phase 1: Enhancing Current Intelligence and Usability** (Signal Engine improvements, richer Telegram reports).
--   **Phase 2: Building Core Trading Infrastructure (Paper Trading First)** (Trade execution, position management, essential risk parameters, and robust paper trading mode).
-
-Future considerations include advanced trading strategies (arbitrage, market making, AI/ML), sophisticated risk management, and a professional-grade system architecture.
----
-
-## ⚠️ Disclaimer
-
-This project is for educational and research purposes only. It is not financial advice. Trading cryptocurrencies involves significant risk.
+For educational and research purposes. Trading carries significant risk of loss. Past paper-trading results do not guarantee live performance. Test thoroughly before risking real capital. The author makes no warranty as to the accuracy or completeness of any signal generated by this bot.
