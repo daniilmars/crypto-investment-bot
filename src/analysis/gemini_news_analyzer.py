@@ -161,6 +161,42 @@ def _validate_gemini_response(result: dict, required_keys: list, context: str) -
         log.warning(f"Gemini response ({context}) missing keys: {missing}")
     return result
 
+
+def _extract_grounding(response) -> tuple[list[str], list[str]]:
+    """Pull grounding URLs + search queries from a google-genai response.
+
+    Returns (urls, queries) — both lists may be empty. Used to capture what
+    Gemini actually searched so attribution can be reconstructed when our
+    own scrapers missed the article (especially for stocks, where 67% of
+    signal_attribution rows currently have empty source_names).
+
+    The shape is response.candidates[0].grounding_metadata with:
+      - grounding_chunks[i].web.uri  (URL Gemini cited)
+      - web_search_queries           (queries Gemini issued)
+    """
+    urls: list[str] = []
+    queries: list[str] = []
+    candidates = getattr(response, 'candidates', None) or []
+    if not candidates:
+        return urls, queries
+    gm = getattr(candidates[0], 'grounding_metadata', None)
+    if gm is None:
+        return urls, queries
+    chunks = getattr(gm, 'grounding_chunks', None) or []
+    seen = set()
+    for ch in chunks:
+        web = getattr(ch, 'web', None)
+        if web is None:
+            continue
+        uri = getattr(web, 'uri', None)
+        if uri and uri not in seen:
+            seen.add(uri)
+            urls.append(str(uri))
+    qs = getattr(gm, 'web_search_queries', None) or []
+    queries = [str(q) for q in qs]
+    # Cap to keep DB column reasonable
+    return urls[:50], queries[:20]
+
 # --- Gemini Response Cache ---
 # Key: frozenset of sorted symbols, Value: (timestamp, result)
 _gemini_cache: dict[frozenset, tuple[float, dict]] = {}
@@ -452,6 +488,7 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
             client = genai.Client(vertexai=True, project=project_id, location=location)
 
         # Build per-symbol context sections
+        from src.config import get_business_description
         symbol_sections = []
         for sym in symbols:
             price = current_prices.get(sym)
@@ -459,6 +496,9 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
             ytd = ytd_changes.get(sym) if ytd_changes else None
             ytd_str = f", YTD: {ytd:+.1%}" if ytd is not None else ""
             section = f"**{sym}** (current price: {price_str}{ytd_str})"
+            biz = get_business_description(sym)
+            if biz:
+                section += f"\nBusiness: {biz}"
 
             # Add our collected headlines
             if headlines_by_symbol and sym in headlines_by_symbol:
@@ -547,6 +587,20 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
             "7. Consider YTD performance — a catalyst on a -27% YTD asset fighting a strong "
             "downtrend deserves lower confidence than the same catalyst on a +15% YTD asset\n"
             f"8. {_SUPPLY_SIDE_REASONING}\n"
+            "9. SECTOR-AWARE RANKING (use the Business: line above to judge each company): "
+            "When a single catalyst affects MULTIPLE symbols in this batch, you MUST rank "
+            "them by directness of impact and tag any that are HURT by the same news. "
+            "  - impact_rank=1: the company most directly named/affected (e.g. specific M&A "
+            "    target, regulator's actual subject, contract winner). Only 1-2 names per "
+            "    catalyst should be rank 1.\n"
+            "  - impact_rank=2: clear secondary beneficiary (same sector, same direction). "
+            "    Cap confidence at 0.55.\n"
+            "  - impact_rank=3+: tertiary / thematic exposure only. Cap confidence at 0.40.\n"
+            "  - impact_basis='counter-impacted': the news is BAD for this company even "
+            "    though it's good for the sector (e.g. refiners hurt by a crude price spike, "
+            "    gold miners hurt by a strong USD). Set direction='neutral' and confidence=0.\n"
+            "  - For single-symbol catalysts (only one ticker affected) leave impact_rank=1.\n"
+            "  - NEVER give >2 symbols rank 1 on the same headline.\n"
             f"--- Symbols to analyze: {symbols_str} ---\n\n"
             f"{collected_context}\n\n"
             "Now search the web for any additional news about these assets, then respond "
@@ -564,7 +618,9 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
             '      "hype_vs_fundamental": "hype|fundamental|mixed",\n'
             '      "risk_factors": [],\n'
             '      "sentiment_divergence": false,\n'
-            '      "key_headline": "the single most impactful headline"\n'
+            '      "key_headline": "VERBATIM headline text of the SPECIFIC article that drove this reasoning, or empty string",\n'
+            '      "impact_rank": 1,\n'
+            '      "impact_basis": "direct beneficiary | secondary beneficiary | thematic exposure | counter-impacted"\n'
             '    }\n'
             "  },\n"
             '  "market_mood": "brief overall sentiment phrase",\n'
@@ -577,7 +633,22 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
             "'fundamental' = regulatory/earnings/adoption/technology, "
             "'mixed' = elements of both.\n"
             "- risk_factors: up to 3 specific risks, e.g. ['priced in', 'low volume', "
-            "'single source', 'contradicted by on-chain data']. Empty array if none.\n\n"
+            "'single source', 'contradicted by on-chain data']. Empty array if none.\n"
+            "- key_headline: MUST be a verbatim quote from a single article that "
+            "directly supports your reasoning. If your reasoning is a synthesis "
+            "with no single dominant article, OR if no article specifically "
+            "supports it, return \"\". NEVER copy a headline from another "
+            "symbol's news in this batch.\n"
+            "- impact_rank: integer 1-N. 1 = company is the direct subject of the "
+            "catalyst (named in the headline, contract winner, regulatory target, "
+            "M&A counterparty). 2 = same sector, clear secondary beneficiary. "
+            "3+ = thematic exposure only. Use the Business: line to decide. "
+            "Only 1-2 symbols per shared catalyst should be rank 1.\n"
+            "- impact_basis: 'direct beneficiary' (rank 1), 'secondary beneficiary' "
+            "(rank 2), 'thematic exposure' (rank 3+), or 'counter-impacted' (the "
+            "catalyst HURTS this company even though it helps the sector — e.g. "
+            "refiners on an oil spike, gold miners on a strong USD). For "
+            "counter-impacted, also set direction='neutral' and confidence=0.0.\n\n"
             "CONFIDENCE CALIBRATION:\n"
             "- 0.0-0.3: no catalyst, noise, stale news\n"
             "- 0.3-0.5: weak catalyst or unconfirmed reports\n"
@@ -607,6 +678,31 @@ def analyze_news_with_search(symbols: list, current_prices: dict,
         result = _parse_gemini_json(text)
         _validate_gemini_response(result, ['symbol_assessments', 'market_mood'],
                                   'analyze_news_with_search')
+        # Drop key_headlines that don't relate to their own reasoning
+        # (catches Gemini echoing a wrong-symbol headline into the per-symbol
+        # field — see CCJ/KelpDAO regression).
+        from src.analysis.headline_validator import scrub_unrelated_headlines
+        cleared = scrub_unrelated_headlines(result, 'analyze_news_with_search')
+        if cleared:
+            log.info(f"Cleared {cleared} mismatched key_headline(s) "
+                     f"from grounded analysis ({len(result.get('symbol_assessments', {}))} symbols)")
+        # Sector-aware rank caps (shadow mode by default — controlled by
+        # settings.sector_ranking.enabled). Tags applied either way; caps
+        # only enforced when enabled.
+        from src.analysis.sector_ranking import apply_rank_caps
+        from src.config import app_config as _app_config
+        apply_rank_caps(result, _app_config.get('settings'))
+        # Capture grounding metadata (URLs Gemini actually searched) so we can
+        # reconstruct attribution when our own scraper missed the article.
+        try:
+            grounding_urls, grounding_queries = _extract_grounding(response)
+            if grounding_urls or grounding_queries:
+                result['grounding_urls'] = grounding_urls
+                result['grounding_queries'] = grounding_queries
+                log.info(f"Captured grounding: {len(grounding_urls)} URLs, "
+                         f"{len(grounding_queries)} queries from grounded search")
+        except Exception as e:
+            log.debug(f"Grounding metadata extraction failed (non-fatal): {e}")
         log.info(f"Gemini grounded news analysis complete: mood={result.get('market_mood')}, "
                  f"symbols={list(result.get('symbol_assessments', {}).keys())}")
         # --- Cache store ---
@@ -661,13 +757,16 @@ def analyze_news_impact(headlines_by_symbol: dict, current_prices: dict,
         model = GenerativeModel('gemini-2.5-flash-lite')
 
         # Build the prompt
+        from src.config import get_business_description
         symbol_sections = []
         for symbol, headlines in headlines_by_symbol.items():
             price = current_prices.get(symbol, "unknown")
             top_headlines = headlines[:10]
-            section = f"**{symbol}** (current price: ${price})\n" + "\n".join(
-                f"- {h}" for h in top_headlines
-            )
+            section = f"**{symbol}** (current price: ${price})"
+            biz = get_business_description(symbol)
+            if biz:
+                section += f"\nBusiness: {biz}"
+            section += "\n" + "\n".join(f"- {h}" for h in top_headlines)
 
             # Enrich with archived articles (recent headlines from DB)
             if archived_articles_by_symbol:
@@ -779,6 +878,15 @@ def analyze_news_impact(headlines_by_symbol: dict, current_prices: dict,
             "- For correlated assets: if BTC news drives the move, altcoins follow with "
             "higher beta — flag this in cross_asset_theme\n\n"
             f"STEP 6 — {_SUPPLY_SIDE_REASONING}\n"
+            "STEP 7 — SECTOR-AWARE RANKING (use the Business: line per symbol):\n"
+            "When one catalyst affects multiple symbols, rank them by directness "
+            "of impact. impact_rank=1 for the company directly named/affected; "
+            "impact_rank=2 for clear secondary beneficiaries; impact_rank=3+ for "
+            "thematic exposure only. Tag impact_basis='counter-impacted' for any "
+            "company HURT by news that helps the sector (refiners on oil spikes, "
+            "gold miners on strong USD, etc.) and set their confidence to 0. "
+            "NEVER give >2 symbols rank 1 on the same headline. For single-symbol "
+            "catalysts, leave impact_rank=1.\n\n"
             f"--- Headlines by Symbol ---\n{headlines_text}\n\n"
             "Respond ONLY with valid JSON:\n"
             "{\n"
@@ -794,7 +902,9 @@ def analyze_news_impact(headlines_by_symbol: dict, current_prices: dict,
             '      "hype_vs_fundamental": "hype|fundamental|mixed",\n'
             '      "risk_factors": [],\n'
             '      "sentiment_divergence": false,\n'
-            '      "key_headline": "the single most impactful headline"\n'
+            '      "key_headline": "VERBATIM headline text of the SPECIFIC article that drove this reasoning, or empty string",\n'
+            '      "impact_rank": 1,\n'
+            '      "impact_basis": "direct beneficiary | secondary beneficiary | thematic exposure | counter-impacted"\n'
             '    }\n'
             "  },\n"
             '  "market_mood": "brief overall sentiment phrase",\n'
@@ -807,7 +917,22 @@ def analyze_news_impact(headlines_by_symbol: dict, current_prices: dict,
             "'fundamental' = regulatory/earnings/adoption/technology, "
             "'mixed' = elements of both.\n"
             "- risk_factors: up to 3 specific risks, e.g. ['priced in', 'low volume', "
-            "'single source', 'contradicted by on-chain data']. Empty array if none.\n\n"
+            "'single source', 'contradicted by on-chain data']. Empty array if none.\n"
+            "- key_headline: MUST be a verbatim quote from a single article that "
+            "directly supports your reasoning. If your reasoning is a synthesis "
+            "with no single dominant article, OR if no article specifically "
+            "supports it, return \"\". NEVER copy a headline from another "
+            "symbol's news in this batch.\n"
+            "- impact_rank: integer 1-N. 1 = company is the direct subject of the "
+            "catalyst (named in the headline, contract winner, regulatory target, "
+            "M&A counterparty). 2 = same sector, clear secondary beneficiary. "
+            "3+ = thematic exposure only. Use the Business: line to decide. "
+            "Only 1-2 symbols per shared catalyst should be rank 1.\n"
+            "- impact_basis: 'direct beneficiary' (rank 1), 'secondary beneficiary' "
+            "(rank 2), 'thematic exposure' (rank 3+), or 'counter-impacted' (the "
+            "catalyst HURTS this company even though it helps the sector — e.g. "
+            "refiners on an oil spike, gold miners on a strong USD). For "
+            "counter-impacted, also set direction='neutral' and confidence=0.0.\n\n"
             "CONFIDENCE CALIBRATION (follow strictly):\n"
             "- 0.0-0.3: no catalyst, noise only, or stale/priced-in news\n"
             "- 0.3-0.5: weak catalyst or unconfirmed reports from lower-tier sources\n"
@@ -823,6 +948,14 @@ def analyze_news_impact(headlines_by_symbol: dict, current_prices: dict,
         result = _parse_gemini_json(text)
         _validate_gemini_response(result, ['symbol_assessments', 'market_mood'],
                                   'analyze_news_impact')
+        from src.analysis.headline_validator import scrub_unrelated_headlines
+        cleared = scrub_unrelated_headlines(result, 'analyze_news_impact')
+        if cleared:
+            log.info(f"Cleared {cleared} mismatched key_headline(s) "
+                     f"from analyze_news_impact ({len(result.get('symbol_assessments', {}))} symbols)")
+        from src.analysis.sector_ranking import apply_rank_caps
+        from src.config import app_config as _app_config
+        apply_rank_caps(result, _app_config.get('settings'))
         log.info(f"Gemini news analysis complete: mood={result.get('market_mood')}, "
                  f"symbols={list(result.get('symbol_assessments', {}).keys())}")
         return result

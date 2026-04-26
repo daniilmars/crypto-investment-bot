@@ -60,13 +60,21 @@ def _record_trade_attribution(symbol, signal, order_id, trading_strategy):
     try:
         from src.analysis.signal_attribution import (
             build_attribution_articles,
+            build_grounding_attribution_articles,
             link_attribution_to_order,
             record_signal_attribution,
         )
-        # Prefer the per-symbol scored articles already routed through the
-        # cycle (signal['attribution_articles']). Falls back to a DB lookup
-        # for legacy code paths that don't attach them.
-        articles = signal.get('attribution_articles') or build_attribution_articles(symbol)
+        # Attribution-source fallback chain (first non-empty wins):
+        #   1. signal['attribution_articles']  — per-symbol scored articles
+        #      from the current cycle (always set for crypto, often missing
+        #      for stocks)
+        #   2. build_attribution_articles(symbol)  — query scraped_articles
+        #      WHERE symbol = ... (sparsely populated for stocks)
+        #   3. build_grounding_attribution_articles(symbol)  — Gemini's own
+        #      grounded-search URLs (closes the stock attribution gap)
+        articles = (signal.get('attribution_articles')
+                    or build_attribution_articles(symbol)
+                    or build_grounding_attribution_articles(symbol))
         gemini = None
         if signal.get('gemini_confidence') is not None:
             gemini = {
@@ -98,10 +106,13 @@ def _record_rotation_attribution(symbol, signal, order_id, trading_strategy,
     try:
         from src.analysis.signal_attribution import (
             build_attribution_articles,
+            build_grounding_attribution_articles,
             link_attribution_to_order,
             record_signal_attribution,
         )
-        articles = signal.get('attribution_articles') or build_attribution_articles(symbol)
+        articles = (signal.get('attribution_articles')
+                    or build_attribution_articles(symbol)
+                    or build_grounding_attribution_articles(symbol))
 
         gemini = None
         if signal.get('gemini_confidence') is not None:

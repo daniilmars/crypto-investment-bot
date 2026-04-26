@@ -704,6 +704,19 @@ settings:
     source_deactivation: false      # RSS feed deactivated by source_review_loop
     position_analyst_info: false    # INCREASE-blocked notices (manual path only)
 
+  # -- Sector-aware confidence ranking on Gemini assessments --
+  # Caps high-confidence buys when one news story affects multiple symbols
+  # at the same confidence (the "1 oil headline → 14 oil stocks bullish" bug).
+  # Default is shadow mode (enabled: false): Gemini still produces ranks and
+  # the engine still tags assessments — but confidence is NOT lowered. Once
+  # 24h of shadow logs confirm caps don't suppress real signal, flip to true.
+  sector_ranking:
+    enabled: false
+    cap_rank_2: 0.55                 # secondary beneficiaries (rank 2)
+    cap_rank_3plus: 0.40             # thematic-exposure tail (rank 3+)
+    safety_net_min_symbols: 5        # ≥N bullish at same headline + no ranks
+    safety_net_cap: 0.45
+
   # -- Telegram Enhancements --
   telegram_enhancements:
     morning_briefing:

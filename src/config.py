@@ -178,6 +178,56 @@ def load_config():
     
     return config
 
+# --- Business descriptions (per-ticker, for sector-aware Gemini ranking) ---
+
+_BUSINESS_DESCRIPTIONS_CACHE: dict[str, str] | None = None
+
+
+def _load_business_descriptions() -> dict[str, str]:
+    """Lazy-load + cache config/business_descriptions.yaml.
+
+    Returns {} on any error (missing file, malformed YAML, empty descriptions).
+    """
+    global _BUSINESS_DESCRIPTIONS_CACHE
+    if _BUSINESS_DESCRIPTIONS_CACHE is not None:
+        return _BUSINESS_DESCRIPTIONS_CACHE
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(script_dir, '..', 'config', 'business_descriptions.yaml')
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f) or {}
+        descs = data.get('descriptions') or {}
+        if not isinstance(descs, dict):
+            descs = {}
+        _BUSINESS_DESCRIPTIONS_CACHE = {str(k): str(v) for k, v in descs.items() if v}
+    except FileNotFoundError:
+        _BUSINESS_DESCRIPTIONS_CACHE = {}
+    except yaml.YAMLError as e:
+        log.warning(f"business_descriptions.yaml parse error: {e}")
+        _BUSINESS_DESCRIPTIONS_CACHE = {}
+    return _BUSINESS_DESCRIPTIONS_CACHE
+
+
+def get_business_description(symbol: str) -> str | None:
+    """Returns the 1-line business description for a ticker, or None.
+
+    Used by:
+      - Gemini news prompts (gives the model context about what each ticker
+        actually does, so it can rank symbols by direct catalyst impact)
+      - headline_validator alias matching (so 'Merck reports Q1' counts as
+        a valid headline for ticker MRK)
+    """
+    if not symbol:
+        return None
+    return _load_business_descriptions().get(str(symbol).strip())
+
+
+def reset_business_descriptions_cache():
+    """Test hook to force a re-read on next get_business_description() call."""
+    global _BUSINESS_DESCRIPTIONS_CACHE
+    _BUSINESS_DESCRIPTIONS_CACHE = None
+
+
 def get_strategy_configs(settings=None):
     """Returns configured trading strategies as {name: config} dict.
 

@@ -37,6 +37,68 @@ def build_attribution_articles(symbol, hours=24, limit=20):
         return []
 
 
+def build_grounding_attribution_articles(symbol, hours=2, limit=20):
+    """Fallback: derive attribution from Gemini grounding URLs.
+
+    When `scraped_articles` doesn't have rows tagged with this symbol
+    (the common case for stocks — 67% empty source_names today), we look
+    at the most recent `gemini_assessments` row for the symbol and pull
+    `grounding_urls` (the URLs the grounded-search call actually cited).
+
+    Returns [{'title_hash': sha256(url), 'source': 'gemini:<host>'}, ...].
+    Safe: returns [] on any error.
+    """
+    import hashlib
+    import json
+    from urllib.parse import urlparse
+    try:
+        from src.database import get_db_connection, release_db_connection, _cursor
+        conn = get_db_connection()
+        try:
+            is_pg = isinstance(conn, psycopg2.extensions.connection)
+            ph = _ph(is_pg)
+            since_clause = (
+                "created_at >= NOW() - INTERVAL '%s hours'" if is_pg
+                else "created_at >= datetime('now', ? || ' hours')"
+            )
+            params = (symbol, hours) if is_pg else (symbol, f'-{hours}')
+            sql = (
+                "SELECT grounding_urls FROM gemini_assessments "
+                f"WHERE symbol = {ph} AND grounding_urls IS NOT NULL "
+                f"AND {since_clause} "
+                "ORDER BY created_at DESC LIMIT 1"
+            )
+            with _cursor(conn) as cur:
+                cur.execute(sql, params)
+                row = cur.fetchone()
+            if not row:
+                return []
+            raw = row['grounding_urls'] if is_pg else row[0]
+        finally:
+            release_db_connection(conn)
+        if not raw:
+            return []
+        urls = json.loads(raw)
+        if not isinstance(urls, list):
+            return []
+        out = []
+        seen = set()
+        for url in urls[:limit]:
+            try:
+                host = urlparse(url).netloc.removeprefix('www.') or 'unknown'
+            except Exception:
+                host = 'unknown'
+            h = hashlib.sha256(str(url).encode()).hexdigest()
+            if h in seen:
+                continue
+            seen.add(h)
+            out.append({'title_hash': h, 'source': f'gemini:{host}'})
+        return out
+    except Exception as e:
+        log.debug(f"build_grounding_attribution_articles failed for {symbol}: {e}")
+        return []
+
+
 def record_signal_attribution(signal, articles=None, gemini_assessment=None):
     """Record which articles/sources contributed to a signal.
 

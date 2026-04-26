@@ -936,6 +936,8 @@ def initialize_database(db_url=None):
                 reasoning TEXT,
                 key_headline TEXT,
                 market_mood TEXT,
+                grounding_urls TEXT,
+                grounding_queries TEXT,
                 created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             )''' if is_postgres_conn else '''
             CREATE TABLE IF NOT EXISTS gemini_assessments (
@@ -951,9 +953,23 @@ def initialize_database(db_url=None):
                 reasoning TEXT,
                 key_headline TEXT,
                 market_mood TEXT,
+                grounding_urls TEXT,
+                grounding_queries TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )'''
         cursor.execute(gemini_assessments_sql)
+        # --- Migrate gemini_assessments: add grounding columns if missing ---
+        for _col in ('grounding_urls', 'grounding_queries'):
+            try:
+                cursor.execute(f"ALTER TABLE gemini_assessments ADD COLUMN {_col} TEXT")
+                log.info(f"Added column '{_col}' to gemini_assessments table.")
+            except (sqlite3.OperationalError, psycopg2.errors.DuplicateColumn):
+                if is_postgres_conn:
+                    conn.rollback()
+            except Exception as e:
+                log.warning(f"Could not add column '{_col}' to gemini_assessments: {e}")
+                if is_postgres_conn:
+                    conn.rollback()
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_gemini_assess_symbol "
             "ON gemini_assessments (symbol, created_at)"
@@ -1778,6 +1794,13 @@ def save_gemini_assessments(assessments: dict):
     if not symbol_data:
         return
     mood = assessments.get('market_mood', '')
+    # Grounding metadata is batch-level — same URLs/queries apply to every
+    # symbol in the response. Stored per-row for join simplicity.
+    import json as _json
+    grounding_urls = assessments.get('grounding_urls') or []
+    grounding_queries = assessments.get('grounding_queries') or []
+    grounding_urls_json = _json.dumps(grounding_urls)[:4000] if grounding_urls else None
+    grounding_queries_json = _json.dumps(grounding_queries)[:1000] if grounding_queries else None
     conn = None
     try:
         conn = get_db_connection()
@@ -1786,16 +1809,15 @@ def save_gemini_assessments(assessments: dict):
             INSERT INTO gemini_assessments
             (symbol, direction, confidence, catalyst_type, catalyst_freshness,
              catalyst_count, hype_vs_fundamental, risk_factors, reasoning,
-             key_headline, market_mood)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             key_headline, market_mood, grounding_urls, grounding_queries)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ''' if is_pg else '''
             INSERT INTO gemini_assessments
             (symbol, direction, confidence, catalyst_type, catalyst_freshness,
              catalyst_count, hype_vs_fundamental, risk_factors, reasoning,
-             key_headline, market_mood)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             key_headline, market_mood, grounding_urls, grounding_queries)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         '''
-        import json as _json
         with _cursor(conn) as cursor:
             for sym, sa in symbol_data.items():
                 rf = sa.get('risk_factors')
@@ -1812,6 +1834,8 @@ def save_gemini_assessments(assessments: dict):
                     sa.get('reasoning', '')[:500],
                     sa.get('key_headline', '')[:200],
                     mood[:200] if mood else None,
+                    grounding_urls_json,
+                    grounding_queries_json,
                 ))
         conn.commit()
         log.debug(f"Saved {len(symbol_data)} Gemini assessments to DB.")
