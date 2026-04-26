@@ -98,6 +98,108 @@ def test_build_rationale_legacy_only_trade_reason():
     assert rat["trade_reason"] == "Gemini bullish (0.72): catalyst=macro"
 
 
+# --- impact_rank / impact_basis (PR-C surface in Mini App) ------------------
+
+def test_build_rationale_impact_rank_surfaced():
+    row = {
+        "catalyst_type": "narrative",
+        "gemini_direction": "bullish",
+        "gemini_confidence": 0.70,
+        "impact_rank": 2,
+        "impact_basis": "secondary beneficiary",
+    }
+    rat = _build_rationale(row)
+    assert rat["impact_rank"] == 2
+    assert rat["impact_basis"] == "secondary beneficiary"
+
+
+def test_build_rationale_impact_rank_string_coerced():
+    """Gemini sometimes returns the number as a string."""
+    row = {
+        "catalyst_type": "narrative",
+        "gemini_direction": "bullish",
+        "gemini_confidence": 0.70,
+        "impact_rank": "3",
+        "impact_basis": "thematic exposure",
+    }
+    rat = _build_rationale(row)
+    assert rat["impact_rank"] == 3
+
+
+def test_build_rationale_impact_rank_invalid_becomes_none():
+    row = {
+        "catalyst_type": "narrative",
+        "gemini_direction": "bullish",
+        "gemini_confidence": 0.70,
+        "impact_rank": "not a number",
+    }
+    rat = _build_rationale(row)
+    assert rat["impact_rank"] is None
+
+
+# --- grounding_urls fallback (PR-B surface in Mini App) ---------------------
+
+def test_grounding_used_when_scraper_sources_empty():
+    """When source_names is empty, Gemini grounding URLs become source chips."""
+    import json
+    row = {
+        "catalyst_type": "narrative",
+        "gemini_direction": "bullish",
+        "gemini_confidence": 0.65,
+        "source_names": "",  # scraper missed
+        "grounding_urls": json.dumps([
+            "https://www.reuters.com/defense/hii-shipyard",
+            "https://www.bloomberg.com/news/lhx-q1",
+            "https://www.reuters.com/markets/oil-up",  # dup host → dedupe
+        ]),
+    }
+    rat = _build_rationale(row)
+    assert rat is not None
+    assert "gemini:reuters.com" in rat["sources"]
+    assert "gemini:bloomberg.com" in rat["sources"]
+    # Dedup means reuters.com only appears once
+    assert sum(1 for s in rat["sources"] if "reuters" in s) == 1
+
+
+def test_scraper_sources_preferred_over_grounding():
+    """If scraper found articles, grounding URLs are NOT used."""
+    import json
+    row = {
+        "catalyst_type": "fund_flow",
+        "gemini_direction": "bullish",
+        "gemini_confidence": 0.75,
+        "source_names": "CoinDesk,The Block",
+        "grounding_urls": json.dumps(["https://reuters.com/x"]),
+    }
+    rat = _build_rationale(row)
+    assert rat["sources"] == ["CoinDesk", "The Block"]
+
+
+def test_grounding_fallback_handles_malformed_json():
+    row = {
+        "catalyst_type": "narrative",
+        "gemini_direction": "bullish",
+        "gemini_confidence": 0.65,
+        "source_names": "",
+        "grounding_urls": "not valid json {",
+    }
+    rat = _build_rationale(row)
+    # Should not crash, sources should be empty
+    assert rat["sources"] == []
+
+
+def test_build_rationale_returns_none_with_only_grounding_but_no_signal():
+    """If literally only grounding_urls exists with no Gemini fields,
+    we still build the rationale block (better than nothing)."""
+    import json
+    row = {
+        "grounding_urls": json.dumps(["https://reuters.com/a"]),
+    }
+    rat = _build_rationale(row)
+    assert rat is not None  # grounding alone is enough to render a block
+    assert "gemini:reuters.com" in rat["sources"]
+
+
 # --- _sl_tp_distances ------------------------------------------------------
 
 def test_sl_tp_distances_both_populated():
@@ -166,7 +268,8 @@ def _closed_trades_conn():
         CREATE TABLE gemini_assessments (
             id INTEGER, symbol TEXT, created_at TEXT,
             reasoning TEXT, key_headline TEXT, risk_factors TEXT,
-            catalyst_freshness TEXT, hype_vs_fundamental TEXT, market_mood TEXT
+            catalyst_freshness TEXT, hype_vs_fundamental TEXT, market_mood TEXT,
+            impact_rank INTEGER, impact_basis TEXT, grounding_urls TEXT
         )
     """)
     return conn

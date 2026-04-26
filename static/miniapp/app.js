@@ -284,6 +284,17 @@
       let line = `<strong>${escapeHtml(dir)}</strong> · conf ${escapeHtml(conf)} · catalyst <strong>${escapeHtml(cat)}</strong>`;
       if (fresh) line += ` · ${escapeHtml(fresh)}`;
       if (hvf) line += ` · ${escapeHtml(hvf)}`;
+      // Sector-aware impact rank badge (PR-C). rank=1 = direct beneficiary;
+      // rank≥2 are downgraded by apply_rank_caps when the flag is on.
+      if (rationale.impact_rank != null) {
+        const rank = rationale.impact_rank;
+        const basis = rationale.impact_basis || '';
+        const cls = rank === 1 ? 'rank rank-1'
+                  : rank === 2 ? 'rank rank-2'
+                  : 'rank rank-3';
+        const label = basis ? `${rank}: ${basis}` : `rank ${rank}`;
+        line += ` · <span class="${cls}">${escapeHtml(label)}</span>`;
+      }
       parts.push(`<div class="rat-label">Gemini</div><div class="rat-value">${line}</div>`);
     }
 
@@ -297,10 +308,17 @@
       parts.push(`<div class="rat-reasoning">${escapeHtml(rationale.reasoning)}</div>`);
     }
 
-    // Sources
+    // Sources — `gemini:host` chips (PR-B grounding fallback) get a
+    // different style so the user can tell scraper-vs-Gemini-search apart.
     if (rationale.sources && rationale.sources.length) {
       const chips = rationale.sources
-        .map((s) => `<span class="rat-chip">${escapeHtml(s)}</span>`).join('');
+        .map((s) => {
+          const isGrounding = typeof s === 'string' && s.startsWith('gemini:');
+          const cls = isGrounding ? 'rat-chip grounding' : 'rat-chip';
+          const label = isGrounding ? s.slice('gemini:'.length) : s;
+          const title = isGrounding ? 'Cited by Gemini grounded search' : '';
+          return `<span class="${cls}"${title ? ` title="${title}"` : ''}>${escapeHtml(label)}</span>`;
+        }).join('');
       parts.push(`<div class="rat-label">Sources</div><div class="rat-value">${chips}</div>`);
     }
 

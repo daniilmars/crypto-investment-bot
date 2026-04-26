@@ -938,6 +938,8 @@ def initialize_database(db_url=None):
                 market_mood TEXT,
                 grounding_urls TEXT,
                 grounding_queries TEXT,
+                impact_rank INTEGER,
+                impact_basis TEXT,
                 created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             )''' if is_postgres_conn else '''
             CREATE TABLE IF NOT EXISTS gemini_assessments (
@@ -955,13 +957,21 @@ def initialize_database(db_url=None):
                 market_mood TEXT,
                 grounding_urls TEXT,
                 grounding_queries TEXT,
+                impact_rank INTEGER,
+                impact_basis TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )'''
         cursor.execute(gemini_assessments_sql)
-        # --- Migrate gemini_assessments: add grounding columns if missing ---
-        for _col in ('grounding_urls', 'grounding_queries'):
+        # --- Migrate gemini_assessments: add new columns if missing ---
+        # (text/int columns; default NULL is fine — written by save_gemini_assessments)
+        for _col, _ty in (
+            ('grounding_urls', 'TEXT'),
+            ('grounding_queries', 'TEXT'),
+            ('impact_rank', 'INTEGER'),
+            ('impact_basis', 'TEXT'),
+        ):
             try:
-                cursor.execute(f"ALTER TABLE gemini_assessments ADD COLUMN {_col} TEXT")
+                cursor.execute(f"ALTER TABLE gemini_assessments ADD COLUMN {_col} {_ty}")
                 log.info(f"Added column '{_col}' to gemini_assessments table.")
             except (sqlite3.OperationalError, psycopg2.errors.DuplicateColumn):
                 if is_postgres_conn:
@@ -1809,19 +1819,29 @@ def save_gemini_assessments(assessments: dict):
             INSERT INTO gemini_assessments
             (symbol, direction, confidence, catalyst_type, catalyst_freshness,
              catalyst_count, hype_vs_fundamental, risk_factors, reasoning,
-             key_headline, market_mood, grounding_urls, grounding_queries)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             key_headline, market_mood, grounding_urls, grounding_queries,
+             impact_rank, impact_basis)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ''' if is_pg else '''
             INSERT INTO gemini_assessments
             (symbol, direction, confidence, catalyst_type, catalyst_freshness,
              catalyst_count, hype_vs_fundamental, risk_factors, reasoning,
-             key_headline, market_mood, grounding_urls, grounding_queries)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             key_headline, market_mood, grounding_urls, grounding_queries,
+             impact_rank, impact_basis)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         '''
         with _cursor(conn) as cursor:
             for sym, sa in symbol_data.items():
                 rf = sa.get('risk_factors')
                 rf_str = _json.dumps(rf) if isinstance(rf, list) else str(rf) if rf else None
+                # impact_rank may arrive as str/None from Gemini; coerce safely
+                _ir = sa.get('impact_rank')
+                try:
+                    _ir = int(_ir) if _ir is not None else None
+                except (TypeError, ValueError):
+                    _ir = None
+                _ib = sa.get('impact_basis')
+                _ib = str(_ib)[:64] if _ib else None
                 cursor.execute(query, (
                     sym,
                     sa.get('direction'),
@@ -1836,6 +1856,8 @@ def save_gemini_assessments(assessments: dict):
                     mood[:200] if mood else None,
                     grounding_urls_json,
                     grounding_queries_json,
+                    _ir,
+                    _ib,
                 ))
         conn.commit()
         log.debug(f"Saved {len(symbol_data)} Gemini assessments to DB.")

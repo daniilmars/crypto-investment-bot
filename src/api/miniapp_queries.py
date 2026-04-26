@@ -40,7 +40,8 @@ _POSITIONS_WITH_RATIONALE_SQL = """
            sa.gemini_direction, sa.gemini_confidence, sa.catalyst_type,
            sa.source_names, sa.signal_timestamp,
            ga.reasoning, ga.key_headline, ga.risk_factors,
-           ga.catalyst_freshness, ga.hype_vs_fundamental, ga.market_mood
+           ga.catalyst_freshness, ga.hype_vs_fundamental, ga.market_mood,
+           ga.impact_rank, ga.impact_basis, ga.grounding_urls
     FROM trades t
     LEFT JOIN signal_attribution sa ON sa.trade_order_id = t.order_id
     LEFT JOIN gemini_assessments ga
@@ -84,6 +85,38 @@ def _parse_risk_factors(raw) -> list[str]:
     return [s]
 
 
+def _grounding_sources_fallback(grounding_urls_raw) -> list[str]:
+    """Parse stored JSON list of URLs into 'gemini:host' chips for the UI.
+
+    Used when our scraper missed the article and signal_attribution.source_names
+    is empty — surfaces what Gemini's grounded search actually cited so the
+    user always sees *some* source attribution.
+    """
+    if not grounding_urls_raw:
+        return []
+    try:
+        import json as _json
+        from urllib.parse import urlparse
+        urls = _json.loads(str(grounding_urls_raw))
+        if not isinstance(urls, list):
+            return []
+        seen, out = set(), []
+        for u in urls:
+            try:
+                host = urlparse(str(u)).netloc.removeprefix("www.")
+            except Exception:
+                continue
+            if not host or host in seen:
+                continue
+            seen.add(host)
+            out.append(f"gemini:{host}")
+            if len(out) >= 10:
+                break
+        return out
+    except Exception:
+        return []
+
+
 def _build_rationale(row: dict) -> dict | None:
     """Collect rationale fields from a joined row. None if no data at all."""
     catalyst = row.get("catalyst_type")
@@ -94,13 +127,26 @@ def _build_rationale(row: dict) -> dict | None:
     sources_raw = row.get("source_names") or ""
     risks_raw = row.get("risk_factors")
     trade_reason = row.get("trade_reason")
+    impact_rank = row.get("impact_rank")
+    impact_basis = row.get("impact_basis")
+    grounding_urls = row.get("grounding_urls")
 
     has_any = any([catalyst, direction, confidence, key_headline, reasoning,
-                   sources_raw, risks_raw, trade_reason])
+                   sources_raw, risks_raw, trade_reason, impact_rank,
+                   impact_basis, grounding_urls])
     if not has_any:
         return None
 
     sources = [s.strip() for s in str(sources_raw).split(",") if s.strip()]
+    # Fallback: if scraper sources empty, surface Gemini's grounded URLs
+    if not sources:
+        sources = _grounding_sources_fallback(grounding_urls)
+
+    try:
+        impact_rank_val = int(impact_rank) if impact_rank is not None else None
+    except (TypeError, ValueError):
+        impact_rank_val = None
+
     return {
         "gemini_direction": direction,
         "gemini_confidence": float(confidence) if confidence is not None else None,
@@ -114,6 +160,8 @@ def _build_rationale(row: dict) -> dict | None:
         "market_mood": row.get("market_mood"),
         "signal_timestamp": row.get("signal_timestamp"),
         "trade_reason": trade_reason,
+        "impact_rank": impact_rank_val,
+        "impact_basis": impact_basis or None,
     }
 
 
@@ -623,7 +671,8 @@ _RECENT_TRADES_SQL = """
            sa.gemini_direction, sa.gemini_confidence, sa.catalyst_type,
            sa.source_names, sa.signal_timestamp,
            ga.reasoning, ga.key_headline, ga.risk_factors,
-           ga.catalyst_freshness, ga.hype_vs_fundamental, ga.market_mood
+           ga.catalyst_freshness, ga.hype_vs_fundamental, ga.market_mood,
+           ga.impact_rank, ga.impact_basis, ga.grounding_urls
     FROM trades t
     LEFT JOIN signal_attribution sa ON sa.trade_order_id = t.order_id
     LEFT JOIN gemini_assessments ga
