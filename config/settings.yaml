@@ -228,6 +228,25 @@ settings:
     # Minimum Gemini confidence to override VADER
     min_gemini_confidence: 0.5
 
+    # PR-E.1: Semantic relevance filter (between keyword routing and Gemini
+    # scoring). Asks flash-lite "is this article materially about $SYMBOL?"
+    # for each (article, candidate_symbol) pair and drops "unrelated"
+    # candidates. Catches the KO/Coca-Cola Zone false positive AND the
+    # sector-basket over-routing pattern (8 oil stocks → one Hormuz article).
+    #
+    # Phasing:
+    #   1. enabled=true + shadow_log_only=true → log what would drop, validate 48h
+    #   2. flip shadow_log_only=false once a sample of decisions looks right
+    #   3. expected: L5 headline diversity ratio rises from ~2% to >25%
+    #
+    # Falls open on any Gemini error → returns full candidate list unchanged.
+    symbol_relevance_filter:
+      enabled: true
+      shadow_log_only: true        # log only; don't drop. Flip after 48h validation.
+      min_candidates_to_filter: 2  # skip filter when only 1 symbol matched
+      cache_ttl_days: 7
+      model: "gemini-2.5-flash-lite"
+
   # -- Live Trading Settings --
   live_trading:
     enabled: false          # Master switch (must also set paper_trading: false)

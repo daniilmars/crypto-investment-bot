@@ -1053,6 +1053,25 @@ def collect_news_sentiment(symbols):
     archive_rows = []
     macro_routed_count = 0
 
+    # PR-E.1: optional semantic relevance filter (between keyword router and
+    # per-article scoring). When enabled, asks Gemini flash-lite to drop
+    # candidates the article isn't materially about (KO/Coca-Cola Zone case,
+    # sector-basket over-routing). Gated by config; falls open on errors.
+    srf_cfg = news_config.get('symbol_relevance_filter') or {}
+    srf_enabled = bool(srf_cfg.get('enabled', False))
+    srf_shadow = bool(srf_cfg.get('shadow_log_only', True))
+    srf_min_candidates = int(srf_cfg.get('min_candidates_to_filter', 2))
+    srf_drop_count = 0
+    srf_kept_count = 0
+    srf_evaluated = 0
+    business_desc_map = None
+    if srf_enabled:
+        try:
+            from src.config import _load_business_descriptions
+            business_desc_map = _load_business_descriptions()
+        except Exception:
+            business_desc_map = None
+
     for article in all_articles:
         title = article.get('title', '')
         description = article.get('description', '')
@@ -1072,6 +1091,33 @@ def collect_news_sentiment(symbols):
             continue
 
         title_hash = compute_title_hash(title) if title else None
+
+        # Semantic relevance gate (PR-E.1). Runs only when ≥N candidates
+        # matched (skip single-candidate articles where filter can't help).
+        if srf_enabled and len(matched_symbols) >= srf_min_candidates:
+            try:
+                from src.analysis.symbol_relevance_filter import filter_by_relevance
+                article_view = {
+                    'title': title,
+                    'description': description,
+                    'title_hash': title_hash,
+                    'source': article.get('source', ''),
+                }
+                kept, verdicts = filter_by_relevance(
+                    article_view, matched_symbols, business_desc_map)
+                dropped = [s for s in matched_symbols if s not in kept]
+                srf_evaluated += 1
+                srf_drop_count += len(dropped)
+                srf_kept_count += len(kept)
+                if dropped:
+                    log.info(
+                        f"[SYMRELFILTER_{'SHADOW' if srf_shadow else 'LIVE'}] "
+                        f"'{title[:60]}' kept={kept} drop={dropped}")
+                if not srf_shadow:
+                    matched_symbols = kept
+            except Exception as e:
+                log.debug(f"symbol_relevance_filter raised, falling open: {e}")
+
         gemini_score = gemini_article_scores.get(title_hash) if title_hash else None
 
         for symbol in matched_symbols:
@@ -1103,6 +1149,16 @@ def collect_news_sentiment(symbols):
             save_articles_batch(archive_rows)
         except Exception as e:
             log.warning(f"Failed to archive articles: {e}")
+
+    # PR-E.1: cycle-level summary of what the relevance filter did
+    if srf_enabled and srf_evaluated > 0:
+        mode = 'SHADOW' if srf_shadow else 'LIVE'
+        total_pairs = srf_kept_count + srf_drop_count
+        drop_pct = (srf_drop_count / total_pairs * 100) if total_pairs else 0
+        log.info(
+            f"[SYMRELFILTER_{mode}] Cycle summary: evaluated {srf_evaluated} "
+            f"articles, kept {srf_kept_count} pairs, dropped {srf_drop_count} "
+            f"({drop_pct:.0f}%)")
 
     # 4. Compute aggregates per symbol (freshness-weighted)
     half_life = news_config.get('freshness_half_life_hours', 6)
