@@ -51,6 +51,48 @@ def test_full_pipeline_clears_headline_then_caps_rank():
     assert cleared == 1
 
 
+def test_rank_cap_then_threshold_blocks_sector_vibe():
+    """PR-D combined behavior: rank-2 signal at conf 0.70 should be capped
+    to 0.55 by sector_ranking and then fall below conservative's new 0.65
+    threshold — sector-vibes basket buys never reach the trade layer.
+    """
+    from src.analysis.sector_ranking import apply_rank_caps
+
+    raw = {
+        'symbol_assessments': {
+            # Rank-1 single-name catalyst (NVDA-OpenAI style)
+            'NVDA': {
+                'direction': 'bullish', 'confidence': 0.75,
+                'reasoning': "Direct OpenAI partnership.",
+                'key_headline': "OpenAI and NVIDIA announce 10 GW deal",
+                'impact_rank': 1,
+            },
+            # Rank-2 secondary (would be a sector-vibe buy without the cap)
+            'AMD': {
+                'direction': 'bullish', 'confidence': 0.70,
+                'reasoning': "Secondary beneficiary of AI capex cycle.",
+                'key_headline': "OpenAI and NVIDIA announce 10 GW deal",
+                'impact_rank': 2,
+            },
+        }
+    }
+    apply_rank_caps(raw, settings={'sector_ranking': {'enabled': True}})
+
+    nvda = raw['symbol_assessments']['NVDA']
+    amd = raw['symbol_assessments']['AMD']
+    # Rank 1 keeps full confidence
+    assert nvda['confidence'] == 0.75
+    # Rank 2 capped to 0.55
+    assert amd['confidence'] == 0.55
+
+    # Conservative threshold check (0.65 post-PR-D)
+    conservative_threshold = 0.65
+    assert nvda['confidence'] >= conservative_threshold, \
+        "rank-1 NVDA must still pass conservative gate"
+    assert amd['confidence'] < conservative_threshold, \
+        "rank-2 AMD sector-vibe must be blocked by combined rank cap + threshold"
+
+
 def test_pipeline_safety_net_with_cleared_headlines():
     """If a headline is cleared by Step 1, it shouldn't pollute the
     safety-net headline grouping in Step 2."""
